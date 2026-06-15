@@ -24,6 +24,7 @@ import {
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api';
+import { TasksSidePanel } from '../components/TasksSidePanel';
 
 const SOURCES = [
   { key: 'AGENT', label: 'Agents' },
@@ -188,10 +189,12 @@ export function TasksPage() {
   };
 
   return (
-    <>
-      <h1 className="page-title">Tasks</h1>
+    <div className="tasks-layout">
+      <TasksSidePanel />
+      <main className="tasks-main">
+        <h1 className="page-title">Owned</h1>
 
-      <div className="tasks-toolbar">
+        <div className="tasks-toolbar">
         <Button type="primary" icon={<PlusOutlined />} onClick={() => setOpen(true)}>
           New Task
         </Button>
@@ -241,6 +244,7 @@ export function TasksPage() {
           })}
         </div>
       )}
+      </main>
 
       <Modal
         title="New Task"
@@ -276,6 +280,6 @@ export function TasksPage() {
           </Form.Item>
         </Form>
       </Modal>
-    </>
+    </div>
   );
 }

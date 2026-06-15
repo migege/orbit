@@ -6,7 +6,7 @@ import {
   UnorderedListOutlined,
   UserOutlined,
 } from '@ant-design/icons';
-import { Avatar, Button, Layout, Menu, Tooltip } from 'antd';
+import { Avatar, Dropdown, Tooltip } from 'antd';
 import { Link, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { clearToken, getToken } from './api';
 import { AgentsPage } from './pages/AgentsPage';
@@ -16,69 +16,65 @@ import { RunnersPage } from './pages/RunnersPage';
 import { TaskDetailPage } from './pages/TaskDetailPage';
 import { TasksPage } from './pages/TasksPage';
 
-function Shell({ children }: { children: React.ReactNode }) {
+const NAV = [
+  { key: '/tasks', icon: <UnorderedListOutlined />, label: 'Tasks' },
+  { key: '/agents', icon: <ApartmentOutlined />, label: 'Agents' },
+  { key: '/runners', icon: <DesktopOutlined />, label: 'Runners' },
+  { key: '/dashboard', icon: <DashboardOutlined />, label: 'Dashboard' },
+];
+
+function logout() {
+  clearToken();
+  location.href = '/login';
+}
+
+function Rail() {
   const loc = useLocation();
   const selected = '/' + (loc.pathname.split('/')[1] || 'tasks');
   return (
-    <Layout style={{ minHeight: '100vh' }}>
-      <Layout.Sider
-        theme="light"
-        width={232}
-        breakpoint="lg"
-        collapsedWidth="0"
-        style={{ borderRight: '1px solid #eceef1' }}
-      >
-        <div
-          style={{
-            position: 'sticky',
-            top: 0,
-            height: '100vh',
-            display: 'flex',
-            flexDirection: 'column',
-          }}
-        >
-          <div className="orbit-brand">
-            <span>🛰</span>
-            <span>Orbit</span>
-          </div>
-          <Menu
-            mode="inline"
-            style={{ borderInlineEnd: 'none', flex: 1 }}
-            selectedKeys={[selected]}
-            items={[
-              { key: '/tasks', icon: <UnorderedListOutlined />, label: <Link to="/tasks">Tasks</Link> },
-              { key: '/agents', icon: <ApartmentOutlined />, label: <Link to="/agents">Agents</Link> },
-              { key: '/runners', icon: <DesktopOutlined />, label: <Link to="/runners">Runners</Link> },
-              {
-                key: '/dashboard',
-                icon: <DashboardOutlined />,
-                label: <Link to="/dashboard">Dashboard</Link>,
-              },
-            ]}
-          />
-          <div className="orbit-sider-footer">
-            <div className="orbit-user">
-              <Avatar size={28} icon={<UserOutlined />} style={{ background: '#3370ff' }} />
-              <span style={{ flex: 1, color: '#646a73', fontSize: 13 }}>Account</span>
-              <Tooltip title="Logout">
-                <Button
-                  type="text"
-                  size="small"
-                  icon={<LogoutOutlined />}
-                  onClick={() => {
-                    clearToken();
-                    location.href = '/login';
-                  }}
-                />
-              </Tooltip>
-            </div>
-          </div>
+    <div className="orbit-rail">
+      <div className="rail-inner">
+        <div className="rail-logo">🛰</div>
+        <div className="rail-nav">
+          {NAV.map((n) => (
+            <Tooltip key={n.key} title={n.label} placement="right">
+              <Link to={n.key} className={`rail-item ${selected === n.key ? 'active' : ''}`}>
+                {n.icon}
+              </Link>
+            </Tooltip>
+          ))}
         </div>
-      </Layout.Sider>
-      <Layout>
-        <Layout.Content style={{ padding: '24px 32px' }}>{children}</Layout.Content>
-      </Layout>
-    </Layout>
+        <div className="rail-footer">
+          <Dropdown
+            placement="topRight"
+            menu={{
+              items: [{ key: 'logout', icon: <LogoutOutlined />, label: 'Logout', onClick: logout }],
+            }}
+          >
+            <Avatar
+              size={32}
+              icon={<UserOutlined />}
+              style={{ background: '#3370ff', cursor: 'pointer' }}
+            />
+          </Dropdown>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Shell({ children }: { children: React.ReactNode }) {
+  const loc = useLocation();
+  // The Tasks list page renders its own full-height two-pane layout; every
+  // other page gets standard content padding.
+  const isTasksList = loc.pathname === '/tasks';
+  return (
+    <div className="orbit-shell">
+      <Rail />
+      <div className="orbit-main">
+        {isTasksList ? children : <div className="orbit-page-pad">{children}</div>}
+      </div>
+    </div>
   );
 }
 

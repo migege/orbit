@@ -30,27 +30,221 @@ body {
   background: #c9cdd4;
 }
 
-/* ---- App shell ---- */
-.orbit-brand {
+/* ---- App shell: thin icon rail + content ---- */
+.orbit-shell {
+  display: flex;
+  min-height: 100vh;
+}
+.orbit-main {
+  flex: 1;
+  min-width: 0;
+}
+.orbit-page-pad {
+  padding: 24px 32px;
+}
+
+.orbit-rail {
+  width: 56px;
+  flex: none;
+  border-right: 1px solid #eceef1;
+  background: #fff;
+}
+.rail-inner {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 12px 0;
+  gap: 8px;
+}
+.rail-logo {
+  height: 36px;
   display: flex;
   align-items: center;
-  gap: 8px;
-  height: 56px;
-  padding: 0 18px;
-  font-size: 17px;
-  font-weight: 600;
+  font-size: 20px;
+}
+.rail-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+.rail-item {
+  width: 40px;
+  height: 40px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  color: #646a73;
+  cursor: pointer;
+}
+.rail-item:hover {
+  background: #f2f3f5;
   color: #1f2329;
 }
-.orbit-sider-footer {
-  border-top: 1px solid #eceef1;
-  padding: 10px 12px;
+.rail-item.active {
+  background: #eaf1ff;
+  color: #3370ff;
 }
-.orbit-user {
+.rail-footer {
+  margin-top: auto;
+}
+
+/* ---- Tasks two-pane layout ---- */
+.tasks-layout {
+  display: flex;
+  height: 100vh;
+}
+.tasks-main {
+  flex: 1;
+  min-width: 0;
+  height: 100vh;
+  overflow: auto;
+  padding: 24px 32px;
+}
+
+/* ---- Tasks side panel (static scaffold) ---- */
+.tasks-panel {
+  width: 264px;
+  flex: none;
+  height: 100vh;
+  overflow-y: auto;
+  border-right: 1px solid #eceef1;
+  background: #fff;
+  padding-bottom: 12px;
+}
+.tp-header {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 6px 8px;
+  height: 52px;
+  padding: 0 16px;
+}
+.tp-head-ico {
+  color: #646a73;
+  font-size: 16px;
+}
+.tp-head-title {
+  flex: 1;
+  font-size: 18px;
+  font-weight: 600;
+  color: #1f2329;
+}
+.tp-head-more {
+  color: #8f959e;
+  font-size: 16px;
+  cursor: pointer;
+}
+.tp-section {
+  padding: 0 8px;
+}
+.tp-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 36px;
+  padding: 0 8px;
   border-radius: 6px;
+  cursor: pointer;
+  color: #1f2329;
+  font-size: 14px;
+}
+.tp-item:hover {
+  background: #f2f3f5;
+}
+.tp-item.active {
+  background: #eaf1ff;
+  color: #3370ff;
+}
+.tp-item.inset {
+  padding-left: 30px;
+}
+.tp-item.tp-sub {
+  padding-left: 14px;
+}
+.tp-ico {
+  display: flex;
+  font-size: 16px;
+  color: #646a73;
+  flex: none;
+}
+.tp-item.active .tp-ico {
+  color: #3370ff;
+}
+.tp-label {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tp-count {
+  color: #8f959e;
+  font-size: 13px;
+}
+.tp-item.active .tp-count {
+  color: #3370ff;
+}
+.tp-divider {
+  height: 1px;
+  background: #eceef1;
+  margin: 8px 16px;
+}
+.tp-group {
+  padding: 0 8px;
+}
+.tp-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 8px;
+  cursor: pointer;
+}
+.tp-caret {
+  font-size: 12px;
+  color: #8f959e;
+  transition: transform 0.15s ease;
+}
+.tp-caret.collapsed {
+  transform: rotate(-90deg);
+}
+.tp-group-ico {
+  font-size: 14px;
+  color: #646a73;
+}
+.tp-group-name {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 600;
+  color: #646a73;
+}
+.tp-add {
+  color: #8f959e;
+  font-size: 14px;
+  cursor: pointer;
+}
+.tp-add:hover {
+  color: #3370ff;
+}
+.tp-newgroup {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 36px;
+  margin-top: 4px;
+  padding: 0 16px;
+  color: #8f959e;
+  font-size: 14px;
+  cursor: pointer;
+}
+.tp-newgroup:hover {
+  color: #3370ff;
 }
 
 /* ---- Tasks page ---- */
@@ -69,7 +263,7 @@ body {
 
 /* shared column grid: title | estimates | start | due | creator | created | id */
 .orbit-tasklist {
-  --cols: minmax(240px, 1fr) 96px 128px 128px 152px 160px 104px;
+  --cols: minmax(200px, 1fr) 88px 116px 116px 140px 150px 96px;
   border-top: 1px solid #eceef1;
 }
 .col-head-row,
