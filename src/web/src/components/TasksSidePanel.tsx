@@ -33,7 +33,7 @@ const LISTS = [
   { key: 'l8', label: '#8 importer not-ready sg 2026-06-13' },
 ];
 
-interface Runner {
+export interface Runner {
   id: string;
   name: string;
   online?: boolean;
@@ -58,7 +58,13 @@ export function TasksSidePanel({ onShowRegister, onShowTasks }: Props) {
   // On a top-nav route the highlight follows the URL ("/" and "/tasks" both map
   // to Running); clicking an agent/list item below overrides it locally.
   const routeKey =
-    loc.pathname === '/' || loc.pathname === '/tasks' ? 'running' : loc.pathname.slice(1);
+    loc.pathname === '/' || loc.pathname === '/tasks'
+      ? 'running'
+      : loc.pathname.startsWith('/agents/')
+        ? loc.pathname.slice('/agents/'.length)
+        : loc.pathname.startsWith('/lists/')
+          ? loc.pathname.slice('/lists/'.length)
+          : loc.pathname.slice(1);
   const [sel, setSel] = useState(routeKey);
   useEffect(() => setSel(routeKey), [routeKey]);
 
@@ -74,11 +80,6 @@ export function TasksSidePanel({ onShowRegister, onShowTasks }: Props) {
     refetchInterval: 15_000,
   });
 
-  const pick = (key: string) => {
-    setSel(key);
-    onShowTasks();
-  };
-
   // ⌘1 / ⌘2 / … (Ctrl on non-Mac) select the Nth runner under "Agents".
   const list = runners.data ?? [];
   useEffect(() => {
@@ -90,10 +91,11 @@ export function TasksSidePanel({ onShowRegister, onShowTasks }: Props) {
       e.preventDefault();
       setSel(list[idx].id);
       onShowTasks();
+      navigate(`/agents/${list[idx].id}`);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [list, onShowTasks]);
+  }, [list, onShowTasks, navigate]);
 
   return (
     <aside className="tasks-panel">
@@ -124,8 +126,8 @@ export function TasksSidePanel({ onShowRegister, onShowTasks }: Props) {
 
         <div className="tp-group">
           <div className="tp-group-head" onClick={() => setQuickOpen((o) => !o)}>
-            <CaretDownOutlined className={`tp-caret ${quickOpen ? '' : 'collapsed'}`} />
             <span className="tp-group-name">Agents</span>
+            <CaretDownOutlined className={`tp-caret ${quickOpen ? '' : 'collapsed'}`} />
           </div>
           {quickOpen && (
             <>
@@ -133,7 +135,11 @@ export function TasksSidePanel({ onShowRegister, onShowTasks }: Props) {
                 <div
                   key={r.id}
                   className={`tp-item inset ${sel === r.id ? 'active' : ''}`}
-                  onClick={() => pick(r.id)}
+                  onClick={() => {
+                    setSel(r.id);
+                    onShowTasks();
+                    navigate(`/agents/${r.id}`);
+                  }}
                 >
                   <span
                     style={{
@@ -170,16 +176,30 @@ export function TasksSidePanel({ onShowRegister, onShowTasks }: Props) {
 
         <div className="tp-group">
           <div className="tp-group-head" onClick={() => setListOpen((o) => !o)}>
-            <CaretDownOutlined className={`tp-caret ${listOpen ? '' : 'collapsed'}`} />
             <span className="tp-group-name">Task List</span>
+            <CaretDownOutlined className={`tp-caret ${listOpen ? '' : 'collapsed'}`} />
           </div>
           {listOpen &&
             LISTS.map((l) => (
               <div
                 key={l.key}
                 className={`tp-item inset ${sel === l.key ? 'active' : ''}`}
-                onClick={() => pick(l.key)}
+                onClick={() => {
+                  setSel(l.key);
+                  onShowTasks();
+                  navigate(`/lists/${l.key}`);
+                }}
               >
+                <span
+                  style={{
+                    width: 7,
+                    height: 7,
+                    borderRadius: '50%',
+                    background: '#c0c4cc',
+                    flex: 'none',
+                    marginRight: 8,
+                  }}
+                />
                 <span className="tp-label">{l.label}</span>
               </div>
             ))}
@@ -187,8 +207,8 @@ export function TasksSidePanel({ onShowRegister, onShowTasks }: Props) {
 
         <div className="tp-group">
           <div className="tp-group-head" onClick={() => setArchOpen((o) => !o)}>
-            <CaretDownOutlined className={`tp-caret ${archOpen ? '' : 'collapsed'}`} />
             <span className="tp-group-name">Archived</span>
+            <CaretDownOutlined className={`tp-caret ${archOpen ? '' : 'collapsed'}`} />
           </div>
         </div>
 
