@@ -62,7 +62,9 @@ export function TasksSidePanel({ onShowRegister, onShowTasks }: Props) {
       ? 'running'
       : loc.pathname.startsWith('/agents/')
         ? loc.pathname.slice('/agents/'.length)
-        : loc.pathname.slice(1);
+        : loc.pathname.startsWith('/lists/')
+          ? loc.pathname.slice('/lists/'.length)
+          : loc.pathname.slice(1);
   const [sel, setSel] = useState(routeKey);
   useEffect(() => setSel(routeKey), [routeKey]);
 
@@ -77,11 +79,6 @@ export function TasksSidePanel({ onShowRegister, onShowTasks }: Props) {
     queryFn: () => api<Runner[]>('/runners'),
     refetchInterval: 15_000,
   });
-
-  const pick = (key: string) => {
-    setSel(key);
-    onShowTasks();
-  };
 
   // ⌘1 / ⌘2 / … (Ctrl on non-Mac) select the Nth runner under "Agents".
   const list = runners.data ?? [];
@@ -187,7 +184,11 @@ export function TasksSidePanel({ onShowRegister, onShowTasks }: Props) {
               <div
                 key={l.key}
                 className={`tp-item inset ${sel === l.key ? 'active' : ''}`}
-                onClick={() => pick(l.key)}
+                onClick={() => {
+                  setSel(l.key);
+                  onShowTasks();
+                  navigate(`/lists/${l.key}`);
+                }}
               >
                 <span
                   style={{
