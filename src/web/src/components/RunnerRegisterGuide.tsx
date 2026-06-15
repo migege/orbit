@@ -3,7 +3,7 @@ import { Button, Typography } from 'antd';
 
 const INSTALL = 'curl -fsSL https://orbit.wikova.com/install.sh | bash';
 const REGISTER = 'orbit register';
-const SERVICE = 'sudo orbit service';
+const FOREGROUND = 'orbit register --foreground';
 
 const codeStyle: React.CSSProperties = {
   fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
@@ -47,8 +47,16 @@ export function RunnerRegisterGuide({ onClose }: { onClose: () => void }) {
         to add — it appears in the list on the left once it comes online.
       </p>
       <Step n={1} label="Install the CLI" command={INSTALL} />
-      <Step n={2} label="Register & approve in your browser" command={REGISTER} />
-      <Step n={3} label="Keep it running as a service (optional)" command={SERVICE} />
+      <Step
+        n={2}
+        label="Register & approve in your browser (auto-starts as a background service)"
+        command={REGISTER}
+      />
+      <Step
+        n={3}
+        label="Or run in the foreground instead of installing a service"
+        command={FOREGROUND}
+      />
     </div>
   );
 }
