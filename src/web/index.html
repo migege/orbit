@@ -80,20 +80,19 @@
     </div>
     <div id="root"></div>
     <script>
-      // Trickle the bar toward ~90% so it feels alive; the app calls
-      // window.__bootDone() to snap it to 100% and fade the splash out.
+      // Determinate progress: the bar only ever moves forward as the app reports
+      // real milestones via window.__bootProgress(pct); window.__bootDone() snaps
+      // it to 100% and fades the splash out.
       (function () {
         var fill = document.getElementById('boot-fill');
-        var p = 8;
-        var timer = setInterval(function () {
-          if (p < 90) {
-            p += (90 - p) * 0.18;
-            fill.style.width = p + '%';
-          }
-        }, 220);
+        var shown = 8;
+        var set = function (pct) {
+          if (pct > shown) shown = pct; // monotonic — never step backwards
+          fill.style.width = shown + '%';
+        };
+        window.__bootProgress = set;
         window.__bootDone = function () {
-          clearInterval(timer);
-          fill.style.width = '100%';
+          set(100);
           var boot = document.getElementById('boot');
           if (!boot) return;
           boot.classList.add('hide');
