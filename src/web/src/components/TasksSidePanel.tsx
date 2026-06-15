@@ -32,7 +32,7 @@ const LISTS = [
   { key: 'l8', label: '#8 importer not-ready sg 2026-06-13' },
 ];
 
-interface Runner {
+export interface Runner {
   id: string;
   name: string;
   online?: boolean;
@@ -48,9 +48,11 @@ interface Props {
   onShowRegister: () => void;
   /** Return the right pane to the task list. */
   onShowTasks: () => void;
+  /** Show the selected agent's detail view in the right pane. */
+  onSelectAgent: (runner: Runner) => void;
 }
 
-export function TasksSidePanel({ onShowRegister, onShowTasks }: Props) {
+export function TasksSidePanel({ onShowRegister, onShowTasks, onSelectAgent }: Props) {
   const [sel, setSel] = useState('running');
   const [quickOpen, setQuickOpen] = useState(true);
   const [listOpen, setListOpen] = useState(true);
@@ -79,11 +81,11 @@ export function TasksSidePanel({ onShowRegister, onShowTasks }: Props) {
       if (idx >= list.length) return;
       e.preventDefault();
       setSel(list[idx].id);
-      onShowTasks();
+      onSelectAgent(list[idx]);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [list, onShowTasks]);
+  }, [list, onSelectAgent]);
 
   return (
     <aside className="tasks-panel">
@@ -120,7 +122,10 @@ export function TasksSidePanel({ onShowRegister, onShowTasks }: Props) {
                 <div
                   key={r.id}
                   className={`tp-item inset ${sel === r.id ? 'active' : ''}`}
-                  onClick={() => pick(r.id)}
+                  onClick={() => {
+                    setSel(r.id);
+                    onSelectAgent(r);
+                  }}
                 >
                   <span
                     style={{

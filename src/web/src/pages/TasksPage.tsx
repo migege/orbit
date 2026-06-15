@@ -24,8 +24,9 @@ import {
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api';
+import { AgentView } from '../components/AgentView';
 import { RunnerRegisterGuide } from '../components/RunnerRegisterGuide';
-import { TasksSidePanel } from '../components/TasksSidePanel';
+import { TasksSidePanel, type Runner } from '../components/TasksSidePanel';
 
 const SOURCES = [
   { key: 'AGENT', label: 'Agents' },
@@ -93,7 +94,8 @@ export function TasksPage() {
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState('ALL');
-  const [view, setView] = useState<'tasks' | 'register'>('tasks');
+  const [view, setView] = useState<'tasks' | 'register' | 'agent'>('tasks');
+  const [selectedRunner, setSelectedRunner] = useState<Runner | null>(null);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [form] = Form.useForm();
 
@@ -195,10 +197,16 @@ export function TasksPage() {
       <TasksSidePanel
         onShowRegister={() => setView('register')}
         onShowTasks={() => setView('tasks')}
+        onSelectAgent={(r) => {
+          setSelectedRunner(r);
+          setView('agent');
+        }}
       />
       <main className="tasks-main">
         {view === 'register' ? (
           <RunnerRegisterGuide onClose={() => setView('tasks')} />
+        ) : view === 'agent' && selectedRunner ? (
+          <AgentView runner={selectedRunner} />
         ) : (
           <>
         <h1 className="page-title">Running</h1>
