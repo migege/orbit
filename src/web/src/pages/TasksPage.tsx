@@ -22,7 +22,7 @@ import {
   Typography,
 } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { api } from '../api';
 import { RunnerRegisterGuide } from '../components/RunnerRegisterGuide';
 import { TasksSidePanel } from '../components/TasksSidePanel';
@@ -48,6 +48,13 @@ const matchesFilter = (status: string, f: string): boolean => {
 };
 
 const cap = (s: string): string => s.charAt(0) + s.slice(1).toLowerCase();
+
+// Top-nav sections share this view; only the heading differs (default: Running).
+const SECTION_TITLES: Record<string, string> = {
+  '/skills': 'Skills',
+  '/schedule': 'Schedule',
+  '/activities': 'Activities',
+};
 
 // The "Add a runner" view isn't URL-routed (it adds no path), so remember it
 // per-tab — a refresh restores it instead of snapping back to the task list.
@@ -93,6 +100,8 @@ function StatusCircle({ status }: { status: string }) {
 }
 
 export function TasksPage() {
+  const loc = useLocation();
+  const pageTitle = SECTION_TITLES[loc.pathname] ?? 'Running';
   const { message } = AntApp.useApp();
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
@@ -211,7 +220,7 @@ export function TasksPage() {
           <RunnerRegisterGuide onClose={() => setView('tasks')} />
         ) : (
           <>
-        <h1 className="page-title">Running</h1>
+        <h1 className="page-title">{pageTitle}</h1>
 
         <div className="tasks-toolbar">
         <Button type="primary" icon={<PlusOutlined />} onClick={() => setOpen(true)}>
