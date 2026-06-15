@@ -28,7 +28,7 @@ needs to reach into a user's machine.
 
 ## Architecture decisions
 
-See [`docs`](#) and the in-repo design notes. Highlights:
+Highlights:
 
 - **Why runners, not server-side execution** — the example tasks are *ops* against the
   user's own infrastructure; the agent's tools must run with the user's credentials, on the
