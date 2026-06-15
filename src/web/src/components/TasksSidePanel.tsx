@@ -180,6 +180,16 @@ export function TasksSidePanel({ onShowRegister, onShowTasks }: Props) {
                 className={`tp-item inset ${sel === l.key ? 'active' : ''}`}
                 onClick={() => pick(l.key)}
               >
+                <span
+                  style={{
+                    width: 7,
+                    height: 7,
+                    borderRadius: '50%',
+                    background: '#c0c4cc',
+                    flex: 'none',
+                    marginRight: 8,
+                  }}
+                />
                 <span className="tp-label">{l.label}</span>
               </div>
             ))}
