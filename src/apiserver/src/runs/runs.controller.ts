@@ -8,6 +8,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { concat, concatMap, from, map, Observable, switchMap, throwError } from 'rxjs';
+import { AllowQueryToken } from '../auth/allow-query-token.decorator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AuthUser, CurrentUser } from '../common/current-user.decorator';
 import { PrismaService } from '../prisma/prisma.service';
@@ -37,6 +38,7 @@ export class RunsController {
   }
 
   /** Replays historical run events, then streams live ones over SSE. */
+  @AllowQueryToken()
   @Sse(':id/events')
   events(@CurrentUser() user: AuthUser, @Param('id') id: string): Observable<MessageEvent> {
     // Gate the stream on ownership BEFORE any event is read or the live hub is

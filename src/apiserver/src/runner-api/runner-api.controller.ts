@@ -224,10 +224,12 @@ export class RunnerApiController {
     @Param('id') runId: string,
     @Body() batch: RunEventBatch,
   ) {
-    await this.assertOwnership(runId, runner.id);
+    const run = await this.assertOwnership(runId, runner.id);
     const events = batch?.events ?? [];
     if (events.length === 0) return { ok: true };
 
+    // Persist idempotently — RunEvent has @@unique([runId, seq]) + skipDuplicates,
+    // so a run's OWN final batch is never lost even if it races with complete().
     await this.prisma.runEvent.createMany({
       data: events.map((e) => ({
         runId,
@@ -251,7 +253,12 @@ export class RunnerApiController {
       });
     }
 
-    for (const e of events) this.realtime.publish(runId, e);
+    // Only broadcast to live subscribers while the run is active; once finalized,
+    // don't let late/replayed events spam the live stream. They remain in the
+    // persisted transcript and appear on replay.
+    if (run.status === RunStatus.RUNNING) {
+      for (const e of events) this.realtime.publish(runId, e);
+    }
     return { ok: true };
   }
 
@@ -264,48 +271,59 @@ export class RunnerApiController {
   ) {
     const run = await this.assertOwnership(runId, runner.id);
     const usage = dto.usage;
-
-    await this.prisma.taskRun.update({
-      where: { id: runId },
-      data: {
-        status: dto.status as RunStatus,
-        result: dto.result,
-        subtype: dto.subtype,
-        error: dto.error,
-        claudeSessionId: dto.claudeSessionId,
-        numTurns: dto.numTurns ?? 0,
-        costUsd: dto.costUsd ?? 0,
-        sumInputTokens: usage?.input_tokens ?? 0,
-        sumOutputTokens: usage?.output_tokens ?? 0,
-        sumCacheRead: usage?.cache_read_input_tokens ?? 0,
-        sumCacheWrite: usage?.cache_creation_input_tokens ?? 0,
-        finishedAt: new Date(),
-      },
-    });
-
-    if (dto.modelUsage) {
-      const rows = Object.entries(dto.modelUsage).map(([model, mu]) => ({
-        runId,
-        model,
-        inputTokens: mu.inputTokens ?? 0,
-        outputTokens: mu.outputTokens ?? 0,
-        cacheCreationInputTokens: mu.cacheCreationInputTokens ?? 0,
-        cacheReadInputTokens: mu.cacheReadInputTokens ?? 0,
-        costUsd: mu.costUSD ?? 0,
-      }));
-      if (rows.length > 0) await this.prisma.llmUsage.createMany({ data: rows });
-    }
-
     const taskStatus: TaskStatus =
       dto.status === RunStatus.SUCCEEDED
         ? TaskStatus.SUCCEEDED
         : dto.status === RunStatus.CANCELLED
           ? TaskStatus.CANCELLED
           : TaskStatus.FAILED;
-    await this.prisma.task.update({
-      where: { id: run.taskId },
-      data: { status: taskStatus },
+
+    // Finalize the run, record usage, and flip the task in ONE transaction so a
+    // crash can't leave a finalized run without its billing rows. Only a still
+    // RUNNING run is finalized (updateMany count): a duplicate/late completion is
+    // a safe no-op — no double-billed LlmUsage and no resurrecting a terminal run.
+    const finalized = await this.prisma.$transaction(async (tx) => {
+      const res = await tx.taskRun.updateMany({
+        where: { id: runId, status: RunStatus.RUNNING },
+        data: {
+          status: dto.status as RunStatus,
+          result: dto.result,
+          subtype: dto.subtype,
+          error: dto.error,
+          claudeSessionId: dto.claudeSessionId,
+          numTurns: dto.numTurns ?? 0,
+          costUsd: dto.costUsd ?? 0,
+          sumInputTokens: usage?.input_tokens ?? 0,
+          sumOutputTokens: usage?.output_tokens ?? 0,
+          sumCacheRead: usage?.cache_read_input_tokens ?? 0,
+          sumCacheWrite: usage?.cache_creation_input_tokens ?? 0,
+          finishedAt: new Date(),
+        },
+      });
+      if (res.count === 0) return false;
+
+      if (dto.modelUsage) {
+        const rows = Object.entries(dto.modelUsage).map(([model, mu]) => ({
+          runId,
+          model,
+          inputTokens: mu.inputTokens ?? 0,
+          outputTokens: mu.outputTokens ?? 0,
+          cacheCreationInputTokens: mu.cacheCreationInputTokens ?? 0,
+          cacheReadInputTokens: mu.cacheReadInputTokens ?? 0,
+          costUsd: mu.costUSD ?? 0,
+        }));
+        if (rows.length > 0) await tx.llmUsage.createMany({ data: rows });
+      }
+
+      // Don't resurrect a task the user explicitly cancelled, even if the runner
+      // reports success for the in-flight run after the cancel was requested.
+      await tx.task.updateMany({
+        where: { id: run.taskId, status: { not: TaskStatus.CANCELLED } },
+        data: { status: taskStatus },
+      });
+      return true;
     });
+    if (!finalized) return { ok: true };
 
     this.realtime.publish(runId, {
       seq: Number.MAX_SAFE_INTEGER,

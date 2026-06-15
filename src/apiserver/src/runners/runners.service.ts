@@ -1,14 +1,36 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { HttpException, HttpStatus, Injectable, NotFoundException } from '@nestjs/common';
 import { generateToken, sha256 } from '../common/crypto.util';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateEnrollmentTokenDto } from './dto';
 
 // Three missed 30s heartbeats — a runner quieter than this reads as offline.
 const OFFLINE_AFTER_MS = 90_000;
+// Cap device-enrollment userCode lookups per user, so an authenticated insider
+// cannot brute-force another user's pending enrollment code online.
+const DEVICE_LOOKUP_WINDOW_MS = 5 * 60_000;
+const DEVICE_LOOKUP_MAX = 20;
 
 @Injectable()
 export class RunnersService {
   constructor(private readonly prisma: PrismaService) {}
+
+  private readonly deviceLookups = new Map<string, number[]>();
+
+  /** Throttle per-user userCode lookups to defeat online enumeration. */
+  private rateLimitDeviceLookup(userId: string): void {
+    const now = Date.now();
+    const recent = (this.deviceLookups.get(userId) ?? []).filter(
+      (t) => now - t < DEVICE_LOOKUP_WINDOW_MS,
+    );
+    if (recent.length >= DEVICE_LOOKUP_MAX) {
+      throw new HttpException(
+        'too many enrollment lookups, slow down',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+    recent.push(now);
+    this.deviceLookups.set(userId, recent);
+  }
 
   async listRunners(ownerId: string) {
     const runners = await this.prisma.runner.findMany({
@@ -57,6 +79,7 @@ export class RunnersService {
 
   /** Details shown on the browser approval page for an `orbit register` session. */
   async getDeviceEnrollment(ownerId: string, userCode: string) {
+    this.rateLimitDeviceLookup(ownerId);
     const s = await this.prisma.deviceEnrollment.findUnique({ where: { userCode } });
     if (!s || s.expiresAt < new Date()) {
       throw new NotFoundException('enrollment request not found or expired');
@@ -79,6 +102,7 @@ export class RunnersService {
 
   /** Approve a device session: create the runner under this user and stash its token. */
   async approveDeviceEnrollment(ownerId: string, userCode: string) {
+    this.rateLimitDeviceLookup(ownerId);
     const s = await this.prisma.deviceEnrollment.findUnique({ where: { userCode } });
     if (!s || s.expiresAt < new Date()) {
       throw new NotFoundException('enrollment request not found or expired');

@@ -28,12 +28,16 @@ export function sha256(input: string): string {
 // Crockford-ish alphabet with no easily confused glyphs (0/O, 1/I/L).
 const USER_CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 
-/** Short, human-typable code for device-login approval (e.g. `WXYZ-4821`). */
+/**
+ * Short, human-typable code for device-login approval (e.g. `WXYZ4-8K2QP`).
+ * 10 symbols over a 30-char alphabet ≈ 49 bits: infeasible to guess online,
+ * and the approval endpoints additionally rate-limit lookups per user.
+ */
 export function generateUserCode(): string {
-  const bytes = randomBytes(8);
+  const bytes = randomBytes(10);
   let s = '';
   for (let i = 0; i < bytes.length; i++) {
     s += USER_CODE_ALPHABET[bytes[i] % USER_CODE_ALPHABET.length];
   }
-  return `${s.slice(0, 4)}-${s.slice(4)}`;
+  return `${s.slice(0, 5)}-${s.slice(5)}`;
 }
