@@ -1,11 +1,10 @@
 import {
   BookOutlined,
   CaretDownOutlined,
-  CheckSquareOutlined,
   ClockCircleOutlined,
   LogoutOutlined,
   PlusOutlined,
-  ProfileOutlined,
+  ThunderboltOutlined,
   UserOutlined,
 } from '@ant-design/icons';
 import { Avatar, Dropdown } from 'antd';
@@ -17,6 +16,7 @@ import { clearToken } from '../api';
 // moves the highlight (it does not filter the list on the right).
 const TOP = [
   { key: 'running', icon: <UserOutlined />, label: 'Running', count: 385 },
+  { key: 'skills', icon: <ThunderboltOutlined />, label: 'Skills' },
   { key: 'schedule', icon: <BookOutlined />, label: 'Schedule' },
   { key: 'activities', icon: <ClockCircleOutlined />, label: 'Activities' },
 ];
@@ -44,6 +44,7 @@ function logout() {
 export function TasksSidePanel() {
   const [sel, setSel] = useState('running');
   const [quickOpen, setQuickOpen] = useState(true);
+  const [listOpen, setListOpen] = useState(true);
   const [archOpen, setArchOpen] = useState(false);
 
   return (
@@ -90,23 +91,20 @@ export function TasksSidePanel() {
         <div className="tp-divider" />
 
         <div className="tp-group">
-          <div className="tp-group-head">
-            <ProfileOutlined className="tp-group-ico" />
+          <div className="tp-group-head" onClick={() => setListOpen((o) => !o)}>
+            <CaretDownOutlined className={`tp-caret ${listOpen ? '' : 'collapsed'}`} />
             <span className="tp-group-name">Task List</span>
-            <PlusOutlined className="tp-add" />
           </div>
-          {LISTS.map((l) => (
-            <div
-              key={l.key}
-              className={`tp-item tp-sub ${sel === l.key ? 'active' : ''}`}
-              onClick={() => setSel(l.key)}
-            >
-              <span className="tp-ico">
-                <CheckSquareOutlined />
-              </span>
-              <span className="tp-label">{l.label}</span>
-            </div>
-          ))}
+          {listOpen &&
+            LISTS.map((l) => (
+              <div
+                key={l.key}
+                className={`tp-item inset ${sel === l.key ? 'active' : ''}`}
+                onClick={() => setSel(l.key)}
+              >
+                <span className="tp-label">{l.label}</span>
+              </div>
+            ))}
         </div>
 
         <div className="tp-group">
