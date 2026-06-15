@@ -44,13 +44,11 @@ func preflightClaudeAuth() PreflightResult {
 	var execErr *exec.Error
 	if errors.As(err, &execErr) {
 		return PreflightResult{false,
-			"Claude Code (`claude`) was not found on PATH. Install Claude Code and run `claude` then `/login`, " +
-				"or set ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN."}
+			"Claude Code (`claude`) was not found on PATH. Install Claude Code and run `claude` then `/login`."}
 	}
 	if unauthRe.MatchString(strings.ToLower(string(out))) {
 		return PreflightResult{false,
-			"Claude Code is not logged in. Run `claude` then `/login` (uses your Claude subscription), " +
-				"or set ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN."}
+			"Claude Code is not logged in. Run `claude` then `/login` (uses your Claude subscription)."}
 	}
 	return PreflightResult{true, "could not verify Claude Code auth via `claude auth status`; proceeding"}
 }

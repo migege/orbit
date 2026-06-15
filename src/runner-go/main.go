@@ -30,7 +30,7 @@ const defaultServer = "https://orbit.wikova.com"
 var usage = `orbit — register a machine and run Claude Code tasks for an Orbit control plane
 
 Usage:
-  orbit register [options]          Register this machine (approve in the browser)
+  orbit register [options]          Register this machine + install the service (approve in the browser)
   orbit run                         Start the runner loop in the foreground
   orbit service                     Install + start a background service (systemd / launchd)
   orbit status                      Show this directory's runner and its control-plane status
@@ -39,13 +39,16 @@ Usage:
 register options:
   --server <url>           Control plane base URL (default: ` + defaultServer + `)
   --token <token>          Optional one-time enrollment token (skips browser approval)
-  --name <name>            Runner name (default: this machine's hostname)
+  --name <name>            Runner name (default: "<dir> @ <hostname>")
   --labels a,b,c           Routing labels (e.g. sg,hdfs)
   --max-concurrent <n>     Max concurrent jobs (default: 1)
   --force                  Re-register even if this directory already has a runner
+  --no-service             Don't auto-install/start the background service
+
+The runner drives the machine's local Claude Code login (run 'claude' then '/login');
+no API key is required.
 
 Env:
-  ANTHROPIC_API_KEY        Used by Claude Code on this machine (never sent to the control plane)
   ORBIT_HOME               Override config/runs dir (default: ./.orbit in the current directory)
   ORBIT_NO_SELFUPDATE      Disable the startup auto-update
 `
@@ -84,8 +87,8 @@ func cmdRegister(flags map[string]string, bools map[string]bool) {
 	// same directory overwrites its config, so confirm first.
 	if existing := loadConfig(); existing != nil && !bools["force"] {
 		ok := confirm(fmt.Sprintf(
-			"This directory already has runner %q registered.\nRegister a new one here (overwrites %s)? [y/N] ",
-			existing.Name, configPath()))
+			"This directory already has runner %q registered.\nRegister a new one here (overwrites %s)? [Y/n] ",
+			existing.Name, configPath()), true)
 		if !ok {
 			fmt.Println("aborted — use `orbit register` in another directory, or pass --force")
 			os.Exit(0)
@@ -102,6 +105,7 @@ func cmdRegister(flags map[string]string, bools map[string]bool) {
 	labels := parseLabels(flags["labels"])
 	maxConcurrent := getInt(flags, "max-concurrent", 1)
 	token := flags["token"]
+	withService := !bools["no-service"]
 	t := NewTransport(server, "")
 
 	// Legacy path: an explicit enrollment token skips browser approval.
@@ -114,7 +118,7 @@ func cmdRegister(flags map[string]string, bools map[string]bool) {
 			fmt.Fprintln(os.Stderr, "registration failed:", err)
 			os.Exit(1)
 		}
-		finishRegister(res.RunnerID, res.RunnerToken, res.Name, server, labels, maxConcurrent)
+		finishRegister(res.RunnerID, res.RunnerToken, res.Name, server, labels, maxConcurrent, withService)
 		return
 	}
 
@@ -141,7 +145,7 @@ func cmdRegister(flags map[string]string, bools map[string]bool) {
 			continue // transient — keep waiting until the deadline
 		}
 		if poll.Status == "approved" {
-			finishRegister(poll.RunnerID, poll.RunnerToken, poll.Name, server, labels, maxConcurrent)
+			finishRegister(poll.RunnerID, poll.RunnerToken, poll.Name, server, labels, maxConcurrent, withService)
 			return
 		}
 		if poll.Status == "expired" {
@@ -152,7 +156,7 @@ func cmdRegister(flags map[string]string, bools map[string]bool) {
 	os.Exit(1)
 }
 
-func finishRegister(runnerID, runnerToken, name, server string, labels []string, maxConcurrent int) {
+func finishRegister(runnerID, runnerToken, name, server string, labels []string, maxConcurrent int, withService bool) {
 	cfg := &RunnerConfig{
 		ServerURL: server, RunnerID: runnerID, RunnerToken: runnerToken,
 		Name: name, Labels: labels, MaxConcurrent: maxConcurrent,
@@ -161,11 +165,21 @@ func finishRegister(runnerID, runnerToken, name, server string, labels []string,
 		fmt.Fprintln(os.Stderr, "failed to save config:", err)
 		os.Exit(1)
 	}
-	svc := ""
-	if runtime.GOOS == "linux" || runtime.GOOS == "darwin" {
-		svc = "  Run as a service:  sudo orbit service\n"
+	fmt.Printf("\n✓ registered runner %q (%s).\n", name, runnerID)
+
+	if !withService {
+		fmt.Println("  Start it with:  orbit run")
+		return
 	}
-	fmt.Printf("\n✓ registered runner %q (%s).\n  Start it now:       orbit run\n%s", name, runnerID, svc)
+	// Auto-install the background service so the machine starts working immediately.
+	if err := setupService(); err != nil {
+		fmt.Fprintf(os.Stderr, "\nnote: could not auto-install the service (%s)\n", firstLine(err.Error()))
+		hint := "  start it manually:  orbit service   (or: orbit run)"
+		if runtime.GOOS == "linux" {
+			hint = "  start it manually:  sudo orbit service   (or: orbit run)"
+		}
+		fmt.Fprintln(os.Stderr, hint)
+	}
 }
 
 func cmdRun() {
@@ -334,13 +348,20 @@ func openBrowser(link string) {
 	_ = cmd.Start()
 }
 
-// confirm asks a yes/no question; defaults to "no" when not interactive.
-func confirm(question string) bool {
+// confirm asks a yes/no question. Enter (or a non-interactive caller) returns
+// defaultYes.
+func confirm(question string, defaultYes bool) bool {
 	if !interactive() {
-		return false
+		return defaultYes
 	}
 	fmt.Print(question)
 	line, _ := stdinReader.ReadString('\n')
 	s := strings.ToLower(strings.TrimSpace(line))
+	if s == "" {
+		return defaultYes
+	}
+	if defaultYes {
+		return s != "n" && s != "no"
+	}
 	return s == "y" || s == "yes"
 }
