@@ -1,5 +1,5 @@
 // Enum values are kept in sync (by string) with the Prisma schema enums in
-// packages/server/prisma/schema.prisma. Changing a value here means updating both.
+// src/apiserver/prisma/schema.prisma. Changing a value here means updating both.
 
 /** Lifecycle of a task in the queue. */
 export enum TaskStatus {

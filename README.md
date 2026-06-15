@@ -12,16 +12,16 @@ React UI ──REST/SSE──▶ Control plane (NestJS + Postgres) ◀──outb
                           cost/token rollups                                 (Agent SDK or `claude -p`)
 ```
 
-- **Control plane** (`packages/server`) — NestJS + Prisma + PostgreSQL. Owns users, agents,
+- **Control plane** (`src/apiserver`) — NestJS + Prisma + PostgreSQL. Owns users, agents,
   tasks (the queue), runs, runners, and cost/usage aggregation. Never holds an Anthropic key.
-- **Runner** (`packages/runner`) — a small Node CLI. `orbit register` enrolls a machine;
+- **Runner** (`src/runner`) — a small Node CLI. `orbit register` enrolls a machine;
   `orbit run` long-polls for assigned tasks and drives Claude Code via the
   [`@anthropic-ai/claude-agent-sdk`](https://code.claude.com/docs/en/agent-sdk/overview)
   `query()` (falling back to `claude -p --output-format stream-json`). Streams normalized
   events + token/cost back to the control plane.
-- **Web** (`packages/web`) — Vite + React + Ant Design. List / Kanban-ish grouped tasks,
+- **Web** (`src/web`) — Vite + React + Ant Design. List / Kanban-ish grouped tasks,
   agent CRUD, runner enrollment, live run stream (SSE), and a cost dashboard.
-- **Shared** (`packages/shared`) — enums, normalized run-event types, and runner-API DTOs.
+- **Shared** (`src/shared`) — enums, normalized run-event types, and runner-API DTOs.
 
 The connection is **outbound-only** (runner → server): NAT-friendly, and the server never
 needs to reach into a user's machine.
@@ -61,10 +61,10 @@ npm install
 cp .env.example .env                 # adjust if needed
 npm run db:up                        # docker compose: postgres on :5432
 npm run prisma:generate
-npm run prisma:migrate -w @orbit/server   # or `prisma migrate deploy` in prod
+npm run prisma:migrate -w @orbit/apiserver   # or `prisma migrate deploy` in prod
 
 # 3. control plane  (http://localhost:3000)
-npm run dev:server
+npm run dev:apiserver
 
 # 4. web UI         (http://localhost:5173, proxies /api → :3000)
 npm run dev:web
@@ -80,12 +80,12 @@ Open the UI, create an account, define an **Agent** (model + allowed tools), the
 # (logged in via `/login`, or ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN set):
 npm run build -w @orbit/shared && npm run build -w @orbit/runner
 
-node packages/runner/dist/index.js register \
+node src/runner/dist/index.js register \
   --server http://<control-plane-host>:3000 \
   --token  <enrollment-token-from-the-UI> \
   --name   my-runner --labels sg,hdfs --max-concurrent 2
 
-node packages/runner/dist/index.js run
+node src/runner/dist/index.js run
 ```
 
 Create a task in the UI, queue it, and watch the live stream in the task detail page.
@@ -100,11 +100,11 @@ for authoritative billing.
 ## Project layout
 
 ```
-packages/
-  shared/   enums · normalized run events · runner-API DTOs
-  server/   NestJS control plane + Prisma schema/migrations
-  runner/   `orbit` CLI: register + run loop + Claude Code adapter
-  web/      Vite + React + Ant Design UI
+src/
+  shared/     enums · normalized run events · runner-API DTOs
+  apiserver/  NestJS control plane + Prisma schema/migrations
+  runner/     `orbit` CLI: register + run loop + Claude Code adapter
+  web/        Vite + React + Ant Design UI
 ```
 
 ## Useful scripts (root)
@@ -114,7 +114,7 @@ packages/
 | `npm run build` | Build all packages |
 | `npm run db:up` / `db:down` | Start/stop local Postgres |
 | `npm run prisma:migrate` | Create/apply a dev migration |
-| `npm run dev:server` | Run the control plane (watch) |
+| `npm run dev:apiserver` | Run the control plane (watch) |
 | `npm run dev:web` | Run the web UI (watch) |
 
 ## Status

@@ -1,5 +1,5 @@
 {
-  "name": "@orbit/server",
+  "name": "@orbit/apiserver",
   "version": "0.1.0",
   "private": true,
   "description": "Orbit control plane (NestJS + Prisma)",

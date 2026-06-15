@@ -6,8 +6,8 @@ services:
       POSTGRES_USER: orbit
       POSTGRES_PASSWORD: orbit
       POSTGRES_DB: orbit
-    ports:
-      - "5432:5432"
+    expose:
+      - "5432"
     volumes:
       - orbit_pg:/var/lib/postgresql/data
     healthcheck:
@@ -16,31 +16,64 @@ services:
       timeout: 5s
       retries: 10
 
-  server:
+  apiserver:
     build:
       context: .
-      dockerfile: packages/server/Dockerfile
-    container_name: orbit-server
+      dockerfile: src/apiserver/Dockerfile
+    container_name: orbit-apiserver
     environment:
       DATABASE_URL: "postgresql://orbit:orbit@postgres:5432/orbit?schema=public"
       JWT_SECRET: "${JWT_SECRET:-change-me-in-prod}"
       PORT: "3000"
-      CORS_ORIGINS: "http://localhost:8080"
+      CORS_ORIGINS: "http://localhost:2086"
     depends_on:
       postgres:
         condition: service_healthy
-    ports:
-      - "3000:3000"
+    expose:
+      - "3000"
+    healthcheck:
+      # Any HTTP response means Nest is up; only a refused connection fails.
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api').then(()=>process.exit(0)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
 
   web:
     build:
       context: .
-      dockerfile: packages/web/Dockerfile
+      dockerfile: src/web/Dockerfile
     container_name: orbit-web
     depends_on:
-      - server
+      apiserver:
+        condition: service_healthy
+    expose:
+      - "80"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+  gateway:
+    image: nginx:alpine
+    container_name: orbit-gateway
+    depends_on:
+      web:
+        condition: service_healthy
+      apiserver:
+        condition: service_healthy
     ports:
-      - "8080:80"
+      - "2086:80"
+    volumes:
+      - ./gateway/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
 
 volumes:
   orbit_pg:

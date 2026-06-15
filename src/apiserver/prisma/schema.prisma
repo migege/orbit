@@ -1,4 +1,4 @@
-// Orbit control-plane data model. See packages/shared/src/enums.ts for the
+// Orbit control-plane data model. See src/shared/src/enums.ts for the
 // TypeScript mirrors of these enums (kept in sync by string value).
 
 generator client {
