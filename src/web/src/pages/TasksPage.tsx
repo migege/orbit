@@ -1,22 +1,29 @@
-import { PlusOutlined } from '@ant-design/icons';
+import {
+  CaretDownOutlined,
+  CheckCircleFilled,
+  CloseCircleFilled,
+  DeleteOutlined,
+  LoadingOutlined,
+  PlusOutlined,
+} from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   App as AntApp,
+  Avatar,
   Button,
-  Collapse,
   Form,
   Input,
   Modal,
+  Segmented,
   Select,
-  Space,
+  Spin,
   Switch,
-  Table,
+  Tooltip,
   Typography,
 } from 'antd';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api';
-import { StatusTag } from '../components/StatusTag';
 
 const SOURCES = [
   { key: 'AGENT', label: 'Agents' },
@@ -24,10 +31,67 @@ const SOURCES = [
   { key: 'EXTERNAL', label: 'External' },
 ];
 
+const FILTERS = [
+  { label: 'All', value: 'ALL' },
+  { label: 'Ongoing', value: 'ONGOING' },
+  { label: 'Done', value: 'DONE' },
+  { label: 'Failed', value: 'FAILED' },
+];
+
+const matchesFilter = (status: string, f: string): boolean => {
+  if (f === 'ONGOING') return status === 'QUEUED' || status === 'RUNNING';
+  if (f === 'DONE') return status === 'SUCCEEDED';
+  if (f === 'FAILED') return status === 'FAILED' || status === 'CANCELLED';
+  return true;
+};
+
+const cap = (s: string): string => s.charAt(0) + s.slice(1).toLowerCase();
+
+const fmtDate = (d?: string): string =>
+  d ? new Date(d).toLocaleDateString([], { month: 'short', day: 'numeric' }) : '—';
+
+const fmtDateTime = (d?: string): string => {
+  if (!d) return '—';
+  const date = new Date(d);
+  const now = new Date();
+  const time = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (date.toDateString() === now.toDateString()) return `Today, ${time}`;
+  if (date.toDateString() === yesterday.toDateString()) return `Yesterday, ${time}`;
+  return `${date.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${time}`;
+};
+
+function StatusCircle({ status }: { status: string }) {
+  let node: React.ReactNode;
+  switch (status) {
+    case 'SUCCEEDED':
+      node = <CheckCircleFilled style={{ color: '#2ea121', fontSize: 16 }} />;
+      break;
+    case 'RUNNING':
+      node = <LoadingOutlined spin style={{ color: '#3370ff', fontSize: 15 }} />;
+      break;
+    case 'FAILED':
+      node = <CloseCircleFilled style={{ color: '#f54a45', fontSize: 16 }} />;
+      break;
+    case 'QUEUED':
+      node = <span className="status-circle hollow blue" />;
+      break;
+    case 'CANCELLED':
+      node = <span className="status-circle hollow muted" />;
+      break;
+    default:
+      node = <span className="status-circle hollow" />;
+  }
+  return <Tooltip title={cap(status)}>{node}</Tooltip>;
+}
+
 export function TasksPage() {
   const { message } = AntApp.useApp();
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
+  const [filter, setFilter] = useState('ALL');
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [form] = Form.useForm();
 
   const tasks = useQuery({ queryKey: ['tasks'], queryFn: () => api<any[]>('/tasks') });
@@ -57,82 +121,126 @@ export function TasksPage() {
     onError: (e: Error) => message.error(e.message),
   });
 
-  const columns = [
-    {
-      title: 'Task Title',
-      dataIndex: 'title',
-      render: (t: string, r: any) => <Link to={`/tasks/${r.id}`}>{t}</Link>,
-    },
-    { title: 'Status', dataIndex: 'status', render: (s: string) => <StatusTag status={s} /> },
-    { title: 'Agent', dataIndex: ['agent', 'name'], render: (n: string) => n ?? '—' },
-    { title: 'Runner', dataIndex: ['assignedRunner', 'name'], render: (n: string) => n ?? '—' },
-    {
-      title: 'Cost',
-      key: 'cost',
-      render: (_: unknown, r: any) =>
-        r.runs?.[0]?.costUsd ? `$${r.runs[0].costUsd.toFixed(4)}` : '—',
-    },
-    {
-      title: 'Created at',
-      dataIndex: 'createdAt',
-      render: (d: string) => new Date(d).toLocaleString(),
-    },
-    {
-      title: 'Actions',
-      key: 'actions',
-      render: (_: unknown, r: any) => (
-        <Space>
-          {['DRAFT', 'FAILED', 'CANCELLED'].includes(r.status) && (
-            <Button size="small" onClick={() => act.mutate({ id: r.id, action: 'enqueue' })}>
+  const grouped = useMemo(() => {
+    const g: Record<string, any[]> = { AGENT: [], MANUAL: [], EXTERNAL: [] };
+    for (const t of tasks.data ?? []) {
+      if (!matchesFilter(t.status, filter)) continue;
+      (g[t.source] ??= []).push(t);
+    }
+    return g;
+  }, [tasks.data, filter]);
+
+  const renderRow = (r: any) => {
+    const runnable = ['DRAFT', 'FAILED', 'CANCELLED'].includes(r.status);
+    const cancellable = ['QUEUED', 'RUNNING'].includes(r.status);
+    return (
+      <div className="task-row" key={r.id}>
+        <div className="task-title-cell">
+          <StatusCircle status={r.status} />
+          <Link to={`/tasks/${r.id}`} className="task-title">
+            {r.title}
+          </Link>
+        </div>
+        <div className="task-cell">{r.estimates || '—'}</div>
+        <div className="task-cell">{fmtDate(r.startTime)}</div>
+        <div className="task-cell">{fmtDate(r.dueDate)}</div>
+        <div className="task-creator">
+          <Avatar
+            size={22}
+            style={{ background: '#e1eaff', color: '#3370ff', fontSize: 11, flex: 'none' }}
+          >
+            {(r.creator?.name ?? '?').trim().charAt(0).toUpperCase()}
+          </Avatar>
+          <span className="task-cell">{r.creator?.name ?? '—'}</span>
+        </div>
+        <div className="task-cell">{fmtDateTime(r.createdAt)}</div>
+        <Typography.Text className="task-id" copyable={{ text: r.id, tooltips: ['Copy ID', 'Copied'] }}>
+          {r.id.slice(0, 8)}
+        </Typography.Text>
+        <div className="row-actions">
+          {runnable && (
+            <Button
+              size="small"
+              type="primary"
+              ghost
+              onClick={() => act.mutate({ id: r.id, action: 'enqueue' })}
+            >
               Run
             </Button>
           )}
-          {['QUEUED', 'RUNNING'].includes(r.status) && (
+          {cancellable && (
             <Button size="small" danger onClick={() => act.mutate({ id: r.id, action: 'cancel' })}>
               Cancel
             </Button>
           )}
-          <Button size="small" type="text" danger onClick={() => remove.mutate(r.id)}>
-            Delete
-          </Button>
-        </Space>
-      ),
-    },
-  ];
-
-  const grouped = (tasks.data ?? []).reduce<Record<string, any[]>>((acc, t) => {
-    (acc[t.source] ??= []).push(t);
-    return acc;
-  }, {});
+          <Tooltip title="Delete">
+            <Button
+              size="small"
+              type="text"
+              danger
+              icon={<DeleteOutlined />}
+              onClick={() => remove.mutate(r.id)}
+            />
+          </Tooltip>
+        </div>
+      </div>
+    );
+  };
 
   return (
     <>
-      <Space style={{ marginBottom: 16, justifyContent: 'space-between', width: '100%' }}>
-        <Typography.Title level={3} style={{ margin: 0 }}>
-          Tasks
-        </Typography.Title>
+      <h1 className="page-title">Tasks</h1>
+
+      <div className="tasks-toolbar">
         <Button type="primary" icon={<PlusOutlined />} onClick={() => setOpen(true)}>
           New Task
         </Button>
-      </Space>
+        <Segmented options={FILTERS} value={filter} onChange={(v) => setFilter(v as string)} />
+      </div>
 
-      <Collapse
-        defaultActiveKey={SOURCES.map((s) => s.key)}
-        items={SOURCES.map((s) => ({
-          key: s.key,
-          label: `${s.label}  ·  ${grouped[s.key]?.length ?? 0}`,
-          children: (
-            <Table
-              rowKey="id"
-              size="small"
-              loading={tasks.isLoading}
-              dataSource={grouped[s.key] ?? []}
-              columns={columns as any}
-              pagination={false}
-            />
-          ),
-        }))}
-      />
+      {tasks.isLoading ? (
+        <div style={{ padding: 48, textAlign: 'center' }}>
+          <Spin />
+        </div>
+      ) : (
+        <div className="orbit-tasklist">
+          <div className="col-head-row">
+            <div className="col-head">Task Title</div>
+            <div className="col-head">Estimates</div>
+            <div className="col-head">Start Time</div>
+            <div className="col-head">Due Date</div>
+            <div className="col-head">Creator</div>
+            <div className="col-head">Created at</div>
+            <div className="col-head">Task ID</div>
+          </div>
+
+          {SOURCES.map((s) => {
+            const rows = grouped[s.key] ?? [];
+            const isCollapsed = collapsed[s.key];
+            return (
+              <div key={s.key}>
+                <div
+                  className="group-header"
+                  onClick={() => setCollapsed((c) => ({ ...c, [s.key]: !c[s.key] }))}
+                >
+                  <CaretDownOutlined className={`group-caret ${isCollapsed ? 'collapsed' : ''}`} />
+                  <span className="group-name">{s.label}</span>
+                  <span className="group-count">{rows.length}</span>
+                </div>
+                {!isCollapsed && (
+                  <>
+                    {rows.map(renderRow)}
+                    <div className="new-task-row" onClick={() => setOpen(true)}>
+                      <PlusOutlined />
+                      <span>New Task</span>
+                    </div>
+                  </>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       <Modal
         title="New Task"

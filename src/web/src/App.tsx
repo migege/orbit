@@ -4,8 +4,9 @@ import {
   DesktopOutlined,
   LogoutOutlined,
   UnorderedListOutlined,
+  UserOutlined,
 } from '@ant-design/icons';
-import { Button, Layout, Menu } from 'antd';
+import { Avatar, Button, Layout, Menu, Tooltip } from 'antd';
 import { Link, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { clearToken, getToken } from './api';
 import { AgentsPage } from './pages/AgentsPage';
@@ -20,44 +21,62 @@ function Shell({ children }: { children: React.ReactNode }) {
   const selected = '/' + (loc.pathname.split('/')[1] || 'tasks');
   return (
     <Layout style={{ minHeight: '100vh' }}>
-      <Layout.Sider theme="light" breakpoint="lg" collapsedWidth="0">
-        <div style={{ padding: 16, fontWeight: 700, fontSize: 18 }}>🛰 Orbit</div>
-        <Menu
-          mode="inline"
-          selectedKeys={[selected]}
-          items={[
-            { key: '/tasks', icon: <UnorderedListOutlined />, label: <Link to="/tasks">Tasks</Link> },
-            { key: '/agents', icon: <ApartmentOutlined />, label: <Link to="/agents">Agents</Link> },
-            { key: '/runners', icon: <DesktopOutlined />, label: <Link to="/runners">Runners</Link> },
-            {
-              key: '/dashboard',
-              icon: <DashboardOutlined />,
-              label: <Link to="/dashboard">Dashboard</Link>,
-            },
-          ]}
-        />
-      </Layout.Sider>
-      <Layout>
-        <Layout.Header
+      <Layout.Sider
+        theme="light"
+        width={232}
+        breakpoint="lg"
+        collapsedWidth="0"
+        style={{ borderRight: '1px solid #eceef1' }}
+      >
+        <div
           style={{
-            background: '#fff',
+            position: 'sticky',
+            top: 0,
+            height: '100vh',
             display: 'flex',
-            justifyContent: 'flex-end',
-            alignItems: 'center',
-            paddingInline: 16,
+            flexDirection: 'column',
           }}
         >
-          <Button
-            icon={<LogoutOutlined />}
-            onClick={() => {
-              clearToken();
-              location.href = '/login';
-            }}
-          >
-            Logout
-          </Button>
-        </Layout.Header>
-        <Layout.Content style={{ padding: 24 }}>{children}</Layout.Content>
+          <div className="orbit-brand">
+            <span>🛰</span>
+            <span>Orbit</span>
+          </div>
+          <Menu
+            mode="inline"
+            style={{ borderInlineEnd: 'none', flex: 1 }}
+            selectedKeys={[selected]}
+            items={[
+              { key: '/tasks', icon: <UnorderedListOutlined />, label: <Link to="/tasks">Tasks</Link> },
+              { key: '/agents', icon: <ApartmentOutlined />, label: <Link to="/agents">Agents</Link> },
+              { key: '/runners', icon: <DesktopOutlined />, label: <Link to="/runners">Runners</Link> },
+              {
+                key: '/dashboard',
+                icon: <DashboardOutlined />,
+                label: <Link to="/dashboard">Dashboard</Link>,
+              },
+            ]}
+          />
+          <div className="orbit-sider-footer">
+            <div className="orbit-user">
+              <Avatar size={28} icon={<UserOutlined />} style={{ background: '#3370ff' }} />
+              <span style={{ flex: 1, color: '#646a73', fontSize: 13 }}>Account</span>
+              <Tooltip title="Logout">
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<LogoutOutlined />}
+                  onClick={() => {
+                    clearToken();
+                    location.href = '/login';
+                  }}
+                />
+              </Tooltip>
+            </div>
+          </div>
+        </div>
+      </Layout.Sider>
+      <Layout>
+        <Layout.Content style={{ padding: '24px 32px' }}>{children}</Layout.Content>
       </Layout>
     </Layout>
   );

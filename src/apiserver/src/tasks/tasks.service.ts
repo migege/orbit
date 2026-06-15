@@ -51,6 +51,7 @@ export class TasksService {
       include: {
         agent: { select: { id: true, name: true, model: true } },
         assignedRunner: { select: { id: true, name: true } },
+        creator: { select: { id: true, name: true } },
         runs: {
           orderBy: { createdAt: 'desc' },
           take: 1,

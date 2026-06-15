@@ -1,0 +1,219 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  color: #1f2329;
+  background: #fff;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: #dee0e3;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #c9cdd4;
+}
+
+/* ---- App shell ---- */
+.orbit-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 56px;
+  padding: 0 18px;
+  font-size: 17px;
+  font-weight: 600;
+  color: #1f2329;
+}
+.orbit-sider-footer {
+  border-top: 1px solid #eceef1;
+  padding: 10px 12px;
+}
+.orbit-user {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 6px;
+}
+
+/* ---- Tasks page ---- */
+.page-title {
+  font-size: 20px;
+  font-weight: 600;
+  margin: 0;
+  color: #1f2329;
+}
+.tasks-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 16px 0 8px;
+}
+
+/* shared column grid: title | estimates | start | due | creator | created | id */
+.orbit-tasklist {
+  --cols: minmax(240px, 1fr) 96px 128px 128px 152px 160px 104px;
+  border-top: 1px solid #eceef1;
+}
+.col-head-row,
+.task-row {
+  display: grid;
+  grid-template-columns: var(--cols);
+  column-gap: 12px;
+  align-items: center;
+  padding: 0 12px;
+}
+.col-head-row {
+  height: 38px;
+  border-bottom: 1px solid #eceef1;
+}
+.col-head {
+  font-size: 12px;
+  color: #8f959e;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.group-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 40px;
+  padding: 0 12px;
+  cursor: pointer;
+  user-select: none;
+  border-bottom: 1px solid #f2f3f5;
+}
+.group-caret {
+  color: #8f959e;
+  font-size: 12px;
+  transition: transform 0.15s ease;
+}
+.group-caret.collapsed {
+  transform: rotate(-90deg);
+}
+.group-name {
+  font-weight: 600;
+  font-size: 14px;
+  color: #1f2329;
+}
+.group-count {
+  color: #8f959e;
+  font-size: 13px;
+}
+
+.task-row {
+  position: relative;
+  height: 44px;
+  border-bottom: 1px solid #f2f3f5;
+}
+.task-row:hover {
+  background: #f5f6f7;
+}
+.task-cell {
+  font-size: 13px;
+  color: #646a73;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.task-title-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.task-title {
+  color: #1f2329;
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.task-title:hover {
+  color: #3370ff;
+}
+.task-creator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.task-id {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: #8f959e;
+}
+
+/* hover-revealed row actions, floated over the right edge */
+.row-actions {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-left: 28px;
+  opacity: 0;
+  pointer-events: none;
+  background: linear-gradient(90deg, rgba(245, 246, 247, 0) 0%, #f5f6f7 24%);
+  transition: opacity 0.12s ease;
+}
+.task-row:hover .row-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.new-task-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 12px;
+  color: #8f959e;
+  font-size: 13px;
+  cursor: pointer;
+  border-bottom: 1px solid #f2f3f5;
+}
+.new-task-row:hover {
+  color: #3370ff;
+}
+
+.status-circle {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  flex: none;
+}
+.status-circle.hollow {
+  border: 1.5px solid #c9cdd4;
+}
+.status-circle.hollow.blue {
+  border-color: #3370ff;
+}
+.status-circle.hollow.muted {
+  border-color: #dee0e3;
+}
