@@ -54,6 +54,18 @@ func isNewer(remote, local string) bool {
 	return false
 }
 
+// writable reports whether we can create files in dir (i.e. swap the binary there).
+func writable(dir string) bool {
+	f, err := os.CreateTemp(dir, ".orbit-wtest-")
+	if err != nil {
+		return false
+	}
+	name := f.Name()
+	_ = f.Close()
+	_ = os.Remove(name)
+	return true
+}
+
 func splitVer(v string) []int {
 	parts := strings.Split(v, ".")
 	out := make([]int, len(parts))
@@ -67,6 +79,20 @@ func splitVer(v string) []int {
 // downloadAndSwap fetches the published binary for `ver`, verifies it runs and
 // reports that version, then atomically swaps it over the current executable.
 func downloadAndSwap(server, key, ver string, logf func(string)) bool {
+	exe, err := os.Executable()
+	if err != nil {
+		logf("cannot locate executable: " + err.Error() + "\n")
+		return false
+	}
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = resolved
+	}
+	// Fail fast (before downloading) if we can't write where the binary lives.
+	if dir := filepath.Dir(exe); !writable(dir) {
+		logf(fmt.Sprintf("cannot write to %s (permission denied) — re-run with: sudo orbit upgrade\n", dir))
+		return false
+	}
+
 	client := &http.Client{Timeout: 120 * time.Second}
 	resp, err := client.Get(server + "/dl/orbit-" + key)
 	if err != nil {
@@ -84,14 +110,6 @@ func downloadAndSwap(server, key, ver string, logf func(string)) bool {
 		return false
 	}
 
-	exe, err := os.Executable()
-	if err != nil {
-		logf("cannot locate executable: " + err.Error() + "\n")
-		return false
-	}
-	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
-		exe = resolved
-	}
 	tmp := fmt.Sprintf("%s.new-%d", exe, os.Getpid())
 	if err := os.WriteFile(tmp, data, 0o755); err != nil {
 		logf("write failed: " + err.Error() + "\n")
