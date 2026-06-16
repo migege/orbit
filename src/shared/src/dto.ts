@@ -100,6 +100,15 @@ export interface ClaimedJob {
   agent: AgentExecConfig;
   /** Resume an earlier Claude Code session for multi-turn tasks. */
   resumeSessionId?: string;
+  // ── Interactive sessions (Route B) ──
+  /** When true the runner keeps a long-lived `claude` process and pulls turns
+   *  from GET /runner/runs/:id/inbox instead of running one-shot. */
+  interactive?: boolean;
+  /** Pre-generated Claude session id to pass via --session-id (and --resume on respawn). */
+  sessionUuid?: string;
+  /** Highest RunEvent.seq already persisted, so a respawned runner continues the
+   *  monotonic counter instead of colliding (events use skipDuplicates). */
+  maxSeq?: number;
 }
 
 export interface RunEventBatch {
@@ -116,6 +125,58 @@ export interface RunCompleteRequest {
   claudeSessionId?: string;
   numTurns?: number;
   durationMs?: number;
+  costUsd?: number;
+  usage?: TokenUsage;
+  modelUsage?: Record<string, ModelUsage>;
+}
+
+// ─────────────────────────── Interactive sessions (Route B) ───────────────────────────
+
+export type ConversationTurnKind = 'message' | 'interrupt' | 'end';
+
+/** Browser → control plane: enqueue a user turn for a live interactive run. */
+export interface RunTurnRequest {
+  /** Client-supplied idempotency key (UUID); dedups double-clicks / cross-tab sends. */
+  clientTurnId: string;
+  content: string;
+}
+
+/**
+ * Control plane → runner: the next turn to feed the live `claude` process, returned
+ * by the per-run inbox long-poll. `turnId === ''` means "nothing available" (mirrors
+ * the empty-runId convention of the jobs claim poll).
+ */
+export interface RunInboxResponse {
+  turnId: string;
+  seq: number;
+  kind: ConversationTurnKind;
+  content?: string;
+}
+
+/** One interactive run a restarted runner can re-attach to and --resume. */
+export interface ReclaimRun {
+  runId: string;
+  sessionUuid: string;
+  /** Highest persisted RunEvent.seq, so the runner continues the seq counter. */
+  maxSeq: number;
+}
+
+/** Control plane → runner response for GET /runner/runs/reclaim. */
+export interface ReclaimResponse {
+  runs: ReclaimRun[];
+}
+
+/**
+ * Runner → control plane: a single interactive turn finished (the per-turn `result`),
+ * distinct from /complete which finalizes the whole session. Carries per-turn billing.
+ */
+export interface TurnCompleteRequest {
+  turnId: string;
+  /** Turn outcome: SUCCEEDED | INTERRUPTED | FAILED. */
+  status: RunStatus;
+  result?: string;
+  subtype?: string;
+  numTurns?: number;
   costUsd?: number;
   usage?: TokenUsage;
   modelUsage?: Record<string, ModelUsage>;

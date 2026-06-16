@@ -25,6 +25,8 @@ export class CreateTaskDto {
   @IsOptional() @IsString() scheduledAt?: string;
   /** Create directly as QUEUED (claimable by a runner) instead of DRAFT. */
   @IsOptional() @IsBoolean() enqueue?: boolean;
+  /** Start a long-lived interactive session (Route B) instead of a one-shot run. */
+  @IsOptional() @IsBoolean() interactive?: boolean;
 }
 
 export class UpdateTaskDto {
