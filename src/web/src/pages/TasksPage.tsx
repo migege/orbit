@@ -23,7 +23,8 @@ import {
 } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation, useMatch } from 'react-router-dom';
-import { api } from '../api';
+import { api, getSession } from '../api';
+import { decodeId } from '../lib/idCodec';
 import { AgentView } from '../components/AgentView';
 import { RunnerRegisterGuide } from '../components/RunnerRegisterGuide';
 import { TasksSidePanel } from '../components/TasksSidePanel';
@@ -59,10 +60,9 @@ const MOCK_TASKS = [
   { id: 'mock-ext-001', source: 'EXTERNAL', status: 'FAILED', title: 'External webhook backfill', estimates: null, startTime: null, dueDate: null, createdAt: '2026-06-12T10:00:00.000Z', creator: { name: 'system' } },
 ];
 
-// Top-nav sections share this view; only the heading differs (default: Running).
+// Top-nav sections share this view; only the heading differs (default: Active).
 const SECTION_TITLES: Record<string, string> = {
   '/skills': 'Skills',
-  '/activities': 'Activities',
 };
 
 // The "Add a runner" view isn't URL-routed (it adds no path), so remember it
@@ -110,7 +110,7 @@ function StatusCircle({ status }: { status: string }) {
 
 export function TasksPage() {
   const loc = useLocation();
-  const pageTitle = SECTION_TITLES[loc.pathname] ?? 'Running';
+  const pageTitle = SECTION_TITLES[loc.pathname] ?? 'Active';
   const { message } = AntApp.useApp();
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
@@ -129,10 +129,22 @@ export function TasksPage() {
   const agents = useQuery({ queryKey: ['agents'], queryFn: () => api<any[]>('/agents') });
   const runners = useQuery({ queryKey: ['runners'], queryFn: () => api<any[]>('/runners') });
 
-  // A selected agent lives in its own URL (/agents/:id, plus /sessions/:sessionId
-  // for a picked session) so a refresh restores it. The splat matches both.
-  const agentId = useMatch('/agents/:id/*')?.params.id ?? null;
-  const selectedRunner = (runners.data ?? []).find((r: any) => r.id === agentId) ?? null;
+  // The selected runner lives in the URL: /agents/<base62> directly, or
+  // /sessions/<base62> from which we resolve the runner behind that session.
+  const agentMatch = useMatch('/agents/:id/*');
+  const sessionMatch = useMatch('/sessions/:id');
+  const inAgentView = !!agentMatch || !!sessionMatch;
+  const selectedSessionId = sessionMatch ? decodeId(sessionMatch.params.id) : null;
+  // A /sessions/:id deep link carries no runner — fetch the session to find it.
+  const sessionQ = useQuery({
+    queryKey: ['session', selectedSessionId],
+    queryFn: () => getSession(selectedSessionId!),
+    enabled: !!selectedSessionId,
+  });
+  const runnerId = agentMatch
+    ? decodeId(agentMatch.params.id)
+    : (sessionQ.data?.assignedRunnerId ?? null);
+  const selectedRunner = (runners.data ?? []).find((r: any) => r.id === runnerId) ?? null;
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['tasks'] });
 
@@ -228,11 +240,12 @@ export function TasksPage() {
       <TasksSidePanel
         onShowRegister={() => setView('register')}
         onShowTasks={() => setView('tasks')}
+        activeRunnerId={runnerId}
       />
       <main className="tasks-main">
         {view === 'register' ? (
           <RunnerRegisterGuide onClose={() => setView('tasks')} />
-        ) : agentId ? (
+        ) : inAgentView ? (
           selectedRunner ? (
             <AgentView runner={selectedRunner} />
           ) : (

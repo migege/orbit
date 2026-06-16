@@ -1,6 +1,5 @@
 import {
   CaretDownOutlined,
-  ClockCircleOutlined,
   DeleteOutlined,
   EditOutlined,
   LogoutOutlined,
@@ -14,6 +13,7 @@ import { App as AntdApp, Avatar, Dropdown, Input, Modal, type MenuProps } from '
 import { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { api, clearToken } from '../api';
+import { encodeId } from '../lib/idCodec';
 
 const isMac = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform);
 
@@ -21,9 +21,8 @@ const isMac = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform
 // Tasks view for now — only the heading differs). The lists below are still a
 // visual scaffold whose selection just moves the highlight.
 const TOP = [
-  { key: 'running', icon: <UserOutlined />, label: 'Running', count: 385 },
+  { key: 'active', icon: <UserOutlined />, label: 'Active', count: 385 },
   { key: 'skills', icon: <ThunderboltOutlined />, label: 'Skills' },
-  { key: 'activities', icon: <ClockCircleOutlined />, label: 'Activities' },
 ];
 
 const LISTS = [
@@ -60,19 +59,22 @@ interface Props {
   onShowRegister: () => void;
   /** Return the right pane to the task list. */
   onShowTasks: () => void;
+  /** Runner the right pane is currently showing (resolved by the parent from
+   *  the /agents or /sessions URL), so the sidebar highlights it. */
+  activeRunnerId?: string | null;
 }
 
-export function TasksSidePanel({ onShowRegister, onShowTasks }: Props) {
+export function TasksSidePanel({ onShowRegister, onShowTasks, activeRunnerId }: Props) {
   const loc = useLocation();
   const navigate = useNavigate();
 
   // On a top-nav route the highlight follows the URL ("/" and "/tasks" both map
-  // to Running); clicking an agent/list item below overrides it locally.
+  // to Active); clicking an agent/list item below overrides it locally.
   const routeKey =
     loc.pathname === '/' || loc.pathname === '/tasks'
-      ? 'running'
-      : loc.pathname.startsWith('/agents/')
-        ? loc.pathname.slice('/agents/'.length).split('/')[0]
+      ? 'active'
+      : loc.pathname.startsWith('/agents/') || loc.pathname.startsWith('/sessions/')
+        ? (activeRunnerId ?? '')
         : loc.pathname.startsWith('/lists/')
           ? loc.pathname.slice('/lists/'.length)
           : loc.pathname.slice(1);
@@ -189,7 +191,7 @@ export function TasksSidePanel({ onShowRegister, onShowTasks }: Props) {
       e.preventDefault();
       setSel(list[idx].id);
       onShowTasks();
-      navigate(`/agents/${list[idx].id}`);
+      navigate(`/agents/${encodeId(list[idx].id)}`);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -238,7 +240,7 @@ export function TasksSidePanel({ onShowRegister, onShowTasks }: Props) {
                   onClick={() => {
                     setSel(r.id);
                     onShowTasks();
-                    navigate(`/agents/${r.id}`);
+                    navigate(`/agents/${encodeId(r.id)}`);
                   }}
                 >
                   <span
