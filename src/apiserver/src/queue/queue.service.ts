@@ -48,22 +48,22 @@ export class QueueService {
   private async trySessionClaim(runner: { id: string }): Promise<ClaimedSession | null> {
     // Atomically claim one PENDING session assigned to this runner.
     const rows = await this.prisma.$queryRaw<Array<{ id: string }>>`
-      UPDATE "Session" SET status = 'RUNNING', "startedAt" = now(), "lastTurnAt" = now(), "updatedAt" = now()
+      UPDATE "session" SET status = 'RUNNING', "started_at" = now(), "last_turn_at" = now(), "updated_at" = now()
       WHERE id = (
-        SELECT s.id FROM "Session" s
+        SELECT s.id FROM "session" s
         WHERE s.status = 'PENDING'
-          AND s."assignedRunnerId" = ${runner.id}
+          AND s."assigned_runner_id" = ${runner.id}
           -- A runner may only ever drive sessions owned by its own owner.
-          AND s."ownerId" = (SELECT r."ownerId" FROM "Runner" r WHERE r.id = ${runner.id})
+          AND s."owner_id" = (SELECT r."owner_id" FROM "runner" r WHERE r.id = ${runner.id})
           -- Server-authoritative concurrency cap: never hand a runner more live
           -- sessions (RUNNING/AWAITING_INPUT/INTERRUPTED stay live between turns)
           -- than its maxConcurrent, even if its self-gating drifts after a restart.
           AND (
-            SELECT count(*) FROM "Session" live
-            WHERE live."assignedRunnerId" = ${runner.id}
+            SELECT count(*) FROM "session" live
+            WHERE live."assigned_runner_id" = ${runner.id}
               AND live."status" IN ('RUNNING', 'AWAITING_INPUT', 'INTERRUPTED')
-          ) < (SELECT r."maxConcurrent" FROM "Runner" r WHERE r.id = ${runner.id})
-        ORDER BY s."createdAt" ASC
+          ) < (SELECT r."max_concurrent" FROM "runner" r WHERE r.id = ${runner.id})
+        ORDER BY s."created_at" ASC
         FOR UPDATE SKIP LOCKED
         LIMIT 1
       )

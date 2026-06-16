@@ -326,12 +326,12 @@ export class RunnerApiController {
     const rows = await this.prisma.$queryRaw<
       Array<{ id: string; seq: number; kind: string; content: string | null }>
     >`
-      UPDATE "ConversationTurn"
-        SET status = 'IN_FLIGHT', "deliveredAt" = now(), "leaseDeadlineAt" = ${leaseUntil}
+      UPDATE "conversation_turn"
+        SET status = 'IN_FLIGHT', "delivered_at" = now(), "lease_deadline_at" = ${leaseUntil}
       WHERE id = (
-        SELECT id FROM "ConversationTurn"
-        WHERE "sessionId" = ${sessionId}
-          AND ("status" = 'PENDING' OR ("status" = 'IN_FLIGHT' AND "leaseDeadlineAt" < now()))
+        SELECT id FROM "conversation_turn"
+        WHERE "session_id" = ${sessionId}
+          AND ("status" = 'PENDING' OR ("status" = 'IN_FLIGHT' AND "lease_deadline_at" < now()))
         ORDER BY (CASE WHEN "kind" IN ('interrupt', 'end') THEN 0 ELSE 1 END), "seq" ASC
         FOR UPDATE SKIP LOCKED
         LIMIT 1
