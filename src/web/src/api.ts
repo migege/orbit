@@ -79,3 +79,8 @@ export const interruptSession = (sessionId: string) =>
   api(`/sessions/${sessionId}/interrupt`, { method: 'POST' });
 
 export const endSession = (sessionId: string) => api(`/sessions/${sessionId}/end`, { method: 'POST' });
+
+/** Fetch one session by id (accepts a base62 public id or a raw UUID). Used to
+ *  resolve the runner behind a `/sessions/:id` deep link. */
+export const getSession = (idOrPublicId: string) =>
+  api<{ id: string; assignedRunnerId: string | null }>(`/sessions/${idOrPublicId}`);

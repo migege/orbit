@@ -14,6 +14,7 @@ import {
 import { concat, concatMap, from, map, Observable, switchMap, throwError } from 'rxjs';
 import { AllowQueryToken } from '../auth/allow-query-token.decorator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { Base62UuidPipe } from '../common/base62-uuid.pipe';
 import { AuthUser, CurrentUser } from '../common/current-user.decorator';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
@@ -40,27 +41,31 @@ export class SessionsController {
   }
 
   @Get(':id')
-  get(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+  get(@CurrentUser() user: AuthUser, @Param('id', Base62UuidPipe) id: string) {
     return this.sessions.get(user.userId, id);
   }
 
   @Post(':id/turns')
-  turn(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body() dto: SessionTurnDto) {
+  turn(
+    @CurrentUser() user: AuthUser,
+    @Param('id', Base62UuidPipe) id: string,
+    @Body() dto: SessionTurnDto,
+  ) {
     return this.sessions.createTurn(user.userId, id, dto);
   }
 
   @Post(':id/interrupt')
-  interrupt(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+  interrupt(@CurrentUser() user: AuthUser, @Param('id', Base62UuidPipe) id: string) {
     return this.sessions.interrupt(user.userId, id);
   }
 
   @Post(':id/end')
-  end(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+  end(@CurrentUser() user: AuthUser, @Param('id', Base62UuidPipe) id: string) {
     return this.sessions.end(user.userId, id);
   }
 
   @Delete(':id')
-  remove(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+  remove(@CurrentUser() user: AuthUser, @Param('id', Base62UuidPipe) id: string) {
     return this.sessions.remove(user.userId, id);
   }
 
@@ -69,7 +74,7 @@ export class SessionsController {
   @Sse(':id/events')
   events(
     @CurrentUser() user: AuthUser,
-    @Param('id') id: string,
+    @Param('id', Base62UuidPipe) id: string,
     @Query('sinceSeq') sinceSeq?: string,
   ): Observable<MessageEvent> {
     // On reconnect, replay only events after sinceSeq (the client also dedups by

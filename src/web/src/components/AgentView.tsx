@@ -9,6 +9,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { App as AntApp, Button, Input, Segmented, Select, Tag, Tooltip } from 'antd';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMatch, useNavigate } from 'react-router-dom';
+import { decodeId, encodeId } from '../lib/idCodec';
 import {
   api,
   createInteractiveSession,
@@ -64,9 +65,10 @@ export function AgentView({ runner }: { runner: Runner }) {
   const { message } = AntApp.useApp();
   const qc = useQueryClient();
   const navigate = useNavigate();
-  // The picked session lives in the URL (/agents/:id/sessions/:sessionId) so it
-  // deep-links and survives a refresh; selecting a session = navigation.
-  const selectedId = useMatch('/agents/:id/sessions/:sessionId')?.params.sessionId ?? null;
+  // The picked session lives in the URL (/sessions/:id, a base62 public id) so
+  // it deep-links and survives a refresh; selecting a session = navigation.
+  // Decode once here; everything downstream works with the raw session UUID.
+  const selectedId = decodeId(useMatch('/sessions/:id')?.params.id);
   const [text, setText] = useState('');
   const [mode, setMode] = useState('Default');
   const [model, setModel] = useState('claude-sonnet-4-6');
@@ -188,7 +190,7 @@ export function AgentView({ runner }: { runner: Runner }) {
       return created.id;
     },
     onSuccess: (id) => {
-      navigate(`/agents/${runner.id}/sessions/${id}`);
+      navigate(`/sessions/${encodeId(id)}`);
       setText('');
       setIdle(false); // a turn is now starting
       qc.invalidateQueries({ queryKey: ['sessions'] });
@@ -236,7 +238,7 @@ export function AgentView({ runner }: { runner: Runner }) {
             size="small"
             icon={<PlusOutlined />}
             onClick={() => {
-              navigate(`/agents/${runner.id}`);
+              navigate(`/agents/${encodeId(runner.id)}`);
               setText('');
             }}
           >
@@ -277,7 +279,7 @@ export function AgentView({ runner }: { runner: Runner }) {
               <div className="chat-note">No sessions yet — send a message below to start one.</div>
             )}
             {sessions.map((s) => (
-              <div className="session-row" key={s.id} onClick={() => navigate(`/agents/${runner.id}/sessions/${s.id}`)}>
+              <div className="session-row" key={s.id} onClick={() => navigate(`/sessions/${encodeId(s.id)}`)}>
                 <span className="session-icon">
                   <StatusIcon status={s.status} />
                 </span>
