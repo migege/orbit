@@ -254,6 +254,9 @@ export class TasksService {
       content: dto.content,
       clientTurnId: dto.clientTurnId,
     });
+    // User activity resets the idle clock so the reaper won't tear down a session
+    // that just received a message but hasn't been picked up by the runner yet.
+    await this.prisma.taskRun.update({ where: { id: run.id }, data: { lastTurnAt: new Date() } });
     this.realtime.notifyInbox(run.id);
     return { turnId: turn.id, seq: turn.seq };
   }

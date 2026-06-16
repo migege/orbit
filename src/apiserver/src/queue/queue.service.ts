@@ -59,6 +59,14 @@ export class QueueService {
           -- This single top-level guard covers BOTH the assigned-runner branch
           -- and the agent/unassigned branch below (prevents cross-tenant exec).
           AND t."ownerId" = (SELECT r."ownerId" FROM "Runner" r WHERE r.id = ${runner.id})
+          -- Server-authoritative concurrency cap: never hand a runner more live runs
+          -- than its maxConcurrent (interactive runs stay live between turns and would
+          -- otherwise let a restarted runner over-claim past its own self-gating).
+          AND (
+            SELECT count(*) FROM "TaskRun" tr
+            WHERE tr."runnerId" = ${runner.id}
+              AND tr."status" IN ('RUNNING', 'AWAITING_INPUT', 'INTERRUPTED')
+          ) < (SELECT r."maxConcurrent" FROM "Runner" r WHERE r.id = ${runner.id})
           AND (
             t."assignedRunnerId" = ${runner.id}
             OR (

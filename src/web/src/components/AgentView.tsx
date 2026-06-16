@@ -80,19 +80,48 @@ export function AgentView({ runner }: { runner: Runner }) {
     seen.current = new Set();
     setIdle(false);
     if (!activeRunId) return;
-    const es = new EventSource(runEventsUrl(activeRunId));
-    es.onmessage = (e) => {
-      const ev = JSON.parse(e.data) as RunEvent;
-      if (seen.current.has(ev.seq)) return;
-      seen.current.add(ev.seq);
-      setEvents((prev) => [...prev, ev]);
-      // Track turn boundaries live so the composer re-enables the instant a turn
-      // ends, rather than waiting for the 4s task poll.
-      if (ev.type === 'turn_end') setIdle(true);
-      else if (ev.type === 'user') setIdle(false);
+    let es: EventSource | null = null;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    let closed = false;
+    let fails = 0;
+    let lastSeq = 0;
+    const stop = (): void => {
+      closed = true;
+      if (retry) clearTimeout(retry);
+      es?.close();
     };
-    es.onerror = () => es.close();
-    return () => es.close();
+    const connect = (): void => {
+      es = new EventSource(runEventsUrl(activeRunId, lastSeq));
+      es.onmessage = (e) => {
+        fails = 0; // a message means the stream is healthy
+        const ev = JSON.parse(e.data) as RunEvent;
+        if (typeof ev.seq === 'number' && ev.seq !== Number.MAX_SAFE_INTEGER) {
+          lastSeq = Math.max(lastSeq, ev.seq);
+        }
+        if (ev.payload?.final) {
+          stop();
+          return; // run finalized — nothing more to stream
+        }
+        if (seen.current.has(ev.seq)) return;
+        seen.current.add(ev.seq);
+        setEvents((prev) => [...prev, ev]);
+        // Track turn boundaries live so the composer re-enables the instant a turn
+        // ends, rather than waiting for the 4s task poll.
+        if (ev.type === 'turn_end') setIdle(true);
+        else if (ev.type === 'user') setIdle(false);
+      };
+      es.onerror = () => {
+        es?.close();
+        if (closed) return;
+        // Auto-reconnect, resuming after lastSeq — survives long idle / redeploy
+        // drops (the seq dedup set makes any replay overlap harmless). Bounded
+        // backoff + cap so a deleted/forbidden run can't loop forever.
+        if (++fails > 12) return;
+        retry = setTimeout(connect, Math.min(2000 * fails, 15000) + Math.random() * 500);
+      };
+    };
+    connect();
+    return stop;
   }, [activeRunId]);
 
   // Polled fallback for idleness, in case an SSE turn_end was missed / reconnected.
