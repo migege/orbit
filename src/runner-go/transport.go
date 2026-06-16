@@ -113,10 +113,38 @@ func (t *Transport) claimJob(ctx context.Context) (*ClaimedJob, error) {
 	return &r, nil
 }
 
+// reclaim lists this runner's still-live interactive runs so a restarted runner
+// can re-attach and --resume them (instead of orphaning them, which would leak
+// their AWAITING_INPUT concurrency slots forever).
+func (t *Transport) reclaim() (*ReclaimResponse, error) {
+	var r ReclaimResponse
+	if err := t.do(nil, "GET", "/runner/runs/reclaim", nil, &r, 15*time.Second); err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
 func (t *Transport) postEvents(runID string, batch RunEventBatch) error {
 	return t.do(nil, "POST", "/runner/runs/"+runID+"/events", batch, nil, 35*time.Second)
 }
 
 func (t *Transport) complete(runID string, b CompleteRequest) error {
 	return t.do(nil, "POST", "/runner/runs/"+runID+"/complete", b, nil, 35*time.Second)
+}
+
+// inbox long-polls for the next user turn of an interactive session; returns nil
+// when the server holds then yields nothing (turnId == "").
+func (t *Transport) inbox(ctx context.Context, runID string) (*RunInboxResponse, error) {
+	var r RunInboxResponse
+	if err := t.do(ctx, "GET", "/runner/runs/"+runID+"/inbox", nil, &r, 35*time.Second); err != nil {
+		return nil, err
+	}
+	if r.TurnID == "" {
+		return nil, nil
+	}
+	return &r, nil
+}
+
+func (t *Transport) turnComplete(runID string, b TurnCompleteRequest) error {
+	return t.do(nil, "POST", "/runner/runs/"+runID+"/turn-complete", b, nil, 35*time.Second)
 }

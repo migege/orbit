@@ -81,6 +81,49 @@ type ClaimedJob struct {
 	Prompt          string                 `json:"prompt"`
 	Agent           AgentExecConfig        `json:"agent"`
 	ResumeSessionID string                 `json:"resumeSessionId"`
+	// Interactive sessions (Route B)
+	Interactive bool   `json:"interactive"`
+	SessionUUID string `json:"sessionUuid"`
+	MaxSeq      int    `json:"maxSeq"`
+	// Reclaimed marks a session re-attached after a runner restart: the claude
+	// session already exists, so the first spawn must --resume, not --session-id.
+	// Runner-internal (never sent by the server).
+	Reclaimed bool `json:"-"`
+}
+
+// Interactive sessions (Route B) — wire DTOs mirroring @orbit/shared.
+
+// RunInboxResponse is the next user turn to feed the live claude process.
+// TurnID == "" means nothing is available (mirrors the empty-runId claim convention).
+type RunInboxResponse struct {
+	TurnID  string `json:"turnId"`
+	Seq     int    `json:"seq"`
+	Kind    string `json:"kind"`
+	Content string `json:"content,omitempty"`
+}
+
+type ReclaimRun struct {
+	RunID       string          `json:"runId"`
+	TaskID      string          `json:"taskId"`
+	Title       string          `json:"title"`
+	SessionUUID string          `json:"sessionUuid"`
+	MaxSeq      int             `json:"maxSeq"`
+	Agent       AgentExecConfig `json:"agent"`
+}
+
+type ReclaimResponse struct {
+	Runs []ReclaimRun `json:"runs"`
+}
+
+type TurnCompleteRequest struct {
+	TurnID     string                 `json:"turnId"`
+	Status     string                 `json:"status"`
+	Result     string                 `json:"result,omitempty"`
+	Subtype    string                 `json:"subtype,omitempty"`
+	NumTurns   int                    `json:"numTurns"`
+	CostUsd    float64                `json:"costUsd"`
+	Usage      *TokenUsage            `json:"usage,omitempty"`
+	ModelUsage map[string]interface{} `json:"modelUsage,omitempty"`
 }
 
 type RunEvent struct {
@@ -126,11 +169,17 @@ const (
 	evToolUse    = "tool_use"
 	evToolResult = "tool_result"
 	evError      = "error"
+	// Interactive sessions (Route B)
+	evUser      = "user"
+	evTurnEnd   = "turn_end"
+	evInterrupt = "interrupt"
 )
 
 // Run statuses — mirror RunStatus in @orbit/shared.
 const (
-	stSucceeded = "SUCCEEDED"
-	stFailed    = "FAILED"
-	stCancelled = "CANCELLED"
+	stSucceeded     = "SUCCEEDED"
+	stFailed        = "FAILED"
+	stCancelled     = "CANCELLED"
+	stAwaitingInput = "AWAITING_INPUT"
+	stInterrupted   = "INTERRUPTED"
 )

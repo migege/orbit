@@ -31,6 +31,9 @@ enum RunStatus {
   SUCCEEDED
   FAILED
   CANCELLED
+  // Interactive sessions (Route B). Appended last to match ALTER TYPE ADD VALUE.
+  AWAITING_INPUT
+  INTERRUPTED
 }
 
 enum RunnerStatus {
@@ -163,6 +166,13 @@ model Task {
   scheduledAt      DateTime?
   createdAt        DateTime   @default(now())
   updatedAt        DateTime   @updatedAt
+  // Interactive session (Route B): a long-lived conversation backed by one run.
+  interactive      Boolean    @default(false)
+  sessionUuid      String? // pre-generated Claude session id for --session-id/--resume
+  activeRunId      String? // the current live TaskRun the UI subscribes to
+  // Per-session overrides; null falls back to the agent, then a server default.
+  model            String?
+  permissionMode   String?
 
   runs          TaskRun[]
   subscriptions TaskSubscription[]
@@ -196,12 +206,19 @@ model TaskRun {
   numTurns        Int       @default(0)
   costUsd         Float     @default(0)
   createdAt       DateTime  @default(now())
+  // Interactive session (Route B)
+  interactive       Boolean   @default(false)
+  lastTurnAt        DateTime?
+  idleDeadlineAt    DateTime?
+  cancelRequestedAt DateTime?
 
-  events    RunEvent[]
-  toolCalls ToolCall[]
-  llmUsage  LlmUsage[]
+  events            RunEvent[]
+  toolCalls         ToolCall[]
+  llmUsage          LlmUsage[]
+  conversationTurns ConversationTurn[]
 
   @@index([taskId])
+  @@index([runnerId, status])
 }
 
 // Normalized streamed events for a run (replay + live SSE).
@@ -247,6 +264,28 @@ model LlmUsage {
   createdAt                DateTime @default(now())
 
   @@index([runId])
+}
+
+// Durable, server-owned queue of user inputs for an interactive session (Route B).
+// The runner long-polls these via GET /runner/runs/:id/inbox; delivery is
+// at-least-once with a lease + idempotency on (runId, clientTurnId).
+model ConversationTurn {
+  id              String    @id @default(uuid())
+  runId           String
+  run             TaskRun   @relation(fields: [runId], references: [id], onDelete: Cascade)
+  seq             Int // server-assigned, per-run delivery ordering
+  clientTurnId    String // client-supplied idempotency key
+  kind            String    @default("message") // message | interrupt | end
+  content         String? // user message text (null for interrupt/end)
+  status          String    @default("PENDING") // PENDING | IN_FLIGHT | ANSWERED
+  deliveredAt     DateTime?
+  leaseDeadlineAt DateTime?
+  answeredAt      DateTime?
+  createdAt       DateTime  @default(now())
+
+  @@unique([runId, clientTurnId])
+  @@unique([runId, seq])
+  @@index([runId, status])
 }
 
 model TaskSubscription {

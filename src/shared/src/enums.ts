@@ -25,6 +25,10 @@ export enum RunStatus {
   SUCCEEDED = 'SUCCEEDED',
   FAILED = 'FAILED',
   CANCELLED = 'CANCELLED',
+  /** Interactive session is alive and waiting for the next user turn (Route B). */
+  AWAITING_INPUT = 'AWAITING_INPUT',
+  /** A turn was interrupted by the user; the session stays alive (Route B). */
+  INTERRUPTED = 'INTERRUPTED',
 }
 
 /** Health of a registered runner machine. */
@@ -56,4 +60,8 @@ export enum RunEventType {
   STATUS = 'status',
   ERROR = 'error',
   RESULT = 'result',
+  /** Interactive sessions (Route B). */
+  USER = 'user', // a user turn entered the transcript
+  TURN_END = 'turn_end', // one turn finished; session parks for the next input
+  INTERRUPT = 'interrupt', // a turn was interrupted by the user
 }

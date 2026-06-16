@@ -11,7 +11,7 @@ import {
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AuthUser, CurrentUser } from '../common/current-user.decorator';
-import { CreateTaskDto, UpdateTaskDto } from './dto';
+import { CreateTaskDto, RunTurnDto, UpdateTaskDto } from './dto';
 import { TasksService } from './tasks.service';
 
 @UseGuards(JwtAuthGuard)
@@ -51,6 +51,23 @@ export class TasksController {
   @Post(':id/cancel')
   cancel(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     return this.tasks.cancel(user.userId, id);
+  }
+
+  // ── Interactive sessions (Route B) ──
+
+  @Post(':id/turns')
+  turn(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body() dto: RunTurnDto) {
+    return this.tasks.createTurn(user.userId, id, dto);
+  }
+
+  @Post(':id/interrupt')
+  interrupt(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.tasks.interrupt(user.userId, id);
+  }
+
+  @Post(':id/end')
+  end(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.tasks.end(user.userId, id);
   }
 
   @Get(':id/runs')

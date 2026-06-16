@@ -58,6 +58,7 @@ body {
 
 /* ---- Tasks side panel (static scaffold) ---- */
 .tasks-panel {
+  position: relative;
   width: 264px;
   flex: none;
   height: 100vh;
@@ -65,6 +66,19 @@ body {
   flex-direction: column;
   border-right: 1px solid #eceef1;
   background: #fff;
+}
+/* draggable handle straddling the panel's right border */
+.tp-resizer {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  width: 6px;
+  height: 100%;
+  z-index: 5;
+  cursor: col-resize;
+}
+.tp-resizer:hover {
+  background: rgba(51, 112, 255, 0.12);
 }
 .tp-brand {
   display: flex;
@@ -183,7 +197,11 @@ body {
 .tp-caret {
   font-size: 12px;
   color: #8f959e;
-  transition: transform 0.15s ease;
+  opacity: 0;
+  transition: transform 0.15s ease, opacity 0.15s ease;
+}
+.tp-group-head:hover .tp-caret {
+  opacity: 1;
 }
 .tp-caret.collapsed {
   transform: rotate(-90deg);
@@ -399,6 +417,112 @@ body {
   border-color: #dee0e3;
 }
 
+/* ---- Agent detail view (selected runner) ---- */
+.agent-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.agent-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: none;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #eceef1;
+}
+.agent-status-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #c0c4cc;
+  flex: none;
+}
+.agent-status-dot.online {
+  background: #2ea121;
+}
+.agent-header-main {
+  min-width: 0;
+}
+.agent-name {
+  font-size: 18px;
+  font-weight: 600;
+  color: #1f2329;
+}
+.agent-sub {
+  font-size: 12.5px;
+  color: #8f959e;
+  margin-top: 2px;
+}
+.agent-header-spacer {
+  flex: 1;
+}
+.agent-header-count {
+  font-size: 13px;
+  color: #646a73;
+  flex: none;
+}
+.session-head {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1f2329;
+  flex: none;
+  margin: 20px 0 4px;
+}
+.agent-sessions {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+.session-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 64px;
+  padding: 0 8px;
+  border-bottom: 1px solid #f2f3f5;
+  cursor: pointer;
+}
+.session-row:hover {
+  background: #f5f6f7;
+}
+.session-icon {
+  display: flex;
+  width: 16px;
+  flex: none;
+}
+.session-main {
+  flex: 1;
+  min-width: 0;
+}
+.session-title {
+  font-size: 14px;
+  color: #1f2329;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.session-meta {
+  font-size: 12.5px;
+  color: #8f959e;
+  margin-top: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.session-right {
+  text-align: right;
+  flex: none;
+}
+.session-status {
+  font-size: 12.5px;
+}
+.session-time {
+  font-size: 12px;
+  color: #8f959e;
+  margin-top: 3px;
+}
+
 /* ---- Add a runner (Option A) ---- */
 .runner-guide {
   position: relative;
@@ -612,4 +736,92 @@ body {
 }
 .runner-done-btn:hover {
   background: #000;
+}
+.agent-composer {
+  flex: none;
+  border-top: 1px solid #eceef1;
+  padding-top: 12px;
+  margin-top: 8px;
+}
+.composer-box {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  border: 1px solid #dee0e3;
+  border-radius: 10px;
+  padding: 6px 6px 6px 12px;
+}
+.composer-box:focus-within {
+  border-color: #3370ff;
+}
+.composer-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+.composer-label {
+  font-size: 13px;
+  color: #646a73;
+}
+
+/* ---- Interactive session chat (Route B) ---- */
+.chat-note {
+  color: #8f959e;
+  font-size: 13px;
+  padding: 10px 4px;
+}
+.chat-msg {
+  max-width: 80%;
+  padding: 8px 12px;
+  border-radius: 10px;
+  margin: 8px 0;
+  font-size: 14px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.chat-user {
+  background: #eaf1ff;
+  margin-left: auto;
+}
+.chat-assistant {
+  background: #f5f6f7;
+}
+.chat-streaming::after {
+  content: '▋';
+  margin-left: 1px;
+  color: #8f959e;
+  animation: chat-caret-blink 1s steps(1) infinite;
+}
+@keyframes chat-caret-blink {
+  50% {
+    opacity: 0;
+  }
+}
+.chat-tool {
+  font-size: 12.5px;
+  color: #646a73;
+  margin: 4px 0;
+}
+.chat-tool code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: #8f959e;
+}
+.chat-tool-result {
+  font-size: 12.5px;
+  color: #8f959e;
+  margin: 2px 0 6px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.chat-turn-divider {
+  border-top: 1px dashed #eceef1;
+  margin: 12px 0;
+}
+.chat-error {
+  color: #f54a45;
+  font-size: 13px;
+  margin: 6px 0;
 }

@@ -22,8 +22,9 @@ import {
   Typography,
 } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation, useMatch } from 'react-router-dom';
 import { api } from '../api';
+import { AgentView } from '../components/AgentView';
 import { RunnerRegisterGuide } from '../components/RunnerRegisterGuide';
 import { TasksSidePanel } from '../components/TasksSidePanel';
 
@@ -119,6 +120,11 @@ export function TasksPage() {
   const tasks = useQuery({ queryKey: ['tasks'], queryFn: () => api<any[]>('/tasks') });
   const agents = useQuery({ queryKey: ['agents'], queryFn: () => api<any[]>('/agents') });
   const runners = useQuery({ queryKey: ['runners'], queryFn: () => api<any[]>('/runners') });
+
+  // A selected agent lives in its own URL (/agents/:id, plus /sessions/:sessionId
+  // for a picked session) so a refresh restores it. The splat matches both.
+  const agentId = useMatch('/agents/:id/*')?.params.id ?? null;
+  const selectedRunner = (runners.data ?? []).find((r: any) => r.id === agentId) ?? null;
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['tasks'] });
 
@@ -218,6 +224,14 @@ export function TasksPage() {
       <main className="tasks-main">
         {view === 'register' ? (
           <RunnerRegisterGuide onClose={() => setView('tasks')} />
+        ) : agentId ? (
+          selectedRunner ? (
+            <AgentView runner={selectedRunner} />
+          ) : (
+            <div style={{ padding: 48, textAlign: 'center' }}>
+              <Spin />
+            </div>
+          )
         ) : (
           <>
         <h1 className="page-title">{pageTitle}</h1>

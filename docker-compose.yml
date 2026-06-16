@@ -23,7 +23,7 @@ services:
     container_name: orbit-apiserver
     environment:
       DATABASE_URL: "postgresql://orbit:orbit@postgres:5432/orbit?schema=public"
-      JWT_SECRET: "${JWT_SECRET:-change-me-in-prod}"
+      JWT_SECRET: "${JWT_SECRET:?set JWT_SECRET (generate: openssl rand -base64 32)}"
       PORT: "3000"
       CORS_ORIGINS: "http://localhost:2086"
       # Shared secret guarding operator-only endpoints (e.g. POST /api/users).

@@ -36,11 +36,20 @@ const LISTS = [
   { key: 'l8', label: '#8 importer not-ready sg 2026-06-13' },
 ];
 
-interface Runner {
+// The left sidebar is user-resizable; the chosen width persists across refreshes.
+const SIDEBAR_WIDTH_KEY = 'orbit:sidebar-width';
+const DEFAULT_SIDEBAR_WIDTH = 264;
+const MIN_SIDEBAR_WIDTH = 200;
+const MAX_SIDEBAR_WIDTH = 480;
+const clampWidth = (w: number): number =>
+  Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, w));
+
+export interface Runner {
   id: string;
   name: string;
   displayName?: string | null;
   online?: boolean;
+  maxConcurrent?: number;
 }
 
 function logout() {
@@ -62,13 +71,46 @@ export function TasksSidePanel({ onShowRegister, onShowTasks }: Props) {
   // On a top-nav route the highlight follows the URL ("/" and "/tasks" both map
   // to Running); clicking an agent/list item below overrides it locally.
   const routeKey =
-    loc.pathname === '/' || loc.pathname === '/tasks' ? 'running' : loc.pathname.slice(1);
+    loc.pathname === '/' || loc.pathname === '/tasks'
+      ? 'running'
+      : loc.pathname.startsWith('/agents/')
+        ? loc.pathname.slice('/agents/'.length).split('/')[0]
+        : loc.pathname.startsWith('/lists/')
+          ? loc.pathname.slice('/lists/'.length)
+          : loc.pathname.slice(1);
   const [sel, setSel] = useState(routeKey);
   useEffect(() => setSel(routeKey), [routeKey]);
 
   const [quickOpen, setQuickOpen] = useState(true);
   const [listOpen, setListOpen] = useState(true);
   const [archOpen, setArchOpen] = useState(false);
+
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+    const saved = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
+    return saved > 0 ? clampWidth(saved) : DEFAULT_SIDEBAR_WIDTH;
+  });
+
+  // Drag the right-edge handle to resize; the final width is saved on release.
+  const startResize = (e: React.MouseEvent) => {
+    e.preventDefault();
+    // The panel hugs the viewport's left edge, so clientX is the target width.
+    let next = sidebarWidth;
+    const onMove = (ev: MouseEvent) => {
+      next = clampWidth(ev.clientX);
+      setSidebarWidth(next);
+    };
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      localStorage.setItem(SIDEBAR_WIDTH_KEY, String(next));
+    };
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
 
   // The "Agents" list is the user's actually-registered runners; it refreshes so
   // online/offline tracks the runner's 30s heartbeat.
@@ -77,11 +119,6 @@ export function TasksSidePanel({ onShowRegister, onShowTasks }: Props) {
     queryFn: () => api<Runner[]>('/runners'),
     refetchInterval: 15_000,
   });
-
-  const pick = (key: string) => {
-    setSel(key);
-    onShowTasks();
-  };
 
   // Per-row "⋮" menu: Rename / Delete. `menuOpenId` keeps the trigger visible
   // (the kebab is hover-only) while its dropdown is open.
@@ -154,13 +191,14 @@ export function TasksSidePanel({ onShowRegister, onShowTasks }: Props) {
       e.preventDefault();
       setSel(list[idx].id);
       onShowTasks();
+      navigate(`/agents/${list[idx].id}`);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [list, onShowTasks]);
+  }, [list, onShowTasks, navigate]);
 
   return (
-    <aside className="tasks-panel">
+    <aside className="tasks-panel" style={{ width: sidebarWidth }}>
       <div className="tp-brand">
         <span className="tp-brand-logo">🛰</span>
         <span className="tp-brand-name">Orbit</span>
@@ -188,8 +226,8 @@ export function TasksSidePanel({ onShowRegister, onShowTasks }: Props) {
 
         <div className="tp-group">
           <div className="tp-group-head" onClick={() => setQuickOpen((o) => !o)}>
-            <CaretDownOutlined className={`tp-caret ${quickOpen ? '' : 'collapsed'}`} />
             <span className="tp-group-name">Agents</span>
+            <CaretDownOutlined className={`tp-caret ${quickOpen ? '' : 'collapsed'}`} />
           </div>
           {quickOpen && (
             <>
@@ -199,7 +237,11 @@ export function TasksSidePanel({ onShowRegister, onShowTasks }: Props) {
                   className={`tp-item inset ${sel === r.id ? 'active' : ''} ${
                     menuOpenId === r.id ? 'menu-open' : ''
                   }`}
-                  onClick={() => pick(r.id)}
+                  onClick={() => {
+                    setSel(r.id);
+                    onShowTasks();
+                    navigate(`/agents/${r.id}`);
+                  }}
                 >
                   <span
                     style={{
@@ -251,16 +293,30 @@ export function TasksSidePanel({ onShowRegister, onShowTasks }: Props) {
 
         <div className="tp-group">
           <div className="tp-group-head" onClick={() => setListOpen((o) => !o)}>
-            <CaretDownOutlined className={`tp-caret ${listOpen ? '' : 'collapsed'}`} />
             <span className="tp-group-name">Task List</span>
+            <CaretDownOutlined className={`tp-caret ${listOpen ? '' : 'collapsed'}`} />
           </div>
           {listOpen &&
             LISTS.map((l) => (
               <div
                 key={l.key}
                 className={`tp-item inset ${sel === l.key ? 'active' : ''}`}
-                onClick={() => pick(l.key)}
+                onClick={() => {
+                  setSel(l.key);
+                  onShowTasks();
+                  navigate(`/lists/${l.key}`);
+                }}
               >
+                <span
+                  style={{
+                    width: 7,
+                    height: 7,
+                    borderRadius: '50%',
+                    background: '#c0c4cc',
+                    flex: 'none',
+                    marginRight: 8,
+                  }}
+                />
                 <span className="tp-label">{l.label}</span>
               </div>
             ))}
@@ -268,8 +324,8 @@ export function TasksSidePanel({ onShowRegister, onShowTasks }: Props) {
 
         <div className="tp-group">
           <div className="tp-group-head" onClick={() => setArchOpen((o) => !o)}>
-            <CaretDownOutlined className={`tp-caret ${archOpen ? '' : 'collapsed'}`} />
             <span className="tp-group-name">Archived</span>
+            <CaretDownOutlined className={`tp-caret ${archOpen ? '' : 'collapsed'}`} />
           </div>
         </div>
 
@@ -295,6 +351,13 @@ export function TasksSidePanel({ onShowRegister, onShowTasks }: Props) {
           </div>
         </Dropdown>
       </div>
+
+      <div
+        className="tp-resizer"
+        role="separator"
+        aria-orientation="vertical"
+        onMouseDown={startResize}
+      />
 
       <Modal
         title="Rename runner"

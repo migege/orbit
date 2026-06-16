@@ -55,6 +55,18 @@ export class QueueService {
         SELECT t.id FROM "Task" t
         WHERE t.status = 'QUEUED'
           AND (t."scheduledAt" IS NULL OR t."scheduledAt" <= now())
+          -- A runner may only ever claim tasks owned by the runner's own owner.
+          -- This single top-level guard covers BOTH the assigned-runner branch
+          -- and the agent/unassigned branch below (prevents cross-tenant exec).
+          AND t."ownerId" = (SELECT r."ownerId" FROM "Runner" r WHERE r.id = ${runner.id})
+          -- Server-authoritative concurrency cap: never hand a runner more live runs
+          -- than its maxConcurrent (interactive runs stay live between turns and would
+          -- otherwise let a restarted runner over-claim past its own self-gating).
+          AND (
+            SELECT count(*) FROM "TaskRun" tr
+            WHERE tr."runnerId" = ${runner.id}
+              AND tr."status" IN ('RUNNING', 'AWAITING_INPUT', 'INTERRUPTED')
+          ) < (SELECT r."maxConcurrent" FROM "Runner" r WHERE r.id = ${runner.id})
           AND (
             t."assignedRunnerId" = ${runner.id}
             OR (
@@ -89,8 +101,29 @@ export class QueueService {
         agentId: task.agentId,
         status: 'RUNNING',
         startedAt: new Date(),
+        interactive: task.interactive,
+        // For interactive sessions we spawn claude with --session-id = sessionUuid,
+        // so the Claude session id is known up front (no need to scrape it later).
+        claudeSessionId: task.interactive ? task.sessionUuid : undefined,
+        lastTurnAt: task.interactive ? new Date() : undefined,
       },
     });
+    if (task.interactive) {
+      // The UI subscribes to the conversation's single live run; seed the first
+      // turn from the task prompt so every turn (incl. the first) flows through
+      // the same inbox + turn-complete path.
+      await this.prisma.task.update({ where: { id: task.id }, data: { activeRunId: run.id } });
+      await this.prisma.conversationTurn.create({
+        data: {
+          runId: run.id,
+          seq: 1,
+          clientTurnId: `initial-${run.id}`,
+          kind: 'message',
+          content: task.prompt,
+          status: 'PENDING',
+        },
+      });
+    }
     const agent = task.agent;
     return {
       runId: run.id,
@@ -99,16 +132,23 @@ export class QueueService {
       input: (task.input as Record<string, unknown>) ?? {},
       prompt: task.prompt,
       agent: {
-        model: agent?.model ?? 'claude-sonnet-4-6',
+        // Per-session override (interactive) wins over the agent, then a default.
+        model: task.model ?? agent?.model ?? 'claude-sonnet-4-6',
         appendSystemPrompt: agent?.appendSystemPrompt ?? undefined,
         systemPrompt: agent?.systemPrompt ?? undefined,
         allowedTools: (agent?.allowedTools as string[] | null) ?? [],
         disallowedTools: (agent?.disallowedTools as string[] | null) ?? [],
-        permissionMode: (agent?.permissionMode as PermissionMode) ?? PermissionMode.DONT_ASK,
+        permissionMode:
+          (task.permissionMode as PermissionMode) ??
+          (agent?.permissionMode as PermissionMode) ??
+          PermissionMode.DONT_ASK,
         maxTurns: agent?.maxTurns ?? undefined,
         maxBudgetUsd: agent?.maxBudgetUsd ?? undefined,
         mcpConfig: (agent?.mcpConfig as Record<string, unknown> | null) ?? undefined,
       },
+      interactive: task.interactive || undefined,
+      sessionUuid: task.interactive ? (task.sessionUuid ?? undefined) : undefined,
+      maxSeq: task.interactive ? 0 : undefined,
     };
   }
 }

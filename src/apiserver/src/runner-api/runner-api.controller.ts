@@ -13,18 +13,25 @@ import {
 } from '@nestjs/common';
 import { Prisma, RunStatus, TaskStatus } from '@prisma/client';
 import {
+  AgentExecConfig,
   ClaimedJob,
+  ConversationTurnKind,
   DevicePollRequest,
   DevicePollResponse,
   DeviceStartRequest,
   DeviceStartResponse,
+  PermissionMode,
+  ReclaimResponse,
+  ReclaimRun,
   RunCompleteRequest,
   RunEventBatch,
   RunEventType,
+  RunInboxResponse,
   RunnerHeartbeatRequest,
   RunnerHeartbeatResponse,
   RunnerRegisterRequest,
   RunnerRegisterResponse,
+  TurnCompleteRequest,
 } from '@orbit/shared';
 import { generateToken, generateUserCode, sha256 } from '../common/crypto.util';
 import { PrismaService } from '../prisma/prisma.service';
@@ -38,6 +45,9 @@ const DEVICE_TTL_MS = 10 * 60 * 1000;
 const DEVICE_POLL_INTERVAL_S = 3;
 // Three missed 30s heartbeats — must match RunnersService's offline window.
 const OFFLINE_AFTER_MS = 90_000;
+// Interactive sessions (Route B): per-run input long-poll + at-least-once lease.
+const INBOX_LONG_POLL_MS = 25_000;
+const INBOX_LEASE_MS = 300_000;
 
 @Controller('runner')
 export class RunnerApiController {
@@ -69,7 +79,7 @@ export class RunnerApiController {
         hostname: dto.hostname,
         ownerId: enrollment.ownerId,
         labels: dto.labels ?? [],
-        maxConcurrent: dto.maxConcurrent ?? 1,
+        maxConcurrent: dto.maxConcurrent ?? 16,
         version: dto.version,
         tokenHash: sha256(runnerToken),
         status: 'ONLINE',
@@ -140,7 +150,7 @@ export class RunnerApiController {
             name: dto.name,
             hostname: dto.hostname,
             labels: dto.labels ?? [],
-            maxConcurrent: dto.maxConcurrent ?? 1,
+            maxConcurrent: dto.maxConcurrent ?? 16,
             version: dto.version,
             expiresAt,
           },
@@ -206,7 +216,13 @@ export class RunnerApiController {
         lastHeartbeatAt: new Date(),
       },
     });
-    return { cancelRunIds: this.realtime.drainCancellations(runner.id) };
+    let cancelRunIds: string[] = [];
+    try {
+      cancelRunIds = await this.realtime.drainCancellations(runner.id);
+    } catch {
+      // A transient DB hiccup shouldn't fail the heartbeat; cancels arrive next cycle.
+    }
+    return { cancelRunIds };
   }
 
   /** Long-poll: returns one claimed job, or null when nothing is available. */
@@ -214,6 +230,177 @@ export class RunnerApiController {
   @Get('jobs')
   jobs(@CurrentRunner() runner: { id: string; labels: string[] }): Promise<ClaimedJob | null> {
     return this.queue.claimForRunner({ id: runner.id, labels: runner.labels }, LONG_POLL_MS);
+  }
+
+  // ── Interactive sessions (Route B) ──
+
+  /** A restarted runner re-attaches to its still-live interactive runs and --resumes them. */
+  @UseGuards(RunnerAuthGuard)
+  @Get('runs/reclaim')
+  async reclaim(@CurrentRunner() runner: { id: string }): Promise<ReclaimResponse> {
+    const runs = await this.prisma.taskRun.findMany({
+      where: {
+        runnerId: runner.id,
+        interactive: true,
+        status: { in: [RunStatus.RUNNING, RunStatus.AWAITING_INPUT, RunStatus.INTERRUPTED] },
+      },
+      select: {
+        id: true,
+        claudeSessionId: true,
+        task: {
+          select: { id: true, title: true, sessionUuid: true, model: true, permissionMode: true, agent: true },
+        },
+      },
+    });
+    const out: ReclaimRun[] = [];
+    for (const r of runs) {
+      const task = r.task;
+      const sessionUuid = r.claudeSessionId ?? task?.sessionUuid;
+      if (!task || !sessionUuid) continue;
+      const agg = await this.prisma.runEvent.aggregate({ where: { runId: r.id }, _max: { seq: true } });
+      const agent = task.agent;
+      // Mirror QueueService.buildJob's agent assembly: per-session override wins
+      // over the agent, then a server default — so a resumed process keeps the
+      // model/permission-mode/tools the session was created with.
+      const agentCfg: AgentExecConfig = {
+        model: task.model ?? agent?.model ?? 'claude-sonnet-4-6',
+        appendSystemPrompt: agent?.appendSystemPrompt ?? undefined,
+        systemPrompt: agent?.systemPrompt ?? undefined,
+        allowedTools: (agent?.allowedTools as string[] | null) ?? [],
+        disallowedTools: (agent?.disallowedTools as string[] | null) ?? [],
+        permissionMode:
+          (task.permissionMode as PermissionMode) ??
+          (agent?.permissionMode as PermissionMode) ??
+          PermissionMode.DONT_ASK,
+        maxTurns: agent?.maxTurns ?? undefined,
+        maxBudgetUsd: agent?.maxBudgetUsd ?? undefined,
+        mcpConfig: (agent?.mcpConfig as Record<string, unknown> | null) ?? undefined,
+      };
+      out.push({
+        runId: r.id,
+        taskId: task.id,
+        title: task.title,
+        sessionUuid,
+        maxSeq: agg._max.seq ?? 0,
+        agent: agentCfg,
+      });
+    }
+    return { runs: out };
+  }
+
+  /** Per-run long-poll: the next user turn to feed the live claude process. */
+  @UseGuards(RunnerAuthGuard)
+  @Get('runs/:id/inbox')
+  async inbox(
+    @CurrentRunner() runner: { id: string },
+    @Param('id') runId: string,
+  ): Promise<RunInboxResponse> {
+    await this.assertOwnership(runId, runner.id);
+    const deadline = Date.now() + INBOX_LONG_POLL_MS;
+    for (;;) {
+      const turn = await this.dequeueTurn(runId);
+      if (turn) return turn;
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return { turnId: '', seq: 0, kind: 'message' };
+      await this.realtime.waitForInbox(runId, Math.min(remaining, 5000));
+    }
+  }
+
+  /** A single interactive turn finished; park the run awaiting the next input. */
+  @UseGuards(RunnerAuthGuard)
+  @Post('runs/:id/turn-complete')
+  async turnComplete(
+    @CurrentRunner() runner: { id: string },
+    @Param('id') runId: string,
+    @Body() dto: TurnCompleteRequest,
+  ) {
+    await this.assertOwnership(runId, runner.id);
+    const usage = dto.usage;
+    await this.prisma.$transaction(async (tx) => {
+      // Idempotent ack: only the first turn-complete for this turn applies.
+      const ack = await tx.conversationTurn.updateMany({
+        where: { id: dto.turnId, runId, status: { not: 'ANSWERED' } },
+        data: { status: 'ANSWERED', answeredAt: new Date() },
+      });
+      if (ack.count === 0) return;
+      // Park + bill ONLY if the run is still live and not being torn down, so a
+      // late/retried turn-complete can never resurrect a finalized/cancelled run
+      // or double-bill it.
+      const parked = await tx.taskRun.updateMany({
+        where: {
+          id: runId,
+          cancelRequestedAt: null,
+          status: { in: [RunStatus.RUNNING, RunStatus.AWAITING_INPUT, RunStatus.INTERRUPTED] },
+        },
+        data: {
+          status: RunStatus.AWAITING_INPUT, // session stays alive for the next turn
+          lastTurnAt: new Date(),
+          numTurns: { increment: dto.numTurns ?? 1 },
+          costUsd: { increment: dto.costUsd ?? 0 },
+          sumInputTokens: { increment: usage?.input_tokens ?? 0 },
+          sumOutputTokens: { increment: usage?.output_tokens ?? 0 },
+          sumCacheRead: { increment: usage?.cache_read_input_tokens ?? 0 },
+          sumCacheWrite: { increment: usage?.cache_creation_input_tokens ?? 0 },
+        },
+      });
+      if (parked.count === 0) return; // run no longer live -> turn acked, no billing
+      if (dto.modelUsage) {
+        const rows = Object.entries(dto.modelUsage).map(([model, mu]) => ({
+          runId,
+          model,
+          inputTokens: mu.inputTokens ?? 0,
+          outputTokens: mu.outputTokens ?? 0,
+          cacheCreationInputTokens: mu.cacheCreationInputTokens ?? 0,
+          cacheReadInputTokens: mu.cacheReadInputTokens ?? 0,
+          costUsd: mu.costUSD ?? 0,
+        }));
+        if (rows.length > 0) await tx.llmUsage.createMany({ data: rows });
+      }
+    });
+    return { ok: true };
+  }
+
+  /**
+   * Atomically lease the next deliverable turn for a run: interrupt/end before
+   * message, and PENDING or an expired IN_FLIGHT lease (at-least-once). Flips the
+   * run to RUNNING when a message is delivered so a concurrent send is serialized.
+   */
+  private async dequeueTurn(runId: string): Promise<RunInboxResponse | null> {
+    const leaseUntil = new Date(Date.now() + INBOX_LEASE_MS);
+    const rows = await this.prisma.$queryRaw<
+      Array<{ id: string; seq: number; kind: string; content: string | null }>
+    >`
+      UPDATE "ConversationTurn"
+        SET status = 'IN_FLIGHT', "deliveredAt" = now(), "leaseDeadlineAt" = ${leaseUntil}
+      WHERE id = (
+        SELECT id FROM "ConversationTurn"
+        WHERE "runId" = ${runId}
+          AND ("status" = 'PENDING' OR ("status" = 'IN_FLIGHT' AND "leaseDeadlineAt" < now()))
+        ORDER BY (CASE WHEN "kind" IN ('interrupt', 'end') THEN 0 ELSE 1 END), "seq" ASC
+        FOR UPDATE SKIP LOCKED
+        LIMIT 1
+      )
+      RETURNING id, seq, kind, content
+    `;
+    if (rows.length === 0) return null;
+    const t = rows[0];
+    if (t.kind === 'message') {
+      await this.prisma.taskRun.updateMany({
+        where: {
+          id: runId,
+          status: { in: [RunStatus.AWAITING_INPUT, RunStatus.PENDING, RunStatus.INTERRUPTED] },
+        },
+        data: { status: RunStatus.RUNNING, lastTurnAt: new Date() },
+      });
+    } else {
+      // Control turns (interrupt/end) are fire-and-forget: ack on delivery so a
+      // stale one can never re-fire ahead of real messages every lease window.
+      await this.prisma.conversationTurn.updateMany({
+        where: { id: t.id, status: { not: 'ANSWERED' } },
+        data: { status: 'ANSWERED', answeredAt: new Date() },
+      });
+    }
+    return { turnId: t.id, seq: t.seq, kind: t.kind as ConversationTurnKind, content: t.content ?? undefined };
   }
 
   @UseGuards(RunnerAuthGuard)
@@ -224,20 +411,29 @@ export class RunnerApiController {
     @Param('id') runId: string,
     @Body() batch: RunEventBatch,
   ) {
-    await this.assertOwnership(runId, runner.id);
+    const run = await this.assertOwnership(runId, runner.id);
     const events = batch?.events ?? [];
     if (events.length === 0) return { ok: true };
 
-    await this.prisma.runEvent.createMany({
-      data: events.map((e) => ({
-        runId,
-        seq: e.seq,
-        type: e.type,
-        payload: e.payload as Prisma.InputJsonValue,
-        createdAt: new Date(e.ts),
-      })),
-      skipDuplicates: true,
-    });
+    // Persist idempotently — RunEvent has @@unique([runId, seq]) + skipDuplicates,
+    // so a run's OWN final batch is never lost even if it races with complete().
+    // text_delta is the streaming-animation increment: broadcast it live (below) but
+    // DON'T persist it — the full reply is durably saved as the trailing `assistant`
+    // event, so replay/refresh still shows complete text, and a long turn doesn't
+    // pile up hundreds of token-chunk rows.
+    const durable = events.filter((e) => e.type !== RunEventType.TEXT_DELTA);
+    if (durable.length > 0) {
+      await this.prisma.runEvent.createMany({
+        data: durable.map((e) => ({
+          runId,
+          seq: e.seq,
+          type: e.type,
+          payload: e.payload as Prisma.InputJsonValue,
+          createdAt: new Date(e.ts),
+        })),
+        skipDuplicates: true,
+      });
+    }
 
     const toolUses = events.filter((e) => e.type === RunEventType.TOOL_USE);
     if (toolUses.length > 0) {
@@ -251,7 +447,12 @@ export class RunnerApiController {
       });
     }
 
-    for (const e of events) this.realtime.publish(runId, e);
+    // Only broadcast to live subscribers while the run is active; once finalized,
+    // don't let late/replayed events spam the live stream. They remain in the
+    // persisted transcript and appear on replay.
+    if (run.status === RunStatus.RUNNING) {
+      for (const e of events) this.realtime.publish(runId, e);
+    }
     return { ok: true };
   }
 
@@ -263,49 +464,90 @@ export class RunnerApiController {
     @Body() dto: RunCompleteRequest,
   ) {
     const run = await this.assertOwnership(runId, runner.id);
-    const usage = dto.usage;
-
-    await this.prisma.taskRun.update({
-      where: { id: runId },
-      data: {
-        status: dto.status as RunStatus,
-        result: dto.result,
-        subtype: dto.subtype,
-        error: dto.error,
-        claudeSessionId: dto.claudeSessionId,
-        numTurns: dto.numTurns ?? 0,
-        costUsd: dto.costUsd ?? 0,
-        sumInputTokens: usage?.input_tokens ?? 0,
-        sumOutputTokens: usage?.output_tokens ?? 0,
-        sumCacheRead: usage?.cache_read_input_tokens ?? 0,
-        sumCacheWrite: usage?.cache_creation_input_tokens ?? 0,
-        finishedAt: new Date(),
-      },
-    });
-
-    if (dto.modelUsage) {
-      const rows = Object.entries(dto.modelUsage).map(([model, mu]) => ({
-        runId,
-        model,
-        inputTokens: mu.inputTokens ?? 0,
-        outputTokens: mu.outputTokens ?? 0,
-        cacheCreationInputTokens: mu.cacheCreationInputTokens ?? 0,
-        cacheReadInputTokens: mu.cacheReadInputTokens ?? 0,
-        costUsd: mu.costUSD ?? 0,
-      }));
-      if (rows.length > 0) await this.prisma.llmUsage.createMany({ data: rows });
+    // /complete only FINALIZES; per-turn parking is via /turn-complete. Reject a
+    // non-terminal status so a run can't be "completed" into a live state (these
+    // DTOs are plain interfaces, so the global ValidationPipe doesn't guard them).
+    const TERMINAL: RunStatus[] = [RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELLED];
+    if (!TERMINAL.includes(dto.status as RunStatus)) {
+      throw new BadRequestException('completion status must be terminal');
     }
-
+    const usage = dto.usage;
+    // If the user requested cancel/end, finalize as CANCELLED regardless of what
+    // the runner reports — the graceful-end 'end' turn often wins the race over the
+    // heartbeat cancel and would otherwise land the run SUCCEEDED.
+    const effectiveStatus: RunStatus = run.cancelRequestedAt
+      ? RunStatus.CANCELLED
+      : (dto.status as RunStatus);
     const taskStatus: TaskStatus =
-      dto.status === RunStatus.SUCCEEDED
+      effectiveStatus === RunStatus.SUCCEEDED
         ? TaskStatus.SUCCEEDED
-        : dto.status === RunStatus.CANCELLED
+        : effectiveStatus === RunStatus.CANCELLED
           ? TaskStatus.CANCELLED
           : TaskStatus.FAILED;
-    await this.prisma.task.update({
-      where: { id: run.taskId },
-      data: { status: taskStatus },
+
+    // Finalize the run, record usage, and flip the task in ONE transaction so a
+    // crash can't leave a finalized run without its billing rows. Only a LIVE run
+    // (RUNNING, or an interactive session parked in AWAITING_INPUT/INTERRUPTED) is
+    // finalized (updateMany count): a duplicate/late completion is a safe no-op —
+    // no double-billed LlmUsage and no resurrecting an already-terminal run.
+    const finalized = await this.prisma.$transaction(async (tx) => {
+      const res = await tx.taskRun.updateMany({
+        where: {
+          id: runId,
+          status: { in: [RunStatus.RUNNING, RunStatus.AWAITING_INPUT, RunStatus.INTERRUPTED] },
+        },
+        data: {
+          status: effectiveStatus,
+          result: dto.result,
+          subtype: dto.subtype,
+          error: dto.error,
+          claudeSessionId: dto.claudeSessionId,
+          finishedAt: new Date(),
+          // Interactive billing is accumulated per-turn by /turn-complete; don't
+          // clobber it here. One-shot runs report their totals on /complete.
+          ...(run.interactive
+            ? {}
+            : {
+                numTurns: dto.numTurns ?? 0,
+                costUsd: dto.costUsd ?? 0,
+                sumInputTokens: usage?.input_tokens ?? 0,
+                sumOutputTokens: usage?.output_tokens ?? 0,
+                sumCacheRead: usage?.cache_read_input_tokens ?? 0,
+                sumCacheWrite: usage?.cache_creation_input_tokens ?? 0,
+              }),
+        },
+      });
+      if (res.count === 0) return false;
+
+      // Interactive LlmUsage is appended per-turn by /turn-complete; only one-shot
+      // runs report it here.
+      if (!run.interactive && dto.modelUsage) {
+        const rows = Object.entries(dto.modelUsage).map(([model, mu]) => ({
+          runId,
+          model,
+          inputTokens: mu.inputTokens ?? 0,
+          outputTokens: mu.outputTokens ?? 0,
+          cacheCreationInputTokens: mu.cacheCreationInputTokens ?? 0,
+          cacheReadInputTokens: mu.cacheReadInputTokens ?? 0,
+          costUsd: mu.costUSD ?? 0,
+        }));
+        if (rows.length > 0) await tx.llmUsage.createMany({ data: rows });
+      }
+
+      // Don't resurrect a task the user explicitly cancelled, even if the runner
+      // reports success for the in-flight run after the cancel was requested.
+      await tx.task.updateMany({
+        where: { id: run.taskId, status: { not: TaskStatus.CANCELLED } },
+        data: { status: taskStatus },
+      });
+      // Drain any queued turns so nothing can be leased after the session ends.
+      await tx.conversationTurn.updateMany({
+        where: { runId, status: { not: 'ANSWERED' } },
+        data: { status: 'ANSWERED', answeredAt: new Date() },
+      });
+      return true;
     });
+    if (!finalized) return { ok: true };
 
     this.realtime.publish(runId, {
       seq: Number.MAX_SAFE_INTEGER,
