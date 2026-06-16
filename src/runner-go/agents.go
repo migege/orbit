@@ -21,17 +21,17 @@ type agentTool struct {
 }
 
 // knownAgents is the ordered set `orbit register` offers. Install commands are
-// the officially recommended ones (Claude Code: native installer; Codex: npm).
+// the officially recommended ones (Claude Code: native installer).
+//
+// Codex is temporarily omitted: the runner currently always executes the `claude`
+// binary (see claude.go / session.go), so a codex runner couldn't actually run
+// codex jobs. Add it back once per-agent execution dispatch exists — the
+// registration fan-out already creates one runner per selected agent.
 var knownAgents = []agentTool{
 	{
 		key: "claude", label: "Claude Code", bin: "claude",
 		install: []string{"sh", "-c", "curl -fsSL https://claude.ai/install.sh | bash"},
 		cmdHint: "curl -fsSL https://claude.ai/install.sh | bash",
-	},
-	{
-		key: "codex", label: "Codex", bin: "codex",
-		install: []string{"npm", "install", "-g", "@openai/codex"},
-		cmdHint: "npm install -g @openai/codex",
 	},
 }
 

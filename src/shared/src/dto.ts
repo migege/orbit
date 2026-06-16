@@ -27,11 +27,25 @@ export interface RunnerRegisterRequest {
   labels?: string[];
   maxConcurrent?: number;
   version?: string;
+  /** Agent keys to register — one runner per agent, named `<name>/<agentKey>`. */
+  agents?: string[];
 }
 
 export interface RunnerRegisterResponse {
   runnerId: string;
   /** Long-lived credential the runner stores locally and sends on every call. */
+  runnerToken: string;
+  name: string;
+  /** Every runner minted by this enrollment (one per agent). Falls back to the
+   *  single `runnerId`/`runnerToken`/`name` above for older CLIs. */
+  runners?: MintedRunner[];
+}
+
+/** One runner minted during enrollment — the CLI writes one local config + service per entry. */
+export interface MintedRunner {
+  /** The agent this runner drives (e.g. "claude"). Empty for the legacy single-runner case. */
+  agentKey: string;
+  runnerId: string;
   runnerToken: string;
   name: string;
 }
@@ -44,6 +58,8 @@ export interface DeviceStartRequest {
   labels?: string[];
   maxConcurrent?: number;
   version?: string;
+  /** Agent keys to register — one runner per agent, named `<name>/<agentKey>`. */
+  agents?: string[];
 }
 
 export interface DeviceStartResponse {
@@ -64,7 +80,15 @@ export interface DevicePollRequest {
 export type DevicePollResponse =
   | { status: 'pending' }
   | { status: 'expired' }
-  | { status: 'approved'; runnerId: string; runnerToken: string; name: string };
+  | {
+      status: 'approved';
+      /** First minted runner — kept for older CLIs that don't read `runners`. */
+      runnerId: string;
+      runnerToken: string;
+      name: string;
+      /** Every runner minted by this approval (one per agent). */
+      runners?: MintedRunner[];
+    };
 
 /** A runner's own status, returned by `GET /api/runner/me` (used by `orbit status`). */
 export interface RunnerMeResponse {

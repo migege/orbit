@@ -1,4 +1,6 @@
 import { HttpException, HttpStatus, Injectable, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
+import { MintedRunner } from '@orbit/shared';
 import { generateToken, sha256 } from '../common/crypto.util';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateEnrollmentTokenDto, UpdateRunnerDto } from './dto';
@@ -85,10 +87,13 @@ export class RunnersService {
     if (!s || s.expiresAt < new Date()) {
       throw new NotFoundException('enrollment request not found or expired');
     }
-    // Warn (don't block) if this user already runs a runner by the same name, so
-    // they don't unknowingly register a duplicate.
+    // Warn (don't block) if this user already runs a runner this enrollment would
+    // mint — either the bare base name or any `<name>/<agentKey>` — so they don't
+    // unknowingly register a duplicate.
     const nameConflict =
-      (await this.prisma.runner.count({ where: { ownerId, name: s.name } })) > 0;
+      (await this.prisma.runner.count({
+        where: { ownerId, OR: [{ name: s.name }, { name: { startsWith: `${s.name}/` } }] },
+      })) > 0;
     return {
       userCode: s.userCode,
       name: s.name,
@@ -108,40 +113,51 @@ export class RunnersService {
     if (!s || s.expiresAt < new Date()) {
       throw new NotFoundException('enrollment request not found or expired');
     }
-    if (s.status === 'APPROVED') return { ok: true, name: s.name, replaced: false };
+    if (s.status === 'APPROVED') return { ok: true, name: s.name, replaced: false, count: s.agents.length || 1 };
 
-    const runnerToken = generateToken(32);
-    const data = {
-      hostname: s.hostname,
-      labels: s.labels,
-      maxConcurrent: s.maxConcurrent,
-      version: s.version,
-      tokenHash: sha256(runnerToken),
-      status: 'ONLINE' as const,
-      lastHeartbeatAt: new Date(),
-    };
-    // A runner of the same name for this user is replaced (its credential is
-    // reissued) rather than duplicated, so re-registering a machine reuses its
-    // identity and keeps its run history.
-    const existing = await this.prisma.runner.findFirst({
-      where: { ownerId, name: s.name },
-      orderBy: { enrolledAt: 'desc' },
-    });
-    const runner = existing
-      ? await this.prisma.runner.update({ where: { id: existing.id }, data })
-      : await this.prisma.runner.create({ data: { ...data, name: s.name, ownerId } });
+    // One runner per requested agent, named `<name>/<agentKey>`; no agents -> a
+    // single runner named `name`.
+    const keys = s.agents.length ? s.agents : [''];
+    const minted: MintedRunner[] = [];
+    let replaced = false;
+    for (const key of keys) {
+      const runnerName = key ? `${s.name}/${key}` : s.name;
+      const runnerToken = generateToken(32);
+      const data = {
+        hostname: s.hostname,
+        labels: s.labels,
+        maxConcurrent: s.maxConcurrent,
+        version: s.version,
+        tokenHash: sha256(runnerToken),
+        status: 'ONLINE' as const,
+        lastHeartbeatAt: new Date(),
+      };
+      // A runner of the same name for this user is replaced (its credential is
+      // reissued) rather than duplicated, so re-registering a machine reuses its
+      // identity and keeps its run history.
+      const existing = await this.prisma.runner.findFirst({
+        where: { ownerId, name: runnerName },
+        orderBy: { enrolledAt: 'desc' },
+      });
+      const runner = existing
+        ? await this.prisma.runner.update({ where: { id: existing.id }, data })
+        : await this.prisma.runner.create({ data: { ...data, name: runnerName, ownerId } });
+      if (existing) replaced = true;
+      minted.push({ agentKey: key, runnerId: runner.id, runnerToken, name: runner.name });
+    }
 
     await this.prisma.deviceEnrollment.update({
       where: { id: s.id },
       data: {
         status: 'APPROVED',
-        runnerId: runner.id,
-        runnerToken,
+        runnerId: minted[0].runnerId,
+        runnerToken: minted[0].runnerToken,
+        runners: minted as unknown as Prisma.InputJsonValue,
         approvedById: ownerId,
         approvedAt: new Date(),
       },
     });
-    return { ok: true, name: runner.name, replaced: !!existing };
+    return { ok: true, name: s.name, replaced, count: minted.length };
   }
 
   async updateRunner(ownerId: string, id: string, dto: UpdateRunnerDto) {

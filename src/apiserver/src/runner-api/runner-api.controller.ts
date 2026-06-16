@@ -20,6 +20,7 @@ import {
   DevicePollResponse,
   DeviceStartRequest,
   DeviceStartResponse,
+  MintedRunner,
   PermissionMode,
   ReclaimResponse,
   ReclaimSession,
@@ -73,26 +74,39 @@ export class RunnerApiController {
       throw new UnauthorizedException('enrollment token expired');
     }
 
-    const runnerToken = generateToken(32);
-    const runner = await this.prisma.runner.create({
-      data: {
-        name: dto.name,
-        hostname: dto.hostname,
-        ownerId: enrollment.ownerId,
-        labels: dto.labels ?? [],
-        maxConcurrent: dto.maxConcurrent ?? 16,
-        version: dto.version,
-        tokenHash: sha256(runnerToken),
-        status: 'ONLINE',
-        lastHeartbeatAt: new Date(),
-      },
-    });
+    // One runner per requested agent, named `<name>/<agentKey>`; no agents -> a
+    // single runner named `name`. The token is single-use regardless of count.
+    const keys = dto.agents?.length ? dto.agents : [''];
+    const minted: MintedRunner[] = [];
+    for (const key of keys) {
+      const runnerName = key ? `${dto.name}/${key}` : dto.name;
+      const runnerToken = generateToken(32);
+      const runner = await this.prisma.runner.create({
+        data: {
+          name: runnerName,
+          hostname: dto.hostname,
+          ownerId: enrollment.ownerId,
+          labels: dto.labels ?? [],
+          maxConcurrent: dto.maxConcurrent ?? 16,
+          version: dto.version,
+          tokenHash: sha256(runnerToken),
+          status: 'ONLINE',
+          lastHeartbeatAt: new Date(),
+        },
+      });
+      minted.push({ agentKey: key, runnerId: runner.id, runnerToken, name: runnerName });
+    }
     await this.prisma.enrollmentToken.update({
       where: { id: enrollment.id },
       data: { usedAt: new Date() },
     });
 
-    return { runnerId: runner.id, runnerToken, name: runner.name };
+    return {
+      runnerId: minted[0].runnerId,
+      runnerToken: minted[0].runnerToken,
+      name: minted[0].name,
+      runners: minted,
+    };
   }
 
   /** `orbit register` (no token) — open a device-login session for browser approval. */
@@ -122,16 +136,20 @@ export class RunnerApiController {
     if (session.status !== 'APPROVED' || !session.runnerId || !session.runnerToken) {
       return { status: 'pending' };
     }
-    // Approved — hand the credential to the CLI exactly once, then wipe it.
+    // Approved — hand the credentials to the CLI exactly once, then wipe them.
+    const minted = (session.runners as unknown as MintedRunner[] | null) ?? [
+      { agentKey: '', runnerId: session.runnerId, runnerToken: session.runnerToken, name: session.name },
+    ];
     await this.prisma.deviceEnrollment.update({
       where: { id: session.id },
-      data: { runnerToken: null },
+      data: { runnerToken: null, runners: Prisma.JsonNull },
     });
     return {
       status: 'approved',
-      runnerId: session.runnerId,
-      runnerToken: session.runnerToken,
-      name: session.name,
+      runnerId: minted[0].runnerId,
+      runnerToken: minted[0].runnerToken,
+      name: minted[0].name,
+      runners: minted,
     };
   }
 
@@ -153,6 +171,7 @@ export class RunnerApiController {
             labels: dto.labels ?? [],
             maxConcurrent: dto.maxConcurrent ?? 16,
             version: dto.version,
+            agents: dto.agents ?? [],
             expiresAt,
           },
         });

@@ -39,7 +39,7 @@ Usage:
 register options:
   --server <url>           Control plane base URL (default: ` + defaultServer + `)
   --token <token>          Optional one-time enrollment token (skips browser approval)
-  --name <name>            Runner name (default: "<dir> @ <hostname>")
+  --name <name>            Base runner name (default: "<dir>@<hostname>"); each agent registers as "<name>/<agentkey>"
   --labels a,b,c           Routing labels (e.g. sg,hdfs)
   --max-concurrent <n>     Max concurrent jobs (default: 16)
   --workdir <path>         Project directory Claude Code runs in (default: current dir)
@@ -86,11 +86,15 @@ func main() {
 
 func cmdRegister(flags map[string]string, bools map[string]bool) {
 	// A machine can host many runners — one per directory. Re-registering the
-	// same directory overwrites its config, so confirm first.
-	if existing := loadConfig(); existing != nil && !bools["force"] {
+	// same directory overwrites its configs, so confirm first.
+	if existing := existingConfigs(); len(existing) > 0 && !bools["force"] {
+		names := make([]string, len(existing))
+		for i, c := range existing {
+			names[i] = strconv.Quote(c.Name)
+		}
 		ok := confirm(fmt.Sprintf(
-			"This directory already has runner %q registered.\nRegister a new one here (overwrites %s)? [Y/n] ",
-			existing.Name, configPath()), true)
+			"This directory already has runner(s) %s registered.\nRegister again here (overwrites %s)? [Y/n] ",
+			strings.Join(names, ", "), rootDir()), true)
 		if !ok {
 			fmt.Println("aborted — use `orbit register` in another directory, or pass --force")
 			os.Exit(0)
@@ -98,21 +102,21 @@ func cmdRegister(flags map[string]string, bools map[string]bool) {
 	}
 
 	server := strings.TrimRight(getStr(flags, "server", defaultServer), "/")
-	// Name defaults to "<dir> @ <hostname>"; confirm/edit it interactively unless
-	// --name was passed.
+	// Detect the coding agents installed here and let the user pick which to
+	// register; the default is all of them. Then make the chosen agents usable —
+	// install any that are missing, and confirm Claude Code is logged in — before
+	// registering. Selecting agents first lets the name reflect them.
+	selected := selectAgents()
+	ensureAgentsReady(selected)
+	agents := agentKeys(selected)
+	// Name defaults to the base "<dir>@<hostname>"; the server appends "/<agentkey>"
+	// per agent. Confirm/edit the base interactively unless --name was passed.
 	name := flags["name"]
 	if name == "" {
 		name = promptName(defaultAgentName())
 	}
 	labels := parseLabels(flags["labels"])
 	maxConcurrent := getInt(flags, "max-concurrent", 16)
-	// Detect the coding agents installed here (Claude Code, Codex) and let the
-	// user pick which to register; the default is all of them. Then make the
-	// chosen agents usable — install any that are missing, and confirm Claude
-	// Code is logged in — before registering this machine.
-	selected := selectAgents()
-	ensureAgentsReady(selected)
-	agents := agentKeys(selected)
 	token := flags["token"]
 	foreground := bools["foreground"]
 	// The directory Claude Code runs in (the project to work on). Defaults to the
@@ -131,20 +135,21 @@ func cmdRegister(flags map[string]string, bools map[string]bool) {
 	if token != "" {
 		res, err := t.register(RegisterRequest{
 			EnrollmentToken: token, Name: name, Hostname: hostnameOr(),
-			Labels: labels, MaxConcurrent: maxConcurrent, Version: version,
+			Labels: labels, MaxConcurrent: maxConcurrent, Version: version, Agents: agents,
 		})
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "registration failed:", err)
 			os.Exit(1)
 		}
-		finishRegister(res.RunnerID, res.RunnerToken, res.Name, server, labels, agents, maxConcurrent, workDir, withService, foreground)
+		finishRegister(mintedFrom(res.Runners, res.RunnerID, res.RunnerToken, res.Name),
+			server, labels, maxConcurrent, workDir, withService, foreground)
 		return
 	}
 
 	// Device-login flow: approve this machine in the browser, like `claude` login.
 	start, err := t.deviceStart(DeviceStartRequest{
 		Name: name, Hostname: hostnameOr(), Labels: labels,
-		MaxConcurrent: maxConcurrent, Version: version,
+		MaxConcurrent: maxConcurrent, Version: version, Agents: agents,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "registration failed:", err)
@@ -164,7 +169,8 @@ func cmdRegister(flags map[string]string, bools map[string]bool) {
 			continue // transient — keep waiting until the deadline
 		}
 		if poll.Status == "approved" {
-			finishRegister(poll.RunnerID, poll.RunnerToken, poll.Name, server, labels, agents, maxConcurrent, workDir, withService, foreground)
+			finishRegister(mintedFrom(poll.Runners, poll.RunnerID, poll.RunnerToken, poll.Name),
+				server, labels, maxConcurrent, workDir, withService, foreground)
 			return
 		}
 		if poll.Status == "expired" {
@@ -175,116 +181,166 @@ func cmdRegister(flags map[string]string, bools map[string]bool) {
 	os.Exit(1)
 }
 
-func finishRegister(runnerID, runnerToken, name, server string, labels, agents []string, maxConcurrent int, workDir string, withService, foreground bool) {
-	cfg := &RunnerConfig{
-		ServerURL: server, RunnerID: runnerID, RunnerToken: runnerToken,
-		Name: name, Labels: labels, MaxConcurrent: maxConcurrent, WorkDir: workDir, Agents: agents,
+// mintedFrom returns the runners to set up: the server's per-agent list, or a
+// single fallback synthesized from the legacy fields when talking to an older
+// server that doesn't send `runners`.
+func mintedFrom(runners []MintedRunner, id, token, name string) []MintedRunner {
+	if len(runners) > 0 {
+		return runners
 	}
-	if err := saveConfig(cfg); err != nil {
-		fmt.Fprintln(os.Stderr, "failed to save config:", err)
-		os.Exit(1)
-	}
-	fmt.Printf("\n✓ registered runner %q (%s).\n", name, runnerID)
-	if len(agents) > 0 {
-		fmt.Printf("  agents:  %s\n", strings.Join(agents, ", "))
+	return []MintedRunner{{RunnerID: id, RunnerToken: token, Name: name}}
+}
+
+func finishRegister(minted []MintedRunner, server string, labels []string, maxConcurrent int, workDir string, withService, foreground bool) {
+	cfgs := make([]*RunnerConfig, 0, len(minted))
+	for _, m := range minted {
+		cfg := &RunnerConfig{
+			ServerURL: server, RunnerID: m.RunnerID, RunnerToken: m.RunnerToken,
+			Name: m.Name, Labels: labels, MaxConcurrent: maxConcurrent, WorkDir: workDir,
+			AgentKey: m.AgentKey,
+		}
+		if m.AgentKey != "" {
+			cfg.Agents = []string{m.AgentKey}
+		}
+		if err := saveConfigAt(agentHome(m.AgentKey), cfg); err != nil {
+			fmt.Fprintln(os.Stderr, "failed to save config:", err)
+			os.Exit(1)
+		}
+		cfgs = append(cfgs, cfg)
+		fmt.Printf("\n✓ registered runner %q (%s).\n", m.Name, m.RunnerID)
 	}
 
 	if foreground {
-		fmt.Println("running in the foreground — Ctrl-C to stop")
-		runLoop(cfg)
+		// Foreground runs a single agent in this terminal; any others are
+		// registered and startable via their service or `orbit run`.
+		first := cfgs[0]
+		for _, c := range cfgs[1:] {
+			fmt.Printf("  also registered %q — start with:  ORBIT_HOME=%s orbit run\n", c.Name, agentHome(c.AgentKey))
+		}
+		os.Setenv("ORBIT_HOME", agentHome(first.AgentKey)) // align runsDir/baseDir with this agent's home
+		fmt.Printf("running %q in the foreground — Ctrl-C to stop\n", first.Name)
+		runLoop(first)
 		return
 	}
 	if !withService {
 		fmt.Println("  Start it with:  orbit run")
 		return
 	}
-	// Auto-install the background service so the machine starts working immediately.
-	if err := setupService(); err != nil {
-		fmt.Fprintf(os.Stderr, "\nnote: could not auto-install the service (%s)\n", firstLine(err.Error()))
-		fmt.Fprintln(os.Stderr, "  you can run it in the foreground instead:  orbit run")
+	for _, c := range cfgs {
+		if err := setupServiceFor(c.AgentKey, agentHome(c.AgentKey)); err != nil {
+			fmt.Fprintf(os.Stderr, "\nnote: could not auto-install the %s service (%s)\n", serviceName(c.AgentKey), firstLine(err.Error()))
+			fmt.Fprintln(os.Stderr, "  you can run it in the foreground instead:  orbit run")
+		}
 	}
+	return
 }
 
 // cmdUnregister tears down this directory's runner: stops/removes the service,
 // deletes the runner from the control plane, and drops the local config.
 func cmdUnregister(bools map[string]bool) {
-	cfg := loadConfig()
-	if cfg == nil {
+	cfgs := existingConfigs()
+	if len(cfgs) == 0 {
 		cwd, _ := os.Getwd()
 		fmt.Printf("no runner registered in %s\n", cwd)
 		return
 	}
 	if !bools["yes"] && !bools["force"] {
+		names := make([]string, len(cfgs))
+		for i, c := range cfgs {
+			names[i] = strconv.Quote(c.Name)
+		}
 		if !confirm(fmt.Sprintf(
-			"Unregister runner %q — stop its service, delete it from %s, and remove local config? [y/N] ",
-			cfg.Name, cfg.ServerURL), false) {
+			"Unregister runner(s) %s — stop their service(s), delete them from %s, and remove local config? [y/N] ",
+			strings.Join(names, ", "), cfgs[0].ServerURL), false) {
 			fmt.Println("aborted")
 			return
 		}
 	}
 
-	uninstallService() // stop + remove the background service first
+	for _, cfg := range cfgs {
+		uninstallServiceFor(cfg.AgentKey) // stop + remove the background service first
 
-	if err := NewTransport(cfg.ServerURL, cfg.RunnerToken).deregister(); err != nil {
-		fmt.Fprintf(os.Stderr, "note: could not delete the runner from the control plane (%s)\n", firstLine(err.Error()))
-	} else {
-		fmt.Println("✓ deleted from the control plane")
-	}
+		if err := NewTransport(cfg.ServerURL, cfg.RunnerToken).deregister(); err != nil {
+			fmt.Fprintf(os.Stderr, "note: could not delete %q from the control plane (%s)\n", cfg.Name, firstLine(err.Error()))
+		} else {
+			fmt.Printf("✓ deleted %q from the control plane\n", cfg.Name)
+		}
 
-	if err := os.Remove(configPath()); err != nil && !os.IsNotExist(err) {
-		fmt.Fprintln(os.Stderr, "failed to remove config:", err)
-		os.Exit(1)
+		if err := os.Remove(filepath.Join(agentHome(cfg.AgentKey), "config.json")); err != nil && !os.IsNotExist(err) {
+			fmt.Fprintln(os.Stderr, "failed to remove config:", err)
+			os.Exit(1)
+		}
+		fmt.Printf("✓ unregistered %q\n", cfg.Name)
 	}
-	fmt.Printf("✓ unregistered %q\n", cfg.Name)
 }
 
 func cmdRun() {
+	// The service sets ORBIT_HOME to a per-agent home, so loadConfig finds that
+	// agent's config. For a manual `orbit run` with no ORBIT_HOME, fall back to the
+	// per-agent configs in this directory: run the only one, or ask which.
 	cfg := loadConfig()
 	if cfg == nil {
-		fmt.Fprintln(os.Stderr, "no runner config found — run `orbit register` first")
-		os.Exit(1)
+		cfgs := existingConfigs()
+		switch len(cfgs) {
+		case 0:
+			fmt.Fprintln(os.Stderr, "no runner config found — run `orbit register` first")
+			os.Exit(1)
+		case 1:
+			cfg = cfgs[0]
+			os.Setenv("ORBIT_HOME", agentHome(cfg.AgentKey)) // align runsDir/baseDir with this agent
+		default:
+			fmt.Fprintln(os.Stderr, "multiple agents are registered here — pick one with ORBIT_HOME, e.g.:")
+			for _, c := range cfgs {
+				fmt.Fprintf(os.Stderr, "  ORBIT_HOME=%s orbit run   # %s\n", agentHome(c.AgentKey), c.Name)
+			}
+			os.Exit(1)
+		}
 	}
 	selfUpdate(cfg.ServerURL) // pull a newer orbit before settling into the loop
 	runLoop(cfg)
 }
 
 func cmdStatus() {
-	cfg := loadConfig()
-	if cfg == nil {
+	cfgs := existingConfigs()
+	if len(cfgs) == 0 {
 		cwd, _ := os.Getwd()
 		fmt.Printf("no runner registered in %s\nRun `orbit register` to add one.\n", cwd)
 		return
 	}
-	fmt.Printf("orbit %s\nrunner:  %s (%s)\nserver:  %s\nlabels:  %s\nconfig:  %s\n",
-		version, cfg.Name, cfg.RunnerID, cfg.ServerURL, labelsOrDash(cfg.Labels), configPath())
+	fmt.Printf("orbit %s\n", version)
+	for _, cfg := range cfgs {
+		fmt.Printf("\nrunner:  %s (%s)\nserver:  %s\nlabels:  %s\nconfig:  %s\n",
+			cfg.Name, cfg.RunnerID, cfg.ServerURL, labelsOrDash(cfg.Labels),
+			filepath.Join(agentHome(cfg.AgentKey), "config.json"))
 
-	me, err := NewTransport(cfg.ServerURL, cfg.RunnerToken).me()
-	if err != nil {
-		msg := firstLine(err.Error())
-		if strings.Contains(msg, "401") {
-			fmt.Println("status:  credential invalid — re-register with `orbit register --force`")
-		} else {
-			fmt.Printf("status:  control plane unreachable (%s)\n", msg)
+		me, err := NewTransport(cfg.ServerURL, cfg.RunnerToken).me()
+		if err != nil {
+			msg := firstLine(err.Error())
+			if strings.Contains(msg, "401") {
+				fmt.Println("status:  credential invalid — re-register with `orbit register --force`")
+			} else {
+				fmt.Printf("status:  control plane unreachable (%s)\n", msg)
+			}
+			continue
 		}
-		return
-	}
-	ago := "never"
-	if me.LastHeartbeatAt != nil {
-		if ts, err := time.Parse(time.RFC3339, *me.LastHeartbeatAt); err == nil {
-			ago = fmt.Sprintf("%ds ago", int(time.Since(ts).Seconds()))
+		ago := "never"
+		if me.LastHeartbeatAt != nil {
+			if ts, err := time.Parse(time.RFC3339, *me.LastHeartbeatAt); err == nil {
+				ago = fmt.Sprintf("%ds ago", int(time.Since(ts).Seconds()))
+			}
 		}
+		st := "offline"
+		if me.Online {
+			st = "online"
+		}
+		fmt.Printf("status:  %s (last heartbeat %s)\n", st, ago)
 	}
-	st := "offline"
-	if me.Online {
-		st = "online"
-	}
-	fmt.Printf("status:  %s (last heartbeat %s)\n", st, ago)
 }
 
 func cmdUpgrade() {
 	server := defaultServer
-	if cfg := loadConfig(); cfg != nil {
-		server = cfg.ServerURL
+	if cfgs := existingConfigs(); len(cfgs) > 0 {
+		server = cfgs[0].ServerURL
 	}
 	upgrade(strings.TrimRight(server, "/"))
 }
@@ -355,13 +411,15 @@ func hostnameOr() string {
 	return "runner"
 }
 
-// defaultAgentName is "<current directory name> @ <hostname>".
+// defaultAgentName is the base runner name "<current directory name>@<hostname>".
+// Each selected agent registers as "<base>/<agentkey>" (the suffix is appended
+// server-side, one runner per agent).
 func defaultAgentName() string {
 	dir := "runner"
 	if cwd, err := os.Getwd(); err == nil {
 		dir = filepath.Base(cwd)
 	}
-	return dir + " @ " + hostnameOr()
+	return dir + "@" + hostnameOr()
 }
 
 // promptName asks the user to confirm/edit the runner name; Enter keeps the

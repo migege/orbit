@@ -89,8 +89,14 @@ model DeviceEnrollment {
   maxConcurrent  Int       @default(1)
   version        String?
   status         String    @default("PENDING") // PENDING | APPROVED
-  runnerId       String? // set once approved -> a Runner is created
+  // Agent keys requested at device/start; approval mints one Runner per agent,
+  // each named `<name>/<agentKey>`. Empty -> a single Runner named `name`.
+  agents         String[]  @default([])
+  runnerId       String? // first minted runner — kept for older CLIs
   runnerToken    String? // raw runner credential, delivered to the CLI once then cleared
+  // All minted runner credentials [{agentKey,runnerId,runnerToken,name}],
+  // delivered to the CLI once on poll then wiped (mirrors runnerToken above).
+  runners        Json?
   approvedById   String?
   approvedAt     DateTime?
   expiresAt      DateTime

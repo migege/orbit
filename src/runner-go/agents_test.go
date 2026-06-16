@@ -47,9 +47,9 @@ func TestDetectAgents(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("PATH executable-bit lookup is unix-specific")
 	}
-	// Point PATH at a temp dir and drop in fake CLIs to assert detection +
-	// ordering (knownAgents order, not install order). HOME is a fresh temp dir
-	// too, so agentPath's ~/.local/bin fallback can't pick up a real install.
+	// Point PATH at a temp dir and drop in fake CLIs to assert detection only
+	// picks up agents in knownAgents. HOME is a fresh temp dir too, so agentPath's
+	// ~/.local/bin fallback can't pick up a real install.
 	dir := t.TempDir()
 	t.Setenv("PATH", dir)
 	t.Setenv("HOME", t.TempDir())
@@ -62,13 +62,14 @@ func TestDetectAgents(t *testing.T) {
 	if got := agentKeys(detectAgents()); len(got) != 0 {
 		t.Fatalf("no CLIs on PATH: got %v, want none", got)
 	}
+	// codex is not a known agent (yet) — a codex binary on PATH must be ignored.
 	fake("codex")
-	if got := agentKeys(detectAgents()); !reflect.DeepEqual(got, []string{"codex"}) {
-		t.Fatalf("codex only: got %v", got)
+	if got := agentKeys(detectAgents()); len(got) != 0 {
+		t.Fatalf("codex is not registered: got %v, want none", got)
 	}
 	fake("claude")
-	if got := agentKeys(detectAgents()); !reflect.DeepEqual(got, []string{"claude", "codex"}) {
-		t.Fatalf("both present: got %v, want [claude codex]", got)
+	if got := agentKeys(detectAgents()); !reflect.DeepEqual(got, []string{"claude"}) {
+		t.Fatalf("claude present: got %v, want [claude]", got)
 	}
 }
 

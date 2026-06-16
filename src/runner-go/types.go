@@ -9,6 +9,8 @@ type DeviceStartRequest struct {
 	Labels        []string `json:"labels"`
 	MaxConcurrent int      `json:"maxConcurrent"`
 	Version       string   `json:"version,omitempty"`
+	// Agent keys to register — one runner per agent, named "<name>/<agentKey>".
+	Agents []string `json:"agents,omitempty"`
 }
 
 type DeviceStartResponse struct {
@@ -23,6 +25,18 @@ type DevicePollResponse struct {
 	RunnerID    string `json:"runnerId"`
 	RunnerToken string `json:"runnerToken"`
 	Name        string `json:"name"`
+	// Every runner minted by this approval (one per agent). Empty from older
+	// servers — the CLI then falls back to the single RunnerID/RunnerToken/Name.
+	Runners []MintedRunner `json:"runners,omitempty"`
+}
+
+// MintedRunner is one runner the control plane created during enrollment; the CLI
+// writes one local config + service per entry.
+type MintedRunner struct {
+	AgentKey    string `json:"agentKey"`
+	RunnerID    string `json:"runnerId"`
+	RunnerToken string `json:"runnerToken"`
+	Name        string `json:"name"`
 }
 
 type RegisterRequest struct {
@@ -32,12 +46,15 @@ type RegisterRequest struct {
 	Labels          []string `json:"labels"`
 	MaxConcurrent   int      `json:"maxConcurrent"`
 	Version         string   `json:"version,omitempty"`
+	// Agent keys to register — one runner per agent, named "<name>/<agentKey>".
+	Agents []string `json:"agents,omitempty"`
 }
 
 type RegisterResponse struct {
-	RunnerID    string `json:"runnerId"`
-	RunnerToken string `json:"runnerToken"`
-	Name        string `json:"name"`
+	RunnerID    string         `json:"runnerId"`
+	RunnerToken string         `json:"runnerToken"`
+	Name        string         `json:"name"`
+	Runners     []MintedRunner `json:"runners,omitempty"`
 }
 
 type HeartbeatRequest struct {
