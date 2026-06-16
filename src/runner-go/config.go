@@ -17,6 +17,9 @@ type RunnerConfig struct {
 	// Directory Claude Code runs in (the project to work on). Defaults to the cwd
 	// at `orbit register`; jobs cd here, not into a per-run scratch dir.
 	WorkDir string `json:"workDir,omitempty"`
+	// Agents installed on this machine that the user chose to register
+	// (stable keys, e.g. "claude", "codex"). Selected at `orbit register`.
+	Agents []string `json:"agents,omitempty"`
 }
 
 // Config is per working directory (so one machine can host several runners);

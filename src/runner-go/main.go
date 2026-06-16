@@ -106,6 +106,13 @@ func cmdRegister(flags map[string]string, bools map[string]bool) {
 	}
 	labels := parseLabels(flags["labels"])
 	maxConcurrent := getInt(flags, "max-concurrent", 1)
+	// Detect the coding agents installed here (Claude Code, Codex) and let the
+	// user pick which to register; the default is all of them. Then make the
+	// chosen agents usable — install any that are missing, and confirm Claude
+	// Code is logged in — before registering this machine.
+	selected := selectAgents()
+	ensureAgentsReady(selected)
+	agents := agentKeys(selected)
 	token := flags["token"]
 	foreground := bools["foreground"]
 	// The directory Claude Code runs in (the project to work on). Defaults to the
@@ -130,7 +137,7 @@ func cmdRegister(flags map[string]string, bools map[string]bool) {
 			fmt.Fprintln(os.Stderr, "registration failed:", err)
 			os.Exit(1)
 		}
-		finishRegister(res.RunnerID, res.RunnerToken, res.Name, server, labels, maxConcurrent, workDir, withService, foreground)
+		finishRegister(res.RunnerID, res.RunnerToken, res.Name, server, labels, agents, maxConcurrent, workDir, withService, foreground)
 		return
 	}
 
@@ -157,7 +164,7 @@ func cmdRegister(flags map[string]string, bools map[string]bool) {
 			continue // transient — keep waiting until the deadline
 		}
 		if poll.Status == "approved" {
-			finishRegister(poll.RunnerID, poll.RunnerToken, poll.Name, server, labels, maxConcurrent, workDir, withService, foreground)
+			finishRegister(poll.RunnerID, poll.RunnerToken, poll.Name, server, labels, agents, maxConcurrent, workDir, withService, foreground)
 			return
 		}
 		if poll.Status == "expired" {
@@ -168,16 +175,19 @@ func cmdRegister(flags map[string]string, bools map[string]bool) {
 	os.Exit(1)
 }
 
-func finishRegister(runnerID, runnerToken, name, server string, labels []string, maxConcurrent int, workDir string, withService, foreground bool) {
+func finishRegister(runnerID, runnerToken, name, server string, labels, agents []string, maxConcurrent int, workDir string, withService, foreground bool) {
 	cfg := &RunnerConfig{
 		ServerURL: server, RunnerID: runnerID, RunnerToken: runnerToken,
-		Name: name, Labels: labels, MaxConcurrent: maxConcurrent, WorkDir: workDir,
+		Name: name, Labels: labels, MaxConcurrent: maxConcurrent, WorkDir: workDir, Agents: agents,
 	}
 	if err := saveConfig(cfg); err != nil {
 		fmt.Fprintln(os.Stderr, "failed to save config:", err)
 		os.Exit(1)
 	}
 	fmt.Printf("\n✓ registered runner %q (%s).\n", name, runnerID)
+	if len(agents) > 0 {
+		fmt.Printf("  agents:  %s\n", strings.Join(agents, ", "))
+	}
 
 	if foreground {
 		fmt.Println("running in the foreground — Ctrl-C to stop")
