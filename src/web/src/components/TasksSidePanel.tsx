@@ -1,5 +1,4 @@
 import {
-  BookOutlined,
   CaretDownOutlined,
   ClockCircleOutlined,
   DeleteOutlined,
@@ -24,7 +23,6 @@ const isMac = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform
 const TOP = [
   { key: 'running', icon: <UserOutlined />, label: 'Running', count: 385 },
   { key: 'skills', icon: <ThunderboltOutlined />, label: 'Skills' },
-  { key: 'schedule', icon: <BookOutlined />, label: 'Schedule' },
   { key: 'activities', icon: <ClockCircleOutlined />, label: 'Activities' },
 ];
 

@@ -62,7 +62,6 @@ const MOCK_TASKS = [
 // Top-nav sections share this view; only the heading differs (default: Running).
 const SECTION_TITLES: Record<string, string> = {
   '/skills': 'Skills',
-  '/schedule': 'Schedule',
   '/activities': 'Activities',
 };
 
