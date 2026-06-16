@@ -28,7 +28,7 @@ enum RunnerStatus {
 }
 
 model User {
-  id           String   @id @default(uuid())
+  id           String   @id @default(uuid(7)) @db.Uuid
   email        String   @unique
   name         String
   passwordHash String
@@ -43,13 +43,13 @@ model User {
 
 // A machine the user registered via `orbit register`. Claude Code runs here.
 model Runner {
-  id              String       @id @default(uuid())
+  id              String       @id @default(uuid(7)) @db.Uuid
   name            String
   // User-set friendly name shown in the UI. `name` stays the machine-reported
   // identity used to match re-registrations, so renaming never creates a dup.
   displayName     String?
   hostname        String?
-  ownerId         String
+  ownerId         String       @db.Uuid
   owner           User         @relation(fields: [ownerId], references: [id])
   labels          String[]     @default([])
   status          RunnerStatus @default(OFFLINE)
@@ -66,9 +66,9 @@ model Runner {
 
 // One-time token a user generates in the UI and passes to `orbit register`.
 model EnrollmentToken {
-  id        String    @id @default(uuid())
+  id        String    @id @default(uuid(7)) @db.Uuid
   tokenHash String    @unique
-  ownerId   String
+  ownerId   String    @db.Uuid
   owner     User      @relation(fields: [ownerId], references: [id])
   label     String?
   expiresAt DateTime?
@@ -80,7 +80,7 @@ model EnrollmentToken {
 // The CLI polls with the secret deviceCode; a logged-in user approves the machine
 // in the browser by the short, human-typable userCode.
 model DeviceEnrollment {
-  id             String    @id @default(uuid())
+  id             String    @id @default(uuid(7)) @db.Uuid
   deviceCodeHash String    @unique // hash of the secret the CLI polls with
   userCode       String    @unique // short code shown in the browser + terminal
   name           String
@@ -92,12 +92,12 @@ model DeviceEnrollment {
   // Agent keys requested at device/start; approval mints one Runner per agent,
   // each named `<name>/<agentKey>`. Empty -> a single Runner named `name`.
   agents         String[]  @default([])
-  runnerId       String? // first minted runner — kept for older CLIs
+  runnerId       String?   @db.Uuid // first minted runner — kept for older CLIs
   runnerToken    String? // raw runner credential, delivered to the CLI once then cleared
   // All minted runner credentials [{agentKey,runnerId,runnerToken,name}],
   // delivered to the CLI once on poll then wiped (mirrors runnerToken above).
   runners        Json?
-  approvedById   String?
+  approvedById   String?   @db.Uuid
   approvedAt     DateTime?
   expiresAt      DateTime
   createdAt      DateTime  @default(now())
@@ -105,7 +105,7 @@ model DeviceEnrollment {
 
 // An agent definition: how to drive Claude Code for a class of sessions.
 model Agent {
-  id                 String   @id @default(uuid())
+  id                 String   @id @default(uuid(7)) @db.Uuid
   name               String
   description        String?
   model              String   @default("claude-sonnet-4-6")
@@ -118,10 +118,10 @@ model Agent {
   maxBudgetUsd       Float?
   mcpConfig          Json?
   // routing: bind to a specific runner and/or match runner labels
-  targetRunnerId     String?
+  targetRunnerId     String?  @db.Uuid
   targetLabels       String[] @default([])
   enabled            Boolean  @default(true)
-  ownerId            String
+  ownerId            String   @db.Uuid
   owner              User     @relation(fields: [ownerId], references: [id])
   createdAt          DateTime @default(now())
 
@@ -134,22 +134,22 @@ model Agent {
 // driven by one claude process on a runner. Chat events, user-input turns, tool
 // calls, and llm usage hang directly off the Session.
 model Session {
-  id               String  @id @default(uuid())
-  title            String
-  prompt           String // first-turn seed
-  ownerId          String
-  owner            User    @relation("SessionOwner", fields: [ownerId], references: [id])
-  creatorId        String
-  creator          User    @relation("SessionCreator", fields: [creatorId], references: [id])
-  assignedRunnerId String?
-  assignedRunner   Runner? @relation(fields: [assignedRunnerId], references: [id])
-  agentId          String?
-  agent            Agent?  @relation(fields: [agentId], references: [id])
+  id                String    @id @default(uuid(7)) @db.Uuid
+  title             String
+  prompt            String // first-turn seed
+  ownerId           String    @db.Uuid
+  owner             User      @relation("SessionOwner", fields: [ownerId], references: [id])
+  creatorId         String    @db.Uuid
+  creator           User      @relation("SessionCreator", fields: [creatorId], references: [id])
+  assignedRunnerId  String?   @db.Uuid
+  assignedRunner    Runner?   @relation(fields: [assignedRunnerId], references: [id])
+  agentId           String?   @db.Uuid
+  agent             Agent?    @relation(fields: [agentId], references: [id])
   // Pre-generated Claude session id: --session-id on first spawn, --resume on
   // reclaim/respawn.
-  claudeSessionId  String?
-  model            String? // per-session override; null -> agent -> server default
-  permissionMode   String?
+  claudeSessionId   String?
+  model             String? // per-session override; null -> agent -> server default
+  permissionMode    String?
   // PENDING = created, claimable by its assigned runner.
   status            RunStatus @default(PENDING)
   // billing, accrued per turn
@@ -180,8 +180,8 @@ model Session {
 
 // Normalized streamed events for a session (replay + live SSE).
 model RunEvent {
-  id        String   @id @default(uuid())
-  sessionId String
+  id        String   @id @default(uuid(7)) @db.Uuid
+  sessionId String   @db.Uuid
   session   Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   seq       Int
   type      String
@@ -194,8 +194,8 @@ model RunEvent {
 
 // Audit of every tool the agent invoked during a session.
 model ToolCall {
-  id         String    @id @default(uuid())
-  sessionId  String
+  id         String    @id @default(uuid(7)) @db.Uuid
+  sessionId  String    @db.Uuid
   session    Session   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   name       String
   input      Json?
@@ -209,8 +209,8 @@ model ToolCall {
 
 // Per-model token/cost detail for billing rollups.
 model LlmUsage {
-  id                       String   @id @default(uuid())
-  sessionId                String
+  id                       String   @id @default(uuid(7)) @db.Uuid
+  sessionId                String   @db.Uuid
   session                  Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   model                    String
   inputTokens              Int      @default(0)
@@ -227,8 +227,8 @@ model LlmUsage {
 // The runner long-polls these via GET /runner/sessions/:id/inbox; delivery is
 // at-least-once with a lease + idempotency on (sessionId, clientTurnId).
 model ConversationTurn {
-  id              String    @id @default(uuid())
-  sessionId       String
+  id              String    @id @default(uuid(7)) @db.Uuid
+  sessionId       String    @db.Uuid
   session         Session   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   seq             Int // server-assigned, per-session delivery ordering
   clientTurnId    String // client-supplied idempotency key
@@ -247,8 +247,8 @@ model ConversationTurn {
 
 // Lightweight activity feed (no FKs, append-only).
 model Activity {
-  id        String   @id @default(uuid())
-  actorId   String?
+  id        String   @id @default(uuid(7)) @db.Uuid
+  actorId   String?  @db.Uuid
   type      String
   payload   Json?
   createdAt DateTime @default(now())
