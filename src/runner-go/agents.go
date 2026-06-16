@@ -67,35 +67,57 @@ func detectAgents() []agentTool {
 	return found
 }
 
-// selectAgents asks which agents to register. Interactively it lists every
-// known agent with its install status and defaults to all; a non-interactive
-// caller (no TTY) can't be prompted, so it gets the installed agents unchanged.
+// selectAgents asks which agents to register. Interactively it shows a
+// checkbox list (↑/↓ to move, space to toggle, Enter to confirm) defaulting to
+// all; if the terminal can't enter raw mode it falls back to a numbered
+// line-based prompt. A non-interactive caller (no TTY) can't be prompted, so it
+// gets the installed agents unchanged.
 func selectAgents() []agentTool {
 	if !interactive() {
 		return detectAgents()
 	}
 
+	labels := make([]string, len(knownAgents))
+	checked := make([]bool, len(knownAgents))
+	for i, a := range knownAgents {
+		state := "not installed"
+		if isInstalled(a) {
+			state = "installed"
+		}
+		labels[i] = fmt.Sprintf("%s (%s)", a.label, state)
+		checked[i] = true // default: register all
+	}
+
+	idx, ok := multiSelect("Select agents to register:", labels, checked)
+	if !ok {
+		idx = promptAgentNumbers(len(knownAgents))
+	}
+	out := make([]agentTool, 0, len(idx))
+	for _, i := range idx {
+		out = append(out, knownAgents[i])
+	}
+	return out
+}
+
+// promptAgentNumbers is the line-based fallback used when the terminal can't
+// drive the interactive selector. Enter selects all; otherwise the user types
+// the numbers to register. Returns 0-based indices into knownAgents.
+func promptAgentNumbers(n int) []int {
 	fmt.Println("\nAgents:")
 	for i, a := range knownAgents {
 		state := "not installed"
 		if isInstalled(a) {
 			state = "installed"
 		}
-		fmt.Printf("  %d. [x] %s (%s)\n", i+1, a.label, state)
+		fmt.Printf("  %d. %s (%s)\n", i+1, a.label, state)
 	}
 	for {
 		fmt.Print("Press Enter to register all, or type the numbers to register (e.g. 1,2): ")
 		line, _ := stdinReader.ReadString('\n')
-		idx, ok := parseAgentSelection(line, len(knownAgents))
-		if !ok {
-			fmt.Println("  please enter numbers from the list (e.g. 1,2), or press Enter for all")
-			continue
+		if idx, ok := parseAgentSelection(line, n); ok {
+			return idx
 		}
-		out := make([]agentTool, 0, len(idx))
-		for _, i := range idx {
-			out = append(out, knownAgents[i])
-		}
-		return out
+		fmt.Println("  please enter numbers from the list (e.g. 1,2), or press Enter for all")
 	}
 }
 
