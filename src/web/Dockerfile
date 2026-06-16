@@ -14,6 +14,8 @@ COPY src/web/package.json ./src/web/
 RUN npm ci
 
 COPY src/web ./src/web
+COPY src/shared ./src/shared
+RUN npm run build -w @orbit/shared
 RUN npm run build -w @orbit/web
 
 # ───────────────────────── runner binaries (Go, static) ─────────────────────────
