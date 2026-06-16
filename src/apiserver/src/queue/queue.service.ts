@@ -93,8 +93,29 @@ export class QueueService {
         agentId: task.agentId,
         status: 'RUNNING',
         startedAt: new Date(),
+        interactive: task.interactive,
+        // For interactive sessions we spawn claude with --session-id = sessionUuid,
+        // so the Claude session id is known up front (no need to scrape it later).
+        claudeSessionId: task.interactive ? task.sessionUuid : undefined,
+        lastTurnAt: task.interactive ? new Date() : undefined,
       },
     });
+    if (task.interactive) {
+      // The UI subscribes to the conversation's single live run; seed the first
+      // turn from the task prompt so every turn (incl. the first) flows through
+      // the same inbox + turn-complete path.
+      await this.prisma.task.update({ where: { id: task.id }, data: { activeRunId: run.id } });
+      await this.prisma.conversationTurn.create({
+        data: {
+          runId: run.id,
+          seq: 1,
+          clientTurnId: `initial-${run.id}`,
+          kind: 'message',
+          content: task.prompt,
+          status: 'PENDING',
+        },
+      });
+    }
     const agent = task.agent;
     return {
       runId: run.id,
@@ -113,6 +134,9 @@ export class QueueService {
         maxBudgetUsd: agent?.maxBudgetUsd ?? undefined,
         mcpConfig: (agent?.mcpConfig as Record<string, unknown> | null) ?? undefined,
       },
+      interactive: task.interactive || undefined,
+      sessionUuid: task.interactive ? (task.sessionUuid ?? undefined) : undefined,
+      maxSeq: task.interactive ? 0 : undefined,
     };
   }
 }

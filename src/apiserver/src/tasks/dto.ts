@@ -29,6 +29,12 @@ export class CreateTaskDto {
   @IsOptional() @IsBoolean() interactive?: boolean;
 }
 
+/** Body of POST /tasks/:id/turns — a user message for a live interactive session. */
+export class RunTurnDto {
+  @IsString() @MinLength(1) clientTurnId!: string;
+  @IsString() @MinLength(1) content!: string;
+}
+
 export class UpdateTaskDto {
   @IsOptional() @IsString() @MinLength(1) title?: string;
   @IsOptional() @IsString() prompt?: string;

@@ -4,6 +4,7 @@ import {
   Get,
   MessageEvent,
   Param,
+  Query,
   Sse,
   UseGuards,
 } from '@nestjs/common';
@@ -40,7 +41,15 @@ export class RunsController {
   /** Replays historical run events, then streams live ones over SSE. */
   @AllowQueryToken()
   @Sse(':id/events')
-  events(@CurrentUser() user: AuthUser, @Param('id') id: string): Observable<MessageEvent> {
+  events(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Query('sinceSeq') sinceSeq?: string,
+  ): Observable<MessageEvent> {
+    // On reconnect, replay only events after sinceSeq (the client also dedups by
+    // seq, but this avoids re-sending a long interactive transcript every time).
+    const since = Number(sinceSeq);
+    const seqFilter = Number.isFinite(since) && since > 0 ? { gt: since } : undefined;
     // Gate the stream on ownership BEFORE any event is read or the live hub is
     // subscribed, so a non-owner can never see another user's transcript
     // (assistant text, tool inputs, shell output, secrets surfaced by tools).
@@ -53,7 +62,10 @@ export class RunsController {
       switchMap((run) => {
         if (!run) return throwError(() => new ForbiddenException('run not found'));
         const history$ = from(
-          this.prisma.runEvent.findMany({ where: { runId: id }, orderBy: { seq: 'asc' } }),
+          this.prisma.runEvent.findMany({
+            where: { runId: id, ...(seqFilter ? { seq: seqFilter } : {}) },
+            orderBy: { seq: 'asc' },
+          }),
         ).pipe(concatMap((rows) => from(rows)));
         const live$ = this.realtime.streamForRun(id);
         return concat(history$, live$);
