@@ -48,9 +48,11 @@ func TestDetectAgents(t *testing.T) {
 		t.Skip("PATH executable-bit lookup is unix-specific")
 	}
 	// Point PATH at a temp dir and drop in fake CLIs to assert detection +
-	// ordering (knownAgents order, not install order).
+	// ordering (knownAgents order, not install order). HOME is a fresh temp dir
+	// too, so agentPath's ~/.local/bin fallback can't pick up a real install.
 	dir := t.TempDir()
 	t.Setenv("PATH", dir)
+	t.Setenv("HOME", t.TempDir())
 	fake := func(name string) {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\n"), 0o755); err != nil {
 			t.Fatal(err)
