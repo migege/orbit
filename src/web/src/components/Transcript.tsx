@@ -1,5 +1,23 @@
-import { DownOutlined, RightOutlined } from '@ant-design/icons';
-import { useMemo, useState } from 'react';
+import {
+  ApiOutlined,
+  CheckCircleFilled,
+  CheckSquareOutlined,
+  CloseCircleFilled,
+  CodeOutlined,
+  DownOutlined,
+  EditOutlined,
+  FileAddOutlined,
+  FileTextOutlined,
+  FolderOpenOutlined,
+  GlobalOutlined,
+  LoadingOutlined,
+  MinusCircleOutlined,
+  PartitionOutlined,
+  RightOutlined,
+  SearchOutlined,
+  ToolOutlined,
+} from '@ant-design/icons';
+import { memo, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -109,18 +127,25 @@ function buildNodes(events: RunEvent[]): Node[] {
   return roots;
 }
 
-export function Transcript({ events }: { events: RunEvent[] }) {
+// `live` indicates the session is still streaming, so a tool_use without a
+// result yet renders a spinner rather than a (misleading) terminal marker.
+//
+// memo'd on (events, live): streaming text/thinking deltas and the 4s/15s status
+// polls all live in sibling state on AgentView and don't touch `events`, so the
+// whole transcript subtree is skipped on those re-renders — it only rebuilds when
+// an actual event is appended.
+export const Transcript = memo(function Transcript({ events, live }: { events: RunEvent[]; live?: boolean }) {
   const nodes = useMemo(() => buildNodes(events), [events]);
   return (
     <>
       {nodes.map((n) => (
-        <NodeView key={n.seq} node={n} />
+        <NodeView key={n.seq} node={n} live={live} />
       ))}
     </>
   );
-}
+});
 
-function NodeView({ node }: { node: Node }) {
+function NodeView({ node, live }: { node: Node; live?: boolean }) {
   switch (node.kind) {
     case 'user':
       // User input is kept verbatim (pre-wrap), not Markdown-parsed, so a literal
@@ -135,7 +160,7 @@ function NodeView({ node }: { node: Node }) {
     case 'thinking':
       return <Thinking text={node.text} />;
     case 'tool':
-      return <ToolView node={node} />;
+      return <ToolView node={node} live={live} />;
     case 'result':
       return <ToolResult content={node.content} isError={node.isError} />;
     case 'divider':
@@ -148,7 +173,10 @@ function NodeView({ node }: { node: Node }) {
 }
 
 // ── Markdown ────────────────────────────────────────────────────────────────
-export function MD({ children }: { children: string }) {
+// memo'd on the text string: when a new event is appended the tree is rebuilt and
+// every node object is new, but unchanged text compares equal by value, so the
+// react-markdown AST isn't re-parsed for messages that didn't change.
+export const MD = memo(function MD({ children }: { children: string }) {
   return (
     <div className="md">
       <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
@@ -156,7 +184,7 @@ export function MD({ children }: { children: string }) {
       </Markdown>
     </div>
   );
-}
+});
 
 // ── thinking (collapsible) ──────────────────────────────────────────────────
 function Thinking({ text }: { text: string }) {
@@ -176,51 +204,106 @@ function Thinking({ text }: { text: string }) {
 }
 
 // ── tool calls ──────────────────────────────────────────────────────────────
-function ToolView({ node }: { node: ToolNode }) {
-  const { label, summary, body } = describeTool(node.name, node.input);
+// Each tool renders as a single folded row (icon · name · summary · status);
+// clicking expands to show the call body, any sub-agent transcript, and the
+// result. Failed calls open by default so an error is never hidden behind a fold.
+function ToolView({ node, live }: { node: ToolNode; live?: boolean }) {
+  // node.input keeps its reference across tree rebuilds (the source event object is
+  // reused when events are appended), so this holds the computed body/icon — and the
+  // <Diff>/<MD>/<KeyVals> elements inside it — stable instead of rebuilding each append.
+  const { label, summary, summaryMono, body, icon } = useMemo(
+    () => describeTool(node.name, node.input),
+    [node.name, node.input],
+  );
   const isTask = node.name === 'Task';
+  const hasDetail = !!body || node.children.length > 0 || !!node.result;
+  const [open, setOpen] = useState(!!node.result?.isError);
   return (
     <div className={`chat-tool-card${isTask ? ' chat-tool-task' : ''}`}>
-      <div className="chat-tool-head">
+      <div
+        className={`chat-tool-row${hasDetail ? '' : ' no-detail'}`}
+        onClick={hasDetail ? () => setOpen((o) => !o) : undefined}
+      >
+        {hasDetail && (
+          <span className="chat-tool-caret">{open ? <DownOutlined /> : <RightOutlined />}</span>
+        )}
+        <span className="chat-tool-icon">{icon}</span>
         <span className="chat-tool-name">{label}</span>
-        {summary && <span className="chat-tool-summary">{summary}</span>}
+        {summary && (
+          <span className={`chat-tool-summary${summaryMono ? ' mono' : ''}`}>{summary}</span>
+        )}
+        <ToolStatus node={node} live={live} />
       </div>
-      {body && <div className="chat-tool-body">{body}</div>}
-      {node.children.length > 0 && (
-        <div className="chat-subagent">
-          {node.children.map((c) => (
-            <NodeView key={c.seq} node={c} />
-          ))}
+      {hasDetail && open && (
+        <div className="chat-tool-detail">
+          {body && <div className="chat-tool-body">{body}</div>}
+          {node.children.length > 0 && (
+            <div className="chat-subagent">
+              {node.children.map((c) => (
+                <NodeView key={c.seq} node={c} live={live} />
+              ))}
+            </div>
+          )}
+          {node.result && (
+            <ToolResult content={node.result.content} isError={node.result.isError} compact markdown={isTask} />
+          )}
         </div>
-      )}
-      {node.result && (
-        <ToolResult content={node.result.content} isError={node.result.isError} compact markdown={isTask} />
       )}
     </div>
   );
 }
 
-// describeTool maps a tool name + input to a compact header and an optional body,
-// roughly matching how Claude Code Web renders each built-in tool.
-function describeTool(name: string, input: any): { label: string; summary?: string; body?: ReactNode } {
+// Folded-row status: spinner while a result is still pending on a live session,
+// a neutral dot for an unfinished call on an ended session (e.g. cancelled),
+// otherwise success / error.
+function ToolStatus({ node, live }: { node: ToolNode; live?: boolean }) {
+  if (!node.result) {
+    return live ? (
+      <LoadingOutlined className="chat-tool-status running" spin />
+    ) : (
+      <MinusCircleOutlined className="chat-tool-status pending" />
+    );
+  }
+  return node.result.isError ? (
+    <CloseCircleFilled className="chat-tool-status err" />
+  ) : (
+    <CheckCircleFilled className="chat-tool-status ok" />
+  );
+}
+
+type ToolDesc = {
+  label: string;
+  summary?: string;
+  summaryMono?: boolean; // render the summary in monospace (paths/patterns), not prose
+  body?: ReactNode;
+  icon: ReactNode;
+};
+
+// describeTool maps a tool name + input to a folded-row label/summary/icon and an
+// optional expanded body, roughly matching how Claude Code Web renders each tool.
+function describeTool(name: string, input: any): ToolDesc {
   const i = input ?? {};
   switch (name) {
     case 'Bash':
-      return { label: 'Bash', summary: i.description, body: <Pre text={String(i.command ?? '')} /> };
+      return { label: 'Bash', icon: <CodeOutlined />, summary: i.description, body: <Pre text={String(i.command ?? '')} prompt /> };
     case 'Read':
-      return { label: 'Read', summary: fileLabel(i.file_path, i.offset, i.limit) };
+      return { label: 'Read', icon: <FileTextOutlined />, summary: fileLabel(i.file_path, i.offset, i.limit), summaryMono: true };
     case 'Write':
       return {
         label: 'Write',
+        icon: <FileAddOutlined />,
         summary: i.file_path,
+        summaryMono: true,
         body: i.content ? <Pre text={String(i.content)} /> : undefined,
       };
     case 'Edit':
-      return { label: 'Edit', summary: i.file_path, body: <Diff oldStr={i.old_string} newStr={i.new_string} /> };
+      return { label: 'Edit', icon: <EditOutlined />, summary: i.file_path, summaryMono: true, body: <Diff oldStr={i.old_string} newStr={i.new_string} /> };
     case 'MultiEdit':
       return {
         label: 'MultiEdit',
-        summary: `${i.file_path ?? ''} · ${(i.edits?.length ?? 0)} edits`,
+        icon: <EditOutlined />,
+        summary: `${i.file_path ?? ''} · ${i.edits?.length ?? 0} edits`,
+        summaryMono: true,
         body: (
           <>
             {(i.edits ?? []).map((e: any, k: number) => (
@@ -230,18 +313,21 @@ function describeTool(name: string, input: any): { label: string; summary?: stri
         ),
       };
     case 'Glob':
-      return { label: 'Glob', summary: [i.pattern, i.path].filter(Boolean).join('  ·  ') };
+      return { label: 'Glob', icon: <FolderOpenOutlined />, summary: [i.pattern, i.path].filter(Boolean).join('  ·  '), summaryMono: true };
     case 'Grep':
-      return { label: 'Grep', summary: [i.pattern, i.path, i.glob].filter(Boolean).join('  ·  ') };
+      return { label: 'Grep', icon: <SearchOutlined />, summary: [i.pattern, i.path, i.glob].filter(Boolean).join('  ·  '), summaryMono: true };
     case 'TodoWrite':
-      return { label: 'Todos', body: <Todos todos={i.todos ?? []} /> };
+      return { label: 'Todos', icon: <CheckSquareOutlined />, body: <Todos todos={i.todos ?? []} /> };
     case 'WebFetch':
-      return { label: 'WebFetch', summary: i.url };
+      return { label: 'WebFetch', icon: <GlobalOutlined />, summary: i.url, summaryMono: true };
     case 'WebSearch':
-      return { label: 'WebSearch', summary: i.query };
+      return { label: 'WebSearch', icon: <SearchOutlined />, summary: i.query };
+    case 'ToolSearch':
+      return { label: 'ToolSearch', icon: <ApiOutlined />, summary: i.query, summaryMono: true, body: hasKeys(i) ? <KeyVals obj={i} /> : undefined };
     case 'Task':
       return {
         label: `Task${i.subagent_type ? ` · ${i.subagent_type}` : ''}`,
+        icon: <PartitionOutlined />,
         summary: i.description,
         body: i.prompt ? (
           <div className="chat-tool-prompt">
@@ -251,9 +337,15 @@ function describeTool(name: string, input: any): { label: string; summary?: stri
       };
     default:
       if (name.startsWith('mcp__')) {
-        return { label: name.replace(/^mcp__/, '').replace(/__/g, ' · '), body: <Pre text={safeJson(i)} /> };
+        return {
+          label: name.replace(/^mcp__/, '').replace(/__/g, ' · '),
+          icon: <ApiOutlined />,
+          summary: kvSummary(i),
+          summaryMono: true,
+          body: hasKeys(i) ? <KeyVals obj={i} /> : undefined,
+        };
       }
-      return { label: name, body: hasKeys(i) ? <Pre text={safeJson(i)} /> : undefined };
+      return { label: name, icon: <ToolOutlined />, summary: kvSummary(i), summaryMono: true, body: hasKeys(i) ? <KeyVals obj={i} /> : undefined };
   }
 }
 
@@ -281,7 +373,10 @@ function ToolResult({
       ) : markdown && !isError ? (
         <MD>{text}</MD>
       ) : (
-        <Pre text={text} threshold={8} muted />
+        <>
+          {compact && <div className="chat-result-label">{isError ? 'error' : 'output'}</div>}
+          <Pre text={text} threshold={12} muted />
+        </>
       )}
     </div>
   );
@@ -290,14 +385,17 @@ function ToolResult({
 // ── primitives ──────────────────────────────────────────────────────────────
 // Pre renders monospace text and collapses past `threshold` lines (Read output,
 // long commands, JSON blobs) so one tool call can't flood the transcript.
+// `prompt` prefixes a shell `$` for Bash commands.
 function Pre({
   text,
   threshold = 16,
   muted,
+  prompt,
 }: {
   text: string;
   threshold?: number;
   muted?: boolean;
+  prompt?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const lines = text.split('\n');
@@ -305,8 +403,11 @@ function Pre({
   const long = hidden > 0;
   const shown = open || !long ? text : lines.slice(0, threshold).join('\n');
   return (
-    <div className={muted ? 'chat-pre-wrap muted' : 'chat-pre-wrap'}>
-      <pre className="chat-pre">{shown}</pre>
+    <div className={`chat-pre-wrap${muted ? ' muted' : ''}${prompt ? ' cmd' : ''}`}>
+      <pre className="chat-pre">
+        {prompt && <span className="chat-cmd-prompt">$ </span>}
+        {shown}
+      </pre>
       {long && (
         <button className="chat-more" onClick={() => setOpen((o) => !o)}>
           {open ? 'Show less' : `Show ${hidden} more lines`}
@@ -316,24 +417,110 @@ function Pre({
   );
 }
 
+// ── edit diff ─────────────────────────────────────────────────────────────--
+type DiffRow = { type: 'ctx' | 'del' | 'add'; text: string };
+type RenderRow = DiffRow | { type: 'gap'; n: number };
+
+// Line-level LCS diff: unchanged lines become context, so a one-line change in a
+// 30-line block shows ~3 context lines around it instead of 30 red + 30 green.
+function lineDiff(oldStr: string, newStr: string): DiffRow[] {
+  const a = oldStr.split('\n');
+  const b = newStr.split('\n');
+  const n = a.length;
+  const m = b.length;
+  // Bail out to a plain del/add dump on pathologically large inputs — the LCS
+  // table is O(n·m) and not worth it for a giant generated edit.
+  if (n * m > 250_000) {
+    return [...a.map((t): DiffRow => ({ type: 'del', text: t })), ...b.map((t): DiffRow => ({ type: 'add', text: t }))];
+  }
+  const dp: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+  for (let x = n - 1; x >= 0; x--) {
+    for (let y = m - 1; y >= 0; y--) {
+      dp[x][y] = a[x] === b[y] ? dp[x + 1][y + 1] + 1 : Math.max(dp[x + 1][y], dp[x][y + 1]);
+    }
+  }
+  const rows: DiffRow[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) {
+      rows.push({ type: 'ctx', text: a[i] });
+      i++;
+      j++;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      rows.push({ type: 'del', text: a[i++] });
+    } else {
+      rows.push({ type: 'add', text: b[j++] });
+    }
+  }
+  while (i < n) rows.push({ type: 'del', text: a[i++] });
+  while (j < m) rows.push({ type: 'add', text: b[j++] });
+  return rows;
+}
+
+// Collapse long runs of unchanged context, keeping `ctx` lines next to each
+// change so the diff reads like a unified hunk rather than the whole file.
+function collapseCtx(rows: DiffRow[], ctx: number): RenderRow[] {
+  const out: RenderRow[] = [];
+  let i = 0;
+  while (i < rows.length) {
+    if (rows[i].type !== 'ctx') {
+      out.push(rows[i]);
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j < rows.length && rows[j].type === 'ctx') j++;
+    const run = rows.slice(i, j);
+    const head = i === 0 ? 0 : ctx; // no leading context before the first change
+    const tail = j === rows.length ? 0 : ctx; // none after the last change
+    if (run.length > head + tail + 1) {
+      for (let k = 0; k < head; k++) out.push(run[k]);
+      out.push({ type: 'gap', n: run.length - head - tail });
+      for (let k = run.length - tail; k < run.length; k++) out.push(run[k]);
+    } else {
+      for (const r of run) out.push(r);
+    }
+    i = j;
+  }
+  return out;
+}
+
 function Diff({ oldStr, newStr }: { oldStr?: string; newStr?: string }) {
-  // An empty side (pure insertion or deletion) renders no rows — '' .split('\n')
-  // would otherwise yield one misleading blank -/+ line.
-  const del = oldStr ? String(oldStr).split('\n') : [];
-  const add = newStr ? String(newStr).split('\n') : [];
+  const rows = useMemo(
+    () => collapseCtx(lineDiff(String(oldStr ?? ''), String(newStr ?? '')), 3),
+    [oldStr, newStr],
+  );
+  // Hunk-relative line numbers (Edit payloads carry no file offset, so these can't
+  // be real file lines) — a light gutter just to keep the two sides aligned.
+  let oldNo = 0;
+  let newNo = 0;
   return (
-    <pre className="chat-diff">
-      {del.map((l, k) => (
-        <div key={`d${k}`} className="diff-del">
-          - {l}
-        </div>
-      ))}
-      {add.map((l, k) => (
-        <div key={`a${k}`} className="diff-add">
-          + {l}
-        </div>
-      ))}
-    </pre>
+    <div className="chat-diff">
+      {rows.map((r, k) => {
+        if (r.type === 'gap') {
+          oldNo += r.n;
+          newNo += r.n;
+          return (
+            <div key={k} className="diff-line diff-gap">
+              <span className="diff-gutter" />
+              <span className="diff-text">⋯ {r.n} unchanged {r.n === 1 ? 'line' : 'lines'} ⋯</span>
+            </div>
+          );
+        }
+        const o = r.type !== 'add' ? ++oldNo : undefined;
+        const nw = r.type !== 'del' ? ++newNo : undefined;
+        const sign = r.type === 'del' ? '-' : r.type === 'add' ? '+' : ' ';
+        return (
+          <div key={k} className={`diff-line diff-${r.type}`}>
+            <span className="diff-ln">{o ?? ''}</span>
+            <span className="diff-ln">{nw ?? ''}</span>
+            <span className="diff-sign">{sign}</span>
+            <span className="diff-text">{r.text}</span>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
@@ -351,8 +538,42 @@ function Todos({ todos }: { todos: any[] }) {
   );
 }
 
+// KeyVals renders an unknown tool's input as a compact key/value table instead of
+// a raw JSON blob — scalars inline, nested objects/arrays as collapsible JSON.
+function KeyVals({ obj }: { obj: any }) {
+  const entries = obj && typeof obj === 'object' ? Object.entries(obj) : [];
+  return (
+    <div className="chat-kv">
+      {entries.map(([k, v]) => (
+        <div className="kv-row" key={k}>
+          <span className="kv-key">{k}</span>
+          {v !== null && typeof v === 'object' ? (
+            <Pre text={safeJson(v)} threshold={12} muted />
+          ) : (
+            <span className="kv-val">{String(v)}</span>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ── helpers ─────────────────────────────────────────────────────────────────
 const hasKeys = (o: any): boolean => !!o && typeof o === 'object' && Object.keys(o).length > 0;
+
+// Pick a representative field from an unknown tool's input for the folded summary.
+const SUMMARY_KEYS = ['query', 'name', 'file_path', 'path', 'url', 'pattern', 'command'];
+function kvSummary(o: any): string | undefined {
+  if (!o || typeof o !== 'object') return undefined;
+  for (const k of SUMMARY_KEYS) {
+    if (typeof o[k] === 'string' && o[k]) return o[k];
+  }
+  for (const v of Object.values(o)) {
+    if (typeof v === 'string' && v) return v;
+    if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+  }
+  return undefined;
+}
 
 function fileLabel(path?: string, offset?: number, limit?: number): string | undefined {
   if (!path) return undefined;

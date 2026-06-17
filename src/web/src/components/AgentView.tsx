@@ -346,7 +346,7 @@ export function AgentView({ runner }: { runner: Runner }) {
             ) : (
               <div className="chat-note">Starting session…</div>
             ))}
-          <Transcript events={events} />
+          <Transcript events={events} live={live} />
           {streamingThink && <div className="chat-think-stream chat-streaming">💭 {streamingThink}</div>}
           {streamingText && <div className="chat-msg chat-assistant chat-streaming">{streamingText}</div>}
           {selected &&
