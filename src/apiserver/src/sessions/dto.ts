@@ -7,6 +7,8 @@ export interface CreateSessionDto {
    *  the runner is then derived from the agent's machine. */
   assignedRunnerId?: string;
   agentId?: string;
+  /** Optional parent work item this session runs under. */
+  taskId?: string;
   /** Per-session overrides; null falls back to the agent, then a server default. */
   model?: string;
   permissionMode?: string;

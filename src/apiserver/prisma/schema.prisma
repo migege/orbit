@@ -35,6 +35,24 @@ enum RunnerStatus {
   @@map("runner_status")
 }
 
+enum TaskStatus {
+  OPEN
+  IN_PROGRESS
+  DONE
+  CANCELLED
+
+  @@map("task_status")
+}
+
+// Who/what authored a Task. The creator is a polymorphic reference (no FK),
+// so a Task can be created by a user or by an agent (agent-spawned subtasks).
+enum CreatorType {
+  USER
+  AGENT
+
+  @@map("creator_type")
+}
+
 model User {
   id           String   @id @default(uuid(7)) @db.Uuid
   email        String   @unique
@@ -47,6 +65,8 @@ model User {
   enrollmentTokens EnrollmentToken[]
   ownedSessions    Session[]         @relation("SessionOwner")
   createdSessions  Session[]         @relation("SessionCreator")
+  ownedTasks       Task[] // tasks this user owns (tenant scope)
+  taskComments     TaskComment[]
 
   @@map("user")
 }
@@ -151,7 +171,8 @@ model Agent {
   owner              User     @relation(fields: [ownerId], references: [id])
   createdAt          DateTime @default(now()) @map("created_at")
 
-  sessions Session[]
+  sessions      Session[]
+  assignedTasks Task[] // tasks assigned to this agent to execute
 
   @@index([ownerId])
   @@index([runnerId])
@@ -173,6 +194,9 @@ model Session {
   assignedRunner    Runner?   @relation(fields: [assignedRunnerId], references: [id])
   agentId           String?   @map("agent_id") @db.Uuid
   agent             Agent?    @relation(fields: [agentId], references: [id])
+  // Optional parent work item; deleting the Task detaches but keeps the session.
+  taskId            String?   @map("task_id") @db.Uuid
+  task              Task?     @relation(fields: [taskId], references: [id], onDelete: SetNull)
   // Pre-generated Claude session id: --session-id on first spawn, --resume on
   // reclaim/respawn.
   claudeSessionId   String?   @map("claude_session_id")
@@ -294,4 +318,49 @@ model Activity {
   createdAt DateTime @default(now()) @map("created_at")
 
   @@map("activity")
+}
+
+// A human-facing work item (unrelated to the old execution-Task dropped in 0006).
+// Created by a user or an agent, optionally assigned to an agent to execute; the
+// agent's runs hang off it as Sessions.
+model Task {
+  id          String      @id @default(uuid(7)) @db.Uuid
+  title       String
+  description String?
+  status      TaskStatus  @default(OPEN)
+  // Tenant scope: list/authorization always filter by this column (like agents/sessions).
+  ownerId     String      @map("owner_id") @db.Uuid
+  owner       User        @relation(fields: [ownerId], references: [id])
+  // Polymorphic creator (no FK, cf. Activity.actorId): who/what authored the task.
+  creatorType CreatorType @map("creator_type")
+  creatorId   String      @map("creator_id") @db.Uuid
+  // The agent assigned to execute it (real FK, optional).
+  assigneeId  String?     @map("assignee_id") @db.Uuid
+  assignee    Agent?      @relation(fields: [assigneeId], references: [id])
+  dueDate     DateTime?   @map("due_date")
+  createdAt   DateTime    @default(now()) @map("created_at")
+  updatedAt   DateTime    @updatedAt @map("updated_at")
+
+  comments TaskComment[]
+  sessions Session[] // agent sessions run under this task (one Task -> many Session)
+
+  @@index([ownerId])
+  @@index([assigneeId])
+  @@index([status])
+  @@index([creatorType, creatorId])
+  @@map("task")
+}
+
+// Comments on a Task (dedicated table; append-only MVP: create/list/delete).
+model TaskComment {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  taskId    String   @map("task_id") @db.Uuid
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  authorId  String   @map("author_id") @db.Uuid
+  author    User     @relation(fields: [authorId], references: [id])
+  body      String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([taskId, createdAt])
+  @@map("task_comment")
 }

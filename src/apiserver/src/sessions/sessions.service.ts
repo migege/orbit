@@ -63,6 +63,14 @@ export class SessionsService {
       throw new BadRequestException('pick an agent bound to a runner, or pass assignedRunnerId');
     }
     await this.assertOwnedRefs(ownerId, { agentId: dto.agentId, assignedRunnerId });
+    // Linking to a task: it must belong to the same user (no cross-tenant linking).
+    if (dto.taskId) {
+      const task = await this.prisma.task.findFirst({
+        where: { id: dto.taskId, ownerId },
+        select: { id: true },
+      });
+      if (!task) throw new ForbiddenException('task not found');
+    }
     // PENDING so the assigned runner claims it and spawns the long-lived claude
     // process; it then awaits turns via the inbox.
     const session = await this.prisma.session.create({
@@ -77,6 +85,7 @@ export class SessionsService {
         effort: dto.effort,
         agentId: dto.agentId,
         assignedRunnerId,
+        taskId: dto.taskId,
         creatorId: ownerId,
         ownerId,
       },

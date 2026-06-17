@@ -51,3 +51,17 @@ export enum RunEventType {
   TURN_END = 'turn_end', // one turn finished; session parks for the next input
   INTERRUPT = 'interrupt', // a turn was interrupted by the user
 }
+
+/** Lifecycle of a human-facing work item (Task). */
+export enum TaskStatus {
+  OPEN = 'OPEN',
+  IN_PROGRESS = 'IN_PROGRESS',
+  DONE = 'DONE',
+  CANCELLED = 'CANCELLED',
+}
+
+/** Who/what authored a Task (polymorphic creator). */
+export enum CreatorType {
+  USER = 'USER',
+  AGENT = 'AGENT',
+}

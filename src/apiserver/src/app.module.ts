@@ -7,6 +7,7 @@ import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { AgentsModule } from './agents/agents.module';
 import { SessionsModule } from './sessions/sessions.module';
+import { TasksModule } from './tasks/tasks.module';
 import { RunnersModule } from './runners/runners.module';
 import { RunnerApiModule } from './runner-api/runner-api.module';
 
@@ -20,6 +21,7 @@ import { RunnerApiModule } from './runner-api/runner-api.module';
     UsersModule,
     AgentsModule,
     SessionsModule,
+    TasksModule,
     RunnersModule,
     RunnerApiModule,
   ],
