@@ -27,6 +27,7 @@ function Shell({ children }: { children: React.ReactNode }) {
   const loc = useLocation();
   const isTasksList =
     FULL_HEIGHT.includes(loc.pathname) ||
+    loc.pathname.startsWith('/runners/') ||
     loc.pathname.startsWith('/agents/') ||
     loc.pathname.startsWith('/sessions/') ||
     loc.pathname.startsWith('/lists/');
@@ -66,6 +67,7 @@ export function App() {
           <Route path="/skills" element={<Shell><TasksPage /></Shell>} />
           <Route path="/runners/register" element={<Shell><TasksPage /></Shell>} />
           <Route path="/runners" element={<Shell><TasksPage /></Shell>} />
+          <Route path="/runners/:id" element={<Shell><TasksPage /></Shell>} />
           <Route path="/agents/:id" element={<Shell><TasksPage /></Shell>} />
           <Route path="/sessions/:id" element={<Shell><TasksPage /></Shell>} />
           <Route path="/agents/:id/sessions/:sessionId" element={<LegacySessionRedirect />} />

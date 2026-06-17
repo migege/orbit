@@ -12,7 +12,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { App as AntApp, Button, Input, Select, Tag, Tooltip } from 'antd';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useMatch, useNavigate } from 'react-router-dom';
+import { useMatch, useNavigate, useSearchParams } from 'react-router-dom';
 import { decodeId, encodeId } from '../lib/idCodec';
 import {
   api,
@@ -82,6 +82,10 @@ export function AgentView({ runner }: { runner: Runner }) {
   // it deep-links and survives a refresh; selecting a session = navigation.
   // Decode once here; everything downstream works with the raw session UUID.
   const selectedId = decodeId(useMatch('/sessions/:id')?.params.id);
+  // /agents/<runner>?agent=<id> scopes this console to one agent: the picker is
+  // locked to it and the session list is filtered to that agent's conversations.
+  const [searchParams] = useSearchParams();
+  const lockedAgentId = decodeId(searchParams.get('agent'));
   const [text, setText] = useState('');
   const [mode, setMode] = useState('Default');
   const [model, setModel] = useState('claude-sonnet-4-6');
@@ -105,6 +109,12 @@ export function AgentView({ runner }: { runner: Runner }) {
   );
   const selected = useMemo(() => sessions.find((s) => s.id === selectedId) ?? null, [sessions, selectedId]);
   const live = selected ? !TERMINAL.includes(selected.status) : false;
+  // The session list is scoped to the locked agent when one is set, so the page
+  // reads as a conversation with that agent rather than the whole runner.
+  const visibleSessions = useMemo(
+    () => (lockedAgentId ? sessions.filter((s) => s.agent?.id === lockedAgentId) : sessions),
+    [sessions, lockedAgentId],
+  );
 
   // Agents belonging to this machine runner — each is a project dir + coding tool.
   // Picking one tells the server where (which dir) to run a new session.
@@ -113,12 +123,21 @@ export function AgentView({ runner }: { runner: Runner }) {
     () => (agentsQ.data ?? []).filter((a) => a.runnerId === runner.id),
     [agentsQ.data, runner.id],
   );
-  // Default to the runner's first agent; keep a still-valid pick, reset on runner switch.
+  const lockedAgent = useMemo(
+    () => (lockedAgentId ? (agentsForRunner.find((a) => a.id === lockedAgentId) ?? null) : null),
+    [agentsForRunner, lockedAgentId],
+  );
+  // When scoped to a specific agent (?agent=) lock the pick to it; otherwise default
+  // to the runner's first agent, keeping a still-valid pick across runner switches.
   useEffect(() => {
+    if (lockedAgentId) {
+      setAgentId(lockedAgentId);
+      return;
+    }
     setAgentId((prev) =>
       prev && agentsForRunner.some((a) => a.id === prev) ? prev : agentsForRunner[0]?.id,
     );
-  }, [agentsForRunner]);
+  }, [agentsForRunner, lockedAgentId]);
 
   // Slot accounting: a runner hosts at most maxConcurrent live sessions. When it's
   // full, a newly created session sits PENDING instead of starting — surface that
@@ -260,10 +279,14 @@ export function AgentView({ runner }: { runner: Runner }) {
       <div className="agent-header">
         <span className={`agent-status-dot ${runner.online ? 'online' : ''}`} />
         <div className="agent-header-main">
-          <div className="agent-name">{runner.displayName ?? runner.name}</div>
+          <div className="agent-name">{lockedAgent ? lockedAgent.name : (runner.displayName ?? runner.name)}</div>
           <div className="agent-sub">
             {selected?.title ??
-              (selectedId ? 'Starting…' : `${runner.online ? 'Online' : 'Offline'} · ${sessions.length} sessions`)}
+              (selectedId
+                ? 'Starting…'
+                : lockedAgent
+                  ? `${runner.displayName ?? runner.name} · ${visibleSessions.length} sessions`
+                  : `${runner.online ? 'Online' : 'Offline'} · ${sessions.length} sessions`)}
           </div>
         </div>
         <div className="agent-header-spacer" />
@@ -272,7 +295,12 @@ export function AgentView({ runner }: { runner: Runner }) {
             size="small"
             icon={<PlusOutlined />}
             onClick={() => {
-              navigate(`/agents/${encodeId(runner.id)}`);
+              // Keep the agent scope when starting a fresh session.
+              navigate(
+                lockedAgentId
+                  ? `/agents/${encodeId(runner.id)}?agent=${encodeId(lockedAgentId)}`
+                  : `/agents/${encodeId(runner.id)}`,
+              );
               setText('');
             }}
           >
@@ -309,10 +337,10 @@ export function AgentView({ runner }: { runner: Runner }) {
         <>
           <div className="session-head">Sessions</div>
           <div className="agent-sessions">
-            {sessions.length === 0 && (
+            {visibleSessions.length === 0 && (
               <div className="chat-note">No sessions yet — send a message below to start one.</div>
             )}
-            {sessions.map((s) => (
+            {visibleSessions.map((s) => (
               <div className="session-row" key={s.id} onClick={() => navigate(`/sessions/${encodeId(s.id)}`)}>
                 <span className="session-icon">
                   <StatusIcon status={s.status} />
@@ -383,7 +411,7 @@ export function AgentView({ runner }: { runner: Runner }) {
                 onChange={setAgentId}
                 options={agentsForRunner.map((a) => ({ value: a.id, label: a.name }))}
                 placeholder="Default"
-                disabled={live}
+                disabled={live || !!lockedAgentId}
                 popupMatchSelectWidth={false}
               />
             </span>

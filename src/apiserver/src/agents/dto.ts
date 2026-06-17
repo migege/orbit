@@ -29,6 +29,10 @@ export class CreateAgentDto {
   @IsOptional() @IsObject() mcpConfig?: Record<string, unknown>;
   @IsOptional() @IsString() targetRunnerId?: string;
   @IsOptional() @IsArray() @IsString({ each: true }) targetLabels?: string[];
+  // The runner this agent belongs to (set when adding an agent under a runner) and
+  // the project directory it runs in. Both are otherwise minted by `orbit register`.
+  @IsOptional() @IsString() runnerId?: string;
+  @IsOptional() @IsString() workDir?: string;
   @IsOptional() @IsBoolean() enabled?: boolean;
 }
 
@@ -46,5 +50,7 @@ export class UpdateAgentDto {
   @IsOptional() @IsObject() mcpConfig?: Record<string, unknown>;
   @IsOptional() @IsString() targetRunnerId?: string;
   @IsOptional() @IsArray() @IsString({ each: true }) targetLabels?: string[];
+  @IsOptional() @IsString() runnerId?: string;
+  @IsOptional() @IsString() workDir?: string;
   @IsOptional() @IsBoolean() enabled?: boolean;
 }

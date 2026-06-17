@@ -345,6 +345,126 @@ body {
   display: flex;
 }
 
+/* ---- Runner detail / settings page ---- */
+.rd-head {
+  margin-bottom: 8px;
+}
+.rd-back,
+.rd-link {
+  color: #646a73;
+  font-size: 13px;
+  cursor: pointer;
+}
+.rd-back:hover,
+.rd-link:hover {
+  color: #3370ff;
+}
+.rd-back .anticon {
+  margin-right: 4px;
+}
+.rd-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.rd-sub {
+  font-size: 13px;
+  color: #8f959e;
+}
+.rd-section {
+  margin-top: 28px;
+  max-width: 860px;
+}
+.rd-section-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #1f2329;
+}
+.rd-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.rd-overview {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 14px 24px;
+  padding: 16px;
+  border: 1px solid #eceef1;
+  border-radius: 10px;
+  background: #fff;
+}
+.rd-field-label {
+  font-size: 12px;
+  color: #8f959e;
+}
+.rd-field-value {
+  font-size: 14px;
+  color: #1f2329;
+  margin-top: 2px;
+  word-break: break-word;
+}
+.rd-empty {
+  color: #8f959e;
+  font-size: 14px;
+  padding: 20px;
+  border: 1px dashed #dee0e3;
+  border-radius: 10px;
+  text-align: center;
+}
+.rd-agent-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.rd-agent-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid #eceef1;
+  border-radius: 10px;
+  background: #fff;
+}
+.rd-agent-ico {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: #f2f6ff;
+  color: #3370ff;
+  flex: none;
+}
+.rd-agent-main {
+  flex: 1;
+  min-width: 0;
+}
+.rd-agent-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: #1f2329;
+}
+.rd-agent-meta {
+  font-size: 12px;
+  color: #8f959e;
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rd-form-field {
+  margin-bottom: 14px;
+}
+.rd-form-label {
+  font-size: 13px;
+  color: #1f2329;
+  margin-bottom: 6px;
+}
+
 /* shared column grid: title | estimates | start | due | creator | created | id */
 .orbit-tasklist {
   --cols: minmax(200px, 1fr) 88px 116px 116px 140px 150px 96px;

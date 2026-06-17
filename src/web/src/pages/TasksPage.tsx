@@ -29,6 +29,7 @@ import { AgentView } from '../components/AgentView';
 import { RunnerRegisterGuide } from '../components/RunnerRegisterGuide';
 import { TasksSidePanel } from '../components/TasksSidePanel';
 import { RunnersPage } from './RunnersPage';
+import { RunnerDetailPage } from './RunnerDetailPage';
 
 const SOURCES = [
   { key: 'AGENT', label: 'Agents' },
@@ -125,6 +126,10 @@ export function TasksPage() {
   // The "Add a runner" guide is its own route; show it whenever we're on /runners/register.
   const showRegister = loc.pathname === '/runners/register';
   const showRunners = loc.pathname === '/runners';
+  // /runners/<base62> opens that runner's detail/settings page. (/runners/register
+  // also matches the :id pattern, so guard against it.)
+  const runnerDetailMatch = useMatch('/runners/:id');
+  const runnerDetailId = !showRegister && runnerDetailMatch ? decodeId(runnerDetailMatch.params.id) : null;
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [form] = Form.useForm();
 
@@ -246,6 +251,8 @@ export function TasksPage() {
           <RunnerRegisterGuide onClose={() => navigate('/tasks')} />
         ) : showRunners ? (
           <RunnersPage />
+        ) : runnerDetailId ? (
+          <RunnerDetailPage runnerId={runnerDetailId} />
         ) : inAgentView ? (
           selectedRunner ? (
             <AgentView runner={selectedRunner} />

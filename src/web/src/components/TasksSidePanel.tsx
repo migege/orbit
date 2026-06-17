@@ -44,6 +44,13 @@ export interface Runner {
   displayName?: string | null;
   online?: boolean;
   maxConcurrent?: number;
+  // Extra fields returned by GET /runners, shown read-only on the runner detail page.
+  hostname?: string | null;
+  labels?: string[];
+  version?: string | null;
+  status?: string;
+  lastHeartbeatAt?: string | null;
+  enrolledAt?: string | null;
 }
 
 interface Agent {

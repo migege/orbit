@@ -11,7 +11,8 @@ const isMac = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform
 
 // The runner list used to live in the left sidebar; it now has its own page so
 // "Runners" can sit in the top nav alongside Active/Skills. Selecting a runner
-// opens its AgentView at /agents/<id> (resolved by TasksPage from the URL).
+// opens its detail/settings page at /runners/<id> (resolved by TasksPage from the
+// URL) — where you manage the agents that run under it.
 export function RunnersPage() {
   const navigate = useNavigate();
   const { modal, message } = AntdApp.useApp();
@@ -48,7 +49,7 @@ export function RunnersPage() {
     if (renaming) renameMut.mutate({ id: renaming.id, displayName: renameVal.trim() });
   };
 
-  const open = (r: Runner) => navigate(`/agents/${encodeId(r.id)}`);
+  const open = (r: Runner) => navigate(`/runners/${encodeId(r.id)}`);
 
   // ⌘1 / ⌘2 / … (Ctrl on non-Mac) opens the Nth runner.
   useEffect(() => {
@@ -58,7 +59,7 @@ export function RunnersPage() {
       const idx = Number(e.key) - 1;
       if (idx >= list.length) return;
       e.preventDefault();
-      navigate(`/agents/${encodeId(list[idx].id)}`);
+      navigate(`/runners/${encodeId(list[idx].id)}`);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);

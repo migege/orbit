@@ -23,6 +23,7 @@ export class AgentsService {
 
   async create(ownerId: string, dto: CreateAgentDto) {
     await this.assertOwnedRunner(ownerId, dto.targetRunnerId);
+    await this.assertOwnedRunner(ownerId, dto.runnerId);
     return this.prisma.agent.create({
       data: {
         ownerId,
@@ -39,6 +40,8 @@ export class AgentsService {
         mcpConfig: (dto.mcpConfig ?? Prisma.JsonNull) as Prisma.InputJsonValue,
         targetRunnerId: dto.targetRunnerId,
         targetLabels: dto.targetLabels ?? [],
+        runnerId: dto.runnerId,
+        workDir: dto.workDir,
         enabled: dto.enabled ?? true,
       },
     });
@@ -65,6 +68,7 @@ export class AgentsService {
   async update(ownerId: string, id: string, dto: UpdateAgentDto) {
     await this.get(ownerId, id);
     await this.assertOwnedRunner(ownerId, dto.targetRunnerId);
+    await this.assertOwnedRunner(ownerId, dto.runnerId);
     const data: Prisma.AgentUpdateInput = {
       name: dto.name,
       description: dto.description,
@@ -74,6 +78,7 @@ export class AgentsService {
       permissionMode: dto.permissionMode,
       maxTurns: dto.maxTurns,
       maxBudgetUsd: dto.maxBudgetUsd,
+      workDir: dto.workDir,
       targetRunnerId: dto.targetRunnerId,
       enabled: dto.enabled,
     };
@@ -81,6 +86,10 @@ export class AgentsService {
     if (dto.disallowedTools) data.disallowedTools = dto.disallowedTools as Prisma.InputJsonValue;
     if (dto.mcpConfig) data.mcpConfig = dto.mcpConfig as Prisma.InputJsonValue;
     if (dto.targetLabels) data.targetLabels = dto.targetLabels;
+    // runnerId is a relation FK: connect to (re)bind, disconnect to detach.
+    if (dto.runnerId !== undefined) {
+      data.runner = dto.runnerId ? { connect: { id: dto.runnerId } } : { disconnect: true };
+    }
     return this.prisma.agent.update({ where: { id }, data });
   }
 
