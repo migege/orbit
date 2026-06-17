@@ -137,8 +137,8 @@ export function TasksPage() {
   const agents = useQuery({ queryKey: ['agents'], queryFn: () => api<any[]>('/agents') });
   const runners = useQuery({ queryKey: ['runners'], queryFn: () => api<any[]>('/runners') });
 
-  // The selected runner lives in the URL: /agents/<base62> directly, or
-  // /sessions/<base62> from which we resolve the runner behind that session.
+  // The console is keyed by runner: /agents/<agent> names the agent (its runner is
+  // derived below), or /sessions/<id> from which we resolve the runner behind it.
   const agentMatch = useMatch('/agents/:id/*');
   const sessionMatch = useMatch('/sessions/:id');
   const inAgentView = !!agentMatch || !!sessionMatch;
@@ -149,9 +149,12 @@ export function TasksPage() {
     queryFn: () => getSession(selectedSessionId!),
     enabled: !!selectedSessionId,
   });
-  const runnerId = agentMatch
-    ? decodeId(agentMatch.params.id)
-    : (sessionQ.data?.assignedRunnerId ?? null);
+  const openAgentId = agentMatch ? decodeId(agentMatch.params.id) : null;
+  const openAgent = (agents.data ?? []).find((a: any) => a.id === openAgentId) ?? null;
+  // Prefer the agent's runner; fall back to treating the id as a runner so older
+  // /agents/<runner> links still resolve, then to the open session's runner.
+  const runnerId =
+    openAgent?.runnerId ?? openAgentId ?? sessionQ.data?.assignedRunnerId ?? null;
   const selectedRunner = (runners.data ?? []).find((r: any) => r.id === runnerId) ?? null;
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['tasks'] });

@@ -9,9 +9,9 @@ import {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { App as AntdApp, Avatar, Dropdown, Input, Modal } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useMatch, useNavigate } from 'react-router-dom';
 import { api, clearToken } from '../api';
-import { encodeId } from '../lib/idCodec';
+import { decodeId, encodeId } from '../lib/idCodec';
 
 // Feishu-style top navigation. Each entry routes to "/<key>" (they all share the
 // Tasks view for now — only the heading differs). "Runners" opens the runners
@@ -57,8 +57,8 @@ export interface Runner {
 interface Agent {
   id: string;
   name: string;
-  // The machine this agent belongs to (null for config-only agents); needed to
-  // open its console at /agents/<runner>?agent=<id>.
+  // The machine this agent belongs to (null for config-only agents); an agent
+  // with no runner has no console to open.
   runnerId?: string | null;
   runner?: { id: string } | null;
 }
@@ -72,19 +72,25 @@ export function TasksSidePanel() {
   const loc = useLocation();
   const navigate = useNavigate();
 
+  // The agent console is /agents/<id>; when one is open, highlight that agent's
+  // row below rather than a top-nav item.
+  const openAgentId = decodeId(useMatch('/agents/:id')?.params.id);
+
   // On a top-nav route the highlight follows the URL ("/" and "/tasks" both map
   // to Active); the runner-centric routes (/runners, /runner, /agents, /sessions)
   // keep "Runners" highlighted. Clicking a list item below overrides it locally.
   const routeKey =
     loc.pathname === '/' || loc.pathname === '/tasks'
       ? 'active'
-      : loc.pathname.startsWith('/agents/') ||
-          loc.pathname.startsWith('/sessions/') ||
-          loc.pathname.startsWith('/runner')
-        ? 'runners'
-        : loc.pathname.startsWith('/lists/')
-          ? loc.pathname.slice('/lists/'.length)
-          : loc.pathname.slice(1);
+      : openAgentId
+        ? '' // scoped to one agent — its row highlights below, no top item
+        : loc.pathname.startsWith('/agents/') ||
+            loc.pathname.startsWith('/sessions/') ||
+            loc.pathname.startsWith('/runner')
+          ? 'runners'
+          : loc.pathname.startsWith('/lists/')
+            ? loc.pathname.slice('/lists/'.length)
+            : loc.pathname.slice(1);
   const [sel, setSel] = useState(routeKey);
   useEffect(() => setSel(routeKey), [routeKey]);
 
@@ -122,13 +128,12 @@ export function TasksSidePanel() {
   // The "Agents" list is the user's agent definitions (model + tools).
   const agents = useQuery({ queryKey: ['agents'], queryFn: () => api<Agent[]>('/agents') });
 
-  // Open an agent's console — the same destination the runner detail page uses,
-  // scoped to this agent via ?agent=. Config-only agents (no runner) can't open.
+  // Open an agent's console — the same destination the runner detail page uses.
+  // Config-only agents (no runner) have no console to open.
   const openAgent = useCallback(
     (a: Agent) => {
-      const runnerId = a.runner?.id ?? a.runnerId;
-      if (!runnerId) return;
-      navigate(`/agents/${encodeId(runnerId)}?agent=${encodeId(a.id)}`);
+      if (!(a.runner?.id ?? a.runnerId)) return;
+      navigate(`/agents/${encodeId(a.id)}`);
     },
     [navigate],
   );
@@ -207,7 +212,11 @@ export function TasksSidePanel() {
           {agentsOpen && (
             <>
               {(agents.data ?? []).map((a, i) => (
-                <div key={a.id} className="tp-item inset" onClick={() => openAgent(a)}>
+                <div
+                  key={a.id}
+                  className={`tp-item inset ${a.id === openAgentId ? 'active' : ''}`}
+                  onClick={() => openAgent(a)}
+                >
                   <span
                     style={{
                       width: 7,

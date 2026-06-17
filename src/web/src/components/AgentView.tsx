@@ -12,7 +12,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { App as AntApp, Button, Input, Select, Tag, Tooltip } from 'antd';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useMatch, useNavigate, useSearchParams } from 'react-router-dom';
+import { useMatch, useNavigate } from 'react-router-dom';
 import { decodeId, encodeId } from '../lib/idCodec';
 import {
   api,
@@ -82,10 +82,9 @@ export function AgentView({ runner }: { runner: Runner }) {
   // it deep-links and survives a refresh; selecting a session = navigation.
   // Decode once here; everything downstream works with the raw session UUID.
   const selectedId = decodeId(useMatch('/sessions/:id')?.params.id);
-  // /agents/<runner>?agent=<id> scopes this console to one agent: the picker is
-  // locked to it and the session list is filtered to that agent's conversations.
-  const [searchParams] = useSearchParams();
-  const lockedAgentId = decodeId(searchParams.get('agent'));
+  // /agents/<id> names the agent this console is scoped to: the picker is locked
+  // to it and the session list is filtered to that agent's conversations.
+  const lockedAgentId = decodeId(useMatch('/agents/:id')?.params.id);
   const [text, setText] = useState('');
   const [mode, setMode] = useState('Default');
   const [model, setModel] = useState('claude-sonnet-4-6');
@@ -127,8 +126,8 @@ export function AgentView({ runner }: { runner: Runner }) {
     () => (lockedAgentId ? (agentsForRunner.find((a) => a.id === lockedAgentId) ?? null) : null),
     [agentsForRunner, lockedAgentId],
   );
-  // When scoped to a specific agent (?agent=) lock the pick to it; otherwise default
-  // to the runner's first agent, keeping a still-valid pick across runner switches.
+  // When scoped to a specific agent (/agents/<id>) lock the pick to it; otherwise
+  // default to the runner's first agent, keeping a valid pick across runner switches.
   useEffect(() => {
     if (lockedAgentId) {
       setAgentId(lockedAgentId);
@@ -295,12 +294,10 @@ export function AgentView({ runner }: { runner: Runner }) {
             size="small"
             icon={<PlusOutlined />}
             onClick={() => {
-              // Keep the agent scope when starting a fresh session.
-              navigate(
-                lockedAgentId
-                  ? `/agents/${encodeId(runner.id)}?agent=${encodeId(lockedAgentId)}`
-                  : `/agents/${encodeId(runner.id)}`,
-              );
+              // Start a fresh session in the same agent's console. While a session
+              // is open the URL is /sessions/<id>, so fall back to its agent.
+              const a = lockedAgentId ?? selected?.agent?.id ?? agentsForRunner[0]?.id;
+              navigate(a ? `/agents/${encodeId(a)}` : `/runners/${encodeId(runner.id)}`);
               setText('');
             }}
           >

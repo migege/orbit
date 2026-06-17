@@ -270,7 +270,7 @@ export function RunnerDetailPage({ runnerId }: { runnerId: string }) {
                   size="small"
                   icon={<MessageOutlined />}
                   onClick={() =>
-                    navigate(`/agents/${encodeId(runner.id)}?agent=${encodeId(a.id)}`)
+                    navigate(`/agents/${encodeId(a.id)}`)
                   }
                 >
                   对话
