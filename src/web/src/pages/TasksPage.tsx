@@ -122,8 +122,8 @@ export function TasksPage() {
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState('ALL');
-  // The "Add a runner" guide is its own route; show it whenever we're on /runner.
-  const showRegister = loc.pathname === '/runner';
+  // The "Add a runner" guide is its own route; show it whenever we're on /runners/register.
+  const showRegister = loc.pathname === '/runners/register';
   const showRunners = loc.pathname === '/runners';
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [form] = Form.useForm();

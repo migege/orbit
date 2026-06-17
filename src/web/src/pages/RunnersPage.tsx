@@ -100,7 +100,7 @@ export function RunnersPage() {
     <>
       <h1 className="page-title">Runners</h1>
       <div className="tasks-toolbar">
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/runner')}>
+        <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/runners/register')}>
           Add runner
         </Button>
       </div>

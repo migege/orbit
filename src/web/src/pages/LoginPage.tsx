@@ -13,7 +13,20 @@ export function LoginPage() {
       const res = await api<AuthResponse>('/auth/login', { method: 'POST', body: values });
       setToken(res.accessToken);
       const next = new URLSearchParams(window.location.search).get('next');
-      location.href = next && next.startsWith('/') ? next : '/tasks';
+      if (next && next.startsWith('/')) {
+        location.href = next;
+        return;
+      }
+      // Brand-new accounts have no runner yet — drop them on the registration guide
+      // so onboarding starts there instead of an empty task list.
+      let dest = '/tasks';
+      try {
+        const runners = await api<unknown[]>('/runners');
+        if (runners.length === 0) dest = '/runners/register';
+      } catch {
+        // If the check fails, fall back to the normal landing.
+      }
+      location.href = dest;
     } catch (err) {
       message.error((err as Error).message);
     }
