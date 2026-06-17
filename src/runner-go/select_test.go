@@ -119,6 +119,22 @@ func TestSelectModelRender(t *testing.T) {
 	}
 }
 
+func TestSelectHint(t *testing.T) {
+	// More than one row: advertise navigation and select-all.
+	multi := selectHint(3)
+	if !strings.Contains(multi, "↑/↓ move") || !strings.Contains(multi, "a all") {
+		t.Errorf("multi-item hint should offer ↑/↓ and a all, got %q", multi)
+	}
+	// A single row can't be navigated, so drop ↑/↓ and "a all".
+	one := selectHint(1)
+	if strings.Contains(one, "↑/↓") || strings.Contains(one, "a all") {
+		t.Errorf("single-item hint should drop ↑/↓ and a all, got %q", one)
+	}
+	if !strings.Contains(one, "space toggle") || !strings.Contains(one, "enter confirm") || !strings.Contains(one, "q cancel") {
+		t.Errorf("single-item hint missing space/enter/q actions, got %q", one)
+	}
+}
+
 func TestSelectModelAbort(t *testing.T) {
 	m := newModel(true)
 	done, abort := m.apply(keyAbort)

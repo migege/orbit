@@ -142,6 +142,16 @@ func (m *selectModel) render(redraw bool) {
 	}
 }
 
+// selectHint is the key legend shown above the list. ↑/↓ and "a all" only do
+// something with more than one row, so they're dropped for a single-item list
+// rather than advertising navigation that can't move.
+func selectHint(n int) string {
+	if n > 1 {
+		return "↑/↓ move · space toggle · a all · enter confirm · q cancel"
+	}
+	return "space toggle · enter confirm · q cancel"
+}
+
 // multiSelect renders an interactive checkbox list and returns the chosen
 // 0-based indices. It returns ok=false when stdin isn't a terminal or can't
 // enter raw mode, so the caller can fall back to a line-based prompt. Ctrl-C
@@ -160,7 +170,7 @@ func multiSelect(title string, labels []string, checked []bool) (idx []int, ok b
 	m := &selectModel{labels: labels, checked: append([]bool(nil), checked...)}
 
 	fmt.Printf("\r\n%s\r\n", title)
-	fmt.Print("  ↑/↓ move · space toggle · a all · enter confirm · q cancel\r\n")
+	fmt.Printf("  %s\r\n", selectHint(len(labels)))
 	m.render(false)
 
 	buf := make([]byte, 8)
