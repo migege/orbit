@@ -142,6 +142,7 @@ export class QueueService {
           (task.permissionMode as PermissionMode) ??
           (agent?.permissionMode as PermissionMode) ??
           PermissionMode.DONT_ASK,
+        effort: task.effort ?? undefined,
         maxTurns: agent?.maxTurns ?? undefined,
         maxBudgetUsd: agent?.maxBudgetUsd ?? undefined,
         mcpConfig: (agent?.mcpConfig as Record<string, unknown> | null) ?? undefined,

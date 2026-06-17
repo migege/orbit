@@ -136,6 +136,9 @@ func runSessionProcess(ctx context.Context, t *Transport, job *ClaimedJob, execD
 		"--model", a.Model,
 		"--permission-mode", a.PermissionMode,
 	}
+	if a.Effort != "" {
+		args = append(args, "--effort", a.Effort)
+	}
 	if len(a.AllowedTools) > 0 {
 		args = append(args, "--allowedTools", strings.Join(a.AllowedTools, ","))
 	}

@@ -68,6 +68,7 @@ type AgentExecConfig struct {
 	AllowedTools       []string               `json:"allowedTools"`
 	DisallowedTools    []string               `json:"disallowedTools"`
 	PermissionMode     string                 `json:"permissionMode"`
+	Effort             string                 `json:"effort"`
 	MaxTurns           *int                   `json:"maxTurns"`
 	MaxBudgetUsd       *float64               `json:"maxBudgetUsd"`
 	McpConfig          map[string]interface{} `json:"mcpConfig"`

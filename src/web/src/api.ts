@@ -46,6 +46,7 @@ export const createInteractiveSession = (body: {
   agentId?: string;
   model?: string;
   permissionMode?: string;
+  effort?: string;
 }) =>
   api<{ id: string }>('/tasks', {
     method: 'POST',

@@ -39,6 +39,9 @@ func executeJob(ctx context.Context, job *ClaimedJob, emit emitFn, execDir, scra
 		"--model", a.Model,
 		"--permission-mode", a.PermissionMode,
 	}
+	if a.Effort != "" {
+		args = append(args, "--effort", a.Effort)
+	}
 	if len(a.AllowedTools) > 0 {
 		args = append(args, "--allowedTools", strings.Join(a.AllowedTools, ","))
 	}

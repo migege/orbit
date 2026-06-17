@@ -248,7 +248,7 @@ export class RunnerApiController {
         id: true,
         claudeSessionId: true,
         task: {
-          select: { id: true, title: true, sessionUuid: true, model: true, permissionMode: true, agent: true },
+          select: { id: true, title: true, sessionUuid: true, model: true, permissionMode: true, effort: true, agent: true },
         },
       },
     });
@@ -272,6 +272,7 @@ export class RunnerApiController {
           (task.permissionMode as PermissionMode) ??
           (agent?.permissionMode as PermissionMode) ??
           PermissionMode.DONT_ASK,
+        effort: task.effort ?? undefined,
         maxTurns: agent?.maxTurns ?? undefined,
         maxBudgetUsd: agent?.maxBudgetUsd ?? undefined,
         mcpConfig: (agent?.mcpConfig as Record<string, unknown> | null) ?? undefined,

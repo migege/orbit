@@ -754,15 +754,30 @@ body {
 .composer-box:focus-within {
   border-color: #3370ff;
 }
-.composer-controls {
+.composer-pills {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   margin-top: 10px;
+  flex-wrap: wrap;
 }
-.composer-label {
+.composer-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding-left: 8px;
+  border: 1px solid #dee0e3;
+  border-radius: 999px;
+  background: #f7f8fa;
+  transition: border-color 0.15s, background 0.15s;
+}
+.composer-pill:hover {
+  border-color: #c9cdd4;
+  background: #f2f3f5;
+}
+.composer-pill-icon {
+  color: #8f959e;
   font-size: 13px;
-  color: #646a73;
 }
 
 /* ---- Interactive session chat (Route B) ---- */

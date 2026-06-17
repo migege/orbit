@@ -2,11 +2,14 @@ import {
   ArrowUpOutlined,
   CheckCircleFilled,
   CloseCircleFilled,
+  ControlOutlined,
   LoadingOutlined,
   PlusOutlined,
+  RobotOutlined,
+  ThunderboltOutlined,
 } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { App as AntApp, Button, Input, Segmented, Select, Tag, Tooltip } from 'antd';
+import { App as AntApp, Button, Input, Select, Tag, Tooltip } from 'antd';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMatch, useNavigate } from 'react-router-dom';
 import {
@@ -47,6 +50,15 @@ const MODEL_OPTIONS = [
   { value: 'claude-opus-4-8', label: 'claude-opus-4-8' },
   { value: 'claude-haiku-4-5', label: 'claude-haiku-4-5' },
 ];
+// Claude effort level. '' = Default (omit --effort, model picks its own).
+const EFFORT_OPTIONS = [
+  { value: '', label: 'Default' },
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'high', label: 'High' },
+  { value: 'xhigh', label: 'xHigh' },
+  { value: 'max', label: 'Max' },
+];
 
 const trunc = (s: string, n = 600): string => (s && s.length > n ? s.slice(0, n) + '…' : s);
 const fmtTime = (d?: string): string =>
@@ -70,6 +82,7 @@ export function AgentView({ runner }: { runner: Runner }) {
   const [text, setText] = useState('');
   const [mode, setMode] = useState('Default');
   const [model, setModel] = useState('claude-sonnet-4-6');
+  const [effort, setEffort] = useState('');
   const [events, setEvents] = useState<RunEvent[]>([]);
   const [streamingText, setStreamingText] = useState(''); // live assistant text accumulated from text_delta
   const [idle, setIdle] = useState(false); // run is AWAITING_INPUT (a new turn is accepted)
@@ -189,6 +202,7 @@ export function AgentView({ runner }: { runner: Runner }) {
         assignedRunnerId: runner.id,
         model,
         permissionMode: MODE_TO_PERMISSION[mode],
+        effort: effort || undefined,
       });
       return created.id;
     },
@@ -224,6 +238,7 @@ export function AgentView({ runner }: { runner: Runner }) {
   const shownMode: string = live
     ? (PERMISSION_TO_MODE[selected.permissionMode ?? 'dontAsk'] ?? 'Default')
     : mode;
+  const shownEffort: string = live ? (selected.effort ?? '') : effort;
 
   return (
     <div className="agent-view">
@@ -339,25 +354,44 @@ export function AgentView({ runner }: { runner: Runner }) {
             onClick={onSend}
           />
         </div>
-        <Tooltip title="Mode & Model are chosen per session before it starts, and stay fixed for the session's life.">
-          <div className="composer-controls">
-            <span className="composer-label">Mode</span>
-            <Segmented
-              size="small"
-              options={MODE_OPTIONS}
-              value={shownMode}
-              onChange={(v) => setMode(v as string)}
-              disabled={live}
-            />
-            <span className="composer-label">Model</span>
-            <Select
-              size="small"
-              value={shownModel}
-              onChange={setModel}
-              options={MODEL_OPTIONS}
-              style={{ minWidth: 180 }}
-              disabled={live}
-            />
+        <Tooltip title="Mode, Model & Effort are chosen per session before it starts, and stay fixed for the session's life.">
+          <div className="composer-pills">
+            <span className="composer-pill">
+              <ControlOutlined className="composer-pill-icon" />
+              <Select
+                size="small"
+                variant="borderless"
+                value={shownMode}
+                onChange={(v) => setMode(v)}
+                options={MODE_OPTIONS.map((m) => ({ value: m, label: m }))}
+                disabled={live}
+                popupMatchSelectWidth={false}
+              />
+            </span>
+            <span className="composer-pill">
+              <RobotOutlined className="composer-pill-icon" />
+              <Select
+                size="small"
+                variant="borderless"
+                value={shownModel}
+                onChange={setModel}
+                options={MODEL_OPTIONS}
+                disabled={live}
+                popupMatchSelectWidth={false}
+              />
+            </span>
+            <span className="composer-pill">
+              <ThunderboltOutlined className="composer-pill-icon" />
+              <Select
+                size="small"
+                variant="borderless"
+                value={shownEffort}
+                onChange={setEffort}
+                options={EFFORT_OPTIONS}
+                disabled={live}
+                popupMatchSelectWidth={false}
+              />
+            </span>
           </div>
         </Tooltip>
       </div>

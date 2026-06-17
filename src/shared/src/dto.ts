@@ -12,6 +12,8 @@ export interface AgentExecConfig {
   allowedTools: string[];
   disallowedTools: string[];
   permissionMode: PermissionMode;
+  /** Claude effort level (low|medium|high|xhigh|max). Omitted → model default. */
+  effort?: string;
   maxTurns?: number;
   maxBudgetUsd?: number;
   /** MCP server config passed through to the SDK (`mcpServers`). */

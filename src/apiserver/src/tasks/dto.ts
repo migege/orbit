@@ -1,5 +1,6 @@
 import {
   IsBoolean,
+  IsIn,
   IsInt,
   IsObject,
   IsOptional,
@@ -30,6 +31,7 @@ export class CreateTaskDto {
   /** Per-session overrides; null falls back to the agent, then a server default. */
   @IsOptional() @IsString() model?: string;
   @IsOptional() @IsString() permissionMode?: string;
+  @IsOptional() @IsIn(['low', 'medium', 'high', 'xhigh', 'max']) effort?: string;
 }
 
 /** Body of POST /tasks/:id/turns — a user message for a live interactive session. */
