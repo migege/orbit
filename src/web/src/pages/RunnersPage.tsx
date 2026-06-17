@@ -99,11 +99,6 @@ export function RunnersPage() {
   return (
     <>
       <h1 className="page-title">Runners</h1>
-      <div className="tasks-toolbar">
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/runners/register')}>
-          Add runner
-        </Button>
-      </div>
 
       {runners.isLoading ? (
         <div style={{ padding: 48, textAlign: 'center' }}>
@@ -112,7 +107,7 @@ export function RunnersPage() {
       ) : list.length === 0 ? (
         <div className="runners-empty">No runners yet — register a machine to get started.</div>
       ) : (
-        <div className="runners-grid">
+        <div className="runners-list">
           {list.map((r, idx) => (
             <div
               key={r.id}
@@ -156,6 +151,12 @@ export function RunnersPage() {
           ))}
         </div>
       )}
+
+      <div className="tasks-toolbar">
+        <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/runners/register')}>
+          Register Runner
+        </Button>
+      </div>
 
       <Modal
         title="Rename runner"
