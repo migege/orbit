@@ -8,9 +8,10 @@ import {
 } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { App as AntdApp, Avatar, Dropdown, Input, Modal } from 'antd';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { api, clearToken } from '../api';
+import { encodeId } from '../lib/idCodec';
 
 // Feishu-style top navigation. Each entry routes to "/<key>" (they all share the
 // Tasks view for now — only the heading differs). "Runners" opens the runners
@@ -56,6 +57,10 @@ export interface Runner {
 interface Agent {
   id: string;
   name: string;
+  // The machine this agent belongs to (null for config-only agents); needed to
+  // open its console at /agents/<runner>?agent=<id>.
+  runnerId?: string | null;
+  runner?: { id: string } | null;
 }
 
 function logout() {
@@ -117,6 +122,39 @@ export function TasksSidePanel() {
   // The "Agents" list is the user's agent definitions (model + tools).
   const agents = useQuery({ queryKey: ['agents'], queryFn: () => api<Agent[]>('/agents') });
 
+  // Open an agent's console — the same destination the runner detail page uses,
+  // scoped to this agent via ?agent=. Config-only agents (no runner) can't open.
+  const openAgent = useCallback(
+    (a: Agent) => {
+      const runnerId = a.runner?.id ?? a.runnerId;
+      if (!runnerId) return;
+      navigate(`/agents/${encodeId(runnerId)}?agent=${encodeId(a.id)}`);
+    },
+    [navigate],
+  );
+
+  // ⌘/Ctrl + 1‒9 opens the matching agent in the list. Skip while a text field is
+  // focused so it doesn't fight the composer; preventDefault stops the browser's
+  // own tab-switch on the same chord.
+  useEffect(() => {
+    const list = agents.data ?? [];
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;
+      const n = Number(e.key);
+      if (!Number.isInteger(n) || n < 1 || n > 9 || n > list.length) return;
+      const el = document.activeElement;
+      if (
+        el instanceof HTMLElement &&
+        (el.isContentEditable || el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')
+      )
+        return;
+      e.preventDefault();
+      openAgent(list[n - 1]);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [agents.data, openAgent]);
+
   const { message } = AntdApp.useApp();
   const qc = useQueryClient();
   const [creatingAgent, setCreatingAgent] = useState(false);
@@ -168,8 +206,8 @@ export function TasksSidePanel() {
           </div>
           {agentsOpen && (
             <>
-              {(agents.data ?? []).map((a) => (
-                <div key={a.id} className="tp-item inset">
+              {(agents.data ?? []).map((a, i) => (
+                <div key={a.id} className="tp-item inset" onClick={() => openAgent(a)}>
                   <span
                     style={{
                       width: 7,
@@ -181,6 +219,7 @@ export function TasksSidePanel() {
                     }}
                   />
                   <span className="tp-label">{a.name}</span>
+                  {i < 9 && <span className="tp-count">⌘{i + 1}</span>}
                 </div>
               ))}
               <div className="tp-item inset" onClick={() => setCreatingAgent(true)}>
