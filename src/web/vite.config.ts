@@ -1,9 +1,18 @@
+import { fileURLToPath, URL } from 'node:url';
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 
 // Dev proxies /api (REST + SSE) to the control plane, so the browser stays same-origin.
 export default defineConfig({
   plugins: [react()],
+  resolve: {
+    alias: {
+      // Consume the shared workspace package from source so Vite compiles its TS
+      // directly — avoids rollup failing to trace named exports through its
+      // compiled CJS (`__exportStar`).
+      '@orbit/shared': fileURLToPath(new URL('../shared/src/index.ts', import.meta.url)),
+    },
+  },
   server: {
     port: 5173,
     proxy: {

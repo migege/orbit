@@ -6,37 +6,34 @@ import (
 	"path/filepath"
 )
 
-// RunnerConfig is the persisted credential + identity for one runner.
+// RunnerConfig is the persisted credential + identity for this machine's runner.
+// There is one runner per machine; its agents (project dirs + tools) live server-side.
 type RunnerConfig struct {
 	ServerURL     string   `json:"serverUrl"`
 	RunnerID      string   `json:"runnerId"`
 	RunnerToken   string   `json:"runnerToken"`
-	Name          string   `json:"name"`
+	Name          string   `json:"name"` // the machine runner name (its hostname)
 	Labels        []string `json:"labels"`
 	MaxConcurrent int      `json:"maxConcurrent"`
-	// Directory Claude Code runs in (the project to work on). Defaults to the cwd
-	// at `orbit register`; jobs cd here, not into a per-run scratch dir.
+	// Fallback project directory for sessions whose agent carries no workDir. The
+	// server normally drives claude's cwd per session from the session's agent.
 	WorkDir string `json:"workDir,omitempty"`
-	// Agents installed on this machine that the user chose to register
-	// (stable keys, e.g. "claude", "codex"). Selected at `orbit register`.
-	Agents []string `json:"agents,omitempty"`
 }
 
-// Config is per working directory (so one machine can host several runners);
-// ORBIT_HOME overrides it (used by the systemd unit / launchd plist).
-func baseDir() string {
+// machineHome is where the runner stores its config + run scratch. One runner per
+// machine, so it's a fixed per-user location: $ORBIT_HOME, else ~/.orbit.
+func machineHome() string {
 	if h := os.Getenv("ORBIT_HOME"); h != "" {
 		return h
 	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		cwd = "."
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return filepath.Join(home, ".orbit")
 	}
-	return filepath.Join(cwd, ".orbit")
+	return ".orbit"
 }
 
-func configPath() string { return filepath.Join(baseDir(), "config.json") }
-func runsDir() string     { return filepath.Join(baseDir(), "runs") }
+func configPath() string { return filepath.Join(machineHome(), "config.json") }
+func runsDir() string    { return filepath.Join(machineHome(), "runs") }
 
 func loadConfig() *RunnerConfig {
 	b, err := os.ReadFile(configPath())
@@ -51,7 +48,7 @@ func loadConfig() *RunnerConfig {
 }
 
 func saveConfig(c *RunnerConfig) error {
-	if err := os.MkdirAll(baseDir(), 0o755); err != nil {
+	if err := os.MkdirAll(machineHome(), 0o755); err != nil {
 		return err
 	}
 	b, _ := json.MarshalIndent(c, "", "  ")

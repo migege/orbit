@@ -1,6 +1,6 @@
-import { ArrowLeftOutlined, CheckCircleFilled, CheckOutlined, CopyOutlined } from '@ant-design/icons';
+import { CheckCircleFilled, CheckOutlined, CopyOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
-import { Button, Segmented } from 'antd';
+import { Segmented } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 
@@ -112,10 +112,6 @@ export function RunnerRegisterGuide({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="runner-guide">
-      <Button className="runner-back" type="text" icon={<ArrowLeftOutlined />} onClick={onClose}>
-        Back
-      </Button>
-
       <div className="runner-center">
         <h1 className="page-title">Add a runner</h1>
         <p className="runner-sub">
@@ -165,7 +161,7 @@ export function RunnerRegisterGuide({ onClose }: { onClose: () => void }) {
             <div className="runner-status-text">
               <div className="runner-status-title">Runner online — “{connectedName}” is ready</div>
               <div className="runner-status-sub">
-                It's now in the sidebar under Agents. You can close this page.
+                It's now in the sidebar under Runners. You can close this page.
               </div>
             </div>
             <button className="runner-done-btn" onClick={onClose} type="button">

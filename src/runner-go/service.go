@@ -11,12 +11,18 @@ import (
 	"syscall"
 )
 
-// setupService installs + starts a background service that runs `orbit run` and
-// restarts on failure. Linux uses systemd; macOS uses a launchd LaunchAgent.
-// Returns an error instead of exiting, so `orbit register` can call it best-effort.
-// The runner authenticates through the machine's local Claude Code login, so no
-// API key is involved here.
-func setupService() error {
+// One runner per machine, so the background service has a single fixed name.
+const (
+	systemdService = "orbit-runner"
+	launchdLabel   = "com.orbit.runner"
+)
+
+// setupService installs + starts a background service that runs `orbit run` (with
+// ORBIT_HOME=orbitHome) and restarts on failure. Linux uses systemd; macOS uses a
+// launchd LaunchAgent. Returns an error instead of exiting, so `orbit register` can
+// call it best-effort. The runner authenticates through the machine's local Claude
+// Code login, so no API key is involved here.
+func setupService(orbitHome string) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("cannot locate executable: %w", err)
@@ -24,33 +30,33 @@ func setupService() error {
 	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
 		exe = resolved
 	}
-	orbitHome := baseDir()
 
 	switch runtime.GOOS {
 	case "linux":
-		return installSystemd(exe, orbitHome)
+		return installSystemd(exe, orbitHome, systemdService)
 	case "darwin":
-		return installLaunchd(exe, orbitHome)
+		return installLaunchd(exe, orbitHome, launchdLabel)
 	default:
 		return errors.New("background service is only supported on Linux (systemd) and macOS (launchd); run `orbit run` under your own supervisor")
 	}
 }
 
-// uninstallService stops and removes the background service, for `orbit
-// unregister`. Best-effort: it reports problems but never aborts the unregister.
+// uninstallService stops and removes the machine's runner service, for
+// `orbit unregister`. Best-effort: it reports problems but never aborts.
 func uninstallService() {
 	switch runtime.GOOS {
 	case "linux":
+		svc := systemdService
 		if os.Geteuid() != 0 {
-			fmt.Fprintln(os.Stderr, "note: removing the systemd service needs root — run: sudo systemctl disable --now orbit-runner")
+			fmt.Fprintf(os.Stderr, "note: removing the systemd service needs root — run: sudo systemctl disable --now %s\n", svc)
 			return
 		}
-		runQuiet("systemctl", "disable", "--now", "orbit-runner")
-		_ = os.Remove("/etc/systemd/system/orbit-runner.service")
+		runQuiet("systemctl", "disable", "--now", svc)
+		_ = os.Remove("/etc/systemd/system/" + svc + ".service")
 		runQuiet("systemctl", "daemon-reload")
-		fmt.Println("✓ removed the systemd service")
+		fmt.Printf("✓ removed the %s service\n", svc)
 	case "darwin":
-		const label = "com.orbit.runner"
+		label := launchdLabel
 		home := os.Getenv("HOME")
 		if home == "" {
 			if h, err := os.UserHomeDir(); err == nil {
@@ -70,8 +76,8 @@ func uninstallService() {
 	}
 }
 
-func installSystemd(exe, orbitHome string) error {
-	unitPath := "/etc/systemd/system/orbit-runner.service"
+func installSystemd(exe, orbitHome, svc string) error {
+	unitPath := "/etc/systemd/system/" + svc + ".service"
 	unit := fmt.Sprintf(`[Unit]
 Description=Orbit runner
 After=network-online.target
@@ -98,15 +104,15 @@ WantedBy=multi-user.target
 		if err := run("systemctl", "daemon-reload"); err != nil {
 			return errors.New("systemctl daemon-reload failed — is this a systemd host?")
 		}
-		if err := run("systemctl", "enable", "--now", "orbit-runner"); err != nil {
+		if err := run("systemctl", "enable", "--now", svc); err != nil {
 			return errors.New("systemctl enable failed — is this a systemd host?")
 		}
 	} else {
 		sudo, err := exec.LookPath("sudo")
 		if err != nil || !interactive() {
-			return fmt.Errorf("installing the systemd service needs root: write %s then run `systemctl enable --now orbit-runner`", unitPath)
+			return fmt.Errorf("installing the systemd service needs root: write %s then run `systemctl enable --now %s`", unitPath, svc)
 		}
-		tmp, err := os.CreateTemp("", "orbit-runner-*.service")
+		tmp, err := os.CreateTemp("", svc+"-*.service")
 		if err != nil {
 			return err
 		}
@@ -117,25 +123,24 @@ WantedBy=multi-user.target
 			return err
 		}
 		tmp.Close()
-		fmt.Println("\nInstalling the orbit-runner service needs root — you may be prompted for your password.")
+		fmt.Printf("\nInstalling the %s service needs root — you may be prompted for your password.\n", svc)
 		if err := run(sudo, "install", "-m", "0644", tmpPath, unitPath); err != nil {
 			return fmt.Errorf("failed to install %s", unitPath)
 		}
 		if err := run(sudo, "systemctl", "daemon-reload"); err != nil {
 			return errors.New("systemctl daemon-reload failed")
 		}
-		if err := run(sudo, "systemctl", "enable", "--now", "orbit-runner"); err != nil {
+		if err := run(sudo, "systemctl", "enable", "--now", svc); err != nil {
 			return errors.New("systemctl enable failed")
 		}
 	}
-	fmt.Printf("\n✓ orbit-runner service installed and started.\n" +
-		"  Status:  systemctl status orbit-runner\n" +
-		"  Logs:    journalctl -u orbit-runner -f\n")
+	fmt.Printf("\n✓ %s service installed and started.\n"+
+		"  Status:  systemctl status %s\n"+
+		"  Logs:    journalctl -u %s -f\n", svc, svc, svc)
 	return nil
 }
 
-func installLaunchd(exe, orbitHome string) error {
-	const label = "com.orbit.runner"
+func installLaunchd(exe, orbitHome, label string) error {
 	home := os.Getenv("HOME")
 	if home == "" {
 		if h, err := os.UserHomeDir(); err == nil {
@@ -203,10 +208,10 @@ func installLaunchd(exe, orbitHome string) error {
 		return fmt.Errorf("launchctl load failed")
 	}
 
-	fmt.Printf("\n✓ orbit-runner LaunchAgent installed and started.\n"+
+	fmt.Printf("\n✓ %s LaunchAgent installed and started.\n"+
 		"  Plist:   %s\n"+
 		"  Logs:    %s\n"+
-		"  Stop:    launchctl unload %s\n", plistPath, logPath, plistPath)
+		"  Stop:    launchctl unload %s\n", label, plistPath, logPath, plistPath)
 	return nil
 }
 

@@ -85,10 +85,11 @@ export class RunnersService {
     if (!s || s.expiresAt < new Date()) {
       throw new NotFoundException('enrollment request not found or expired');
     }
-    // Warn (don't block) if this user already runs a runner by the same name, so
-    // they don't unknowingly register a duplicate.
+    // Warn (don't block) if a runner with this name is already registered, so the
+    // user knows approving re-issues its credential rather than adding a 2nd machine.
+    const runnerName = s.name;
     const nameConflict =
-      (await this.prisma.runner.count({ where: { ownerId, name: s.name } })) > 0;
+      (await this.prisma.runner.count({ where: { ownerId, name: runnerName } })) > 0;
     return {
       userCode: s.userCode,
       name: s.name,
@@ -101,15 +102,24 @@ export class RunnersService {
     };
   }
 
-  /** Approve a device session: create the runner under this user and stash its token. */
+  /**
+   * Approve a device session: mint one Runner for the machine, then stash its
+   * credential. Agents are registered separately, not here.
+   */
   async approveDeviceEnrollment(ownerId: string, userCode: string) {
     this.rateLimitDeviceLookup(ownerId);
     const s = await this.prisma.deviceEnrollment.findUnique({ where: { userCode } });
     if (!s || s.expiresAt < new Date()) {
       throw new NotFoundException('enrollment request not found or expired');
     }
-    if (s.status === 'APPROVED') return { ok: true, name: s.name, replaced: false };
+    const runnerName = s.name;
+    if (s.status === 'APPROVED') {
+      return { ok: true, name: runnerName, replaced: false };
+    }
 
+    // One Runner per machine. Re-registering reuses the same runner (reissuing its
+    // credential) rather than duplicating, so the machine keeps its identity and
+    // run history.
     const runnerToken = generateToken(32);
     const data = {
       hostname: s.hostname,
@@ -120,16 +130,13 @@ export class RunnersService {
       status: 'ONLINE' as const,
       lastHeartbeatAt: new Date(),
     };
-    // A runner of the same name for this user is replaced (its credential is
-    // reissued) rather than duplicated, so re-registering a machine reuses its
-    // identity and keeps its run history.
     const existing = await this.prisma.runner.findFirst({
-      where: { ownerId, name: s.name },
+      where: { ownerId, name: runnerName },
       orderBy: { enrolledAt: 'desc' },
     });
     const runner = existing
       ? await this.prisma.runner.update({ where: { id: existing.id }, data })
-      : await this.prisma.runner.create({ data: { ...data, name: s.name, ownerId } });
+      : await this.prisma.runner.create({ data: { ...data, name: runnerName, ownerId } });
 
     await this.prisma.deviceEnrollment.update({
       where: { id: s.id },
@@ -141,7 +148,7 @@ export class RunnersService {
         approvedAt: new Date(),
       },
     });
-    return { ok: true, name: runner.name, replaced: !!existing };
+    return { ok: true, name: runnerName, replaced: !!existing };
   }
 
   async updateRunner(ownerId: string, id: string, dto: UpdateRunnerDto) {

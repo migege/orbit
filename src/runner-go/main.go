@@ -6,7 +6,6 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -36,24 +35,78 @@ Usage:
   orbit status                      Show this directory's runner and its control-plane status
   orbit upgrade                     Force-reinstall the latest binary (if auto-update isn't working)
 
-register options:
-  --server <url>           Control plane base URL (default: ` + defaultServer + `)
-  --token <token>          Optional one-time enrollment token (skips browser approval)
-  --name <name>            Runner name (default: "<dir> @ <hostname>")
-  --labels a,b,c           Routing labels (e.g. sg,hdfs)
-  --max-concurrent <n>     Max concurrent jobs (default: 16)
-  --workdir <path>         Project directory Claude Code runs in (default: current dir)
-  --force                  Re-register even if this directory already has a runner
-  --no-service             Register only; don't install/start the background service
-  --foreground             Register and run in the foreground now (implies --no-service)
+Run 'orbit <command> --help' for command-specific options.
 
 The runner drives the machine's local Claude Code login (run 'claude' then '/login');
 no API key is required.
 
 Env:
-  ORBIT_HOME               Override config/runs dir (default: ./.orbit in the current directory)
+  ORBIT_HOME               Override the runner's config/runs dir (default: ~/.orbit)
   ORBIT_NO_SELFUPDATE      Disable the startup auto-update
 `
+
+// Per-command help, shown for `orbit <cmd> --help|-h` and `orbit help <cmd>`.
+var cmdHelp = map[string]string{
+	"register": `orbit register — register this machine and install the background service
+
+Usage:
+  orbit register [options]
+
+Approve the machine in the browser (device-login), or pass --token to skip approval.
+This machine becomes one runner (named by hostname); each coding agent installed
+here is registered as an agent "<name>/<agentkey>" that runs in this directory.
+
+Options:
+  --server <url>           Control plane base URL (default: ` + defaultServer + `)
+  --token <token>          Optional one-time enrollment token (skips browser approval)
+  --name <name>            Base name for the agents (default: "<dir>@<hostname>"); the runner is named by hostname
+  --labels a,b,c           Routing labels (e.g. sg,hdfs)
+  --max-concurrent <n>     Max concurrent jobs (default: 16)
+  --workdir <path>         Project directory Claude Code runs in (default: current dir)
+  --force                  Re-register without confirming, even if this machine is already registered
+  --no-service             Register only; don't install/start the background service
+  --foreground             Register and run in the foreground now (implies --no-service)
+`,
+	"run": `orbit run — start the runner loop in the foreground
+
+Usage:
+  orbit run
+
+Runs this machine's runner. It claims sessions for any of its agents and runs each
+in that agent's project directory.
+`,
+	"unregister": `orbit unregister — remove this machine's runner
+
+Usage:
+  orbit unregister [--yes]
+
+Stops the background service, deletes the runner (and its agents) from the control
+plane, and removes the local config.
+
+Options:
+  --yes, --force           Skip the confirmation prompt
+`,
+	"status": `orbit status — show this directory's runner and its control-plane status
+
+Usage:
+  orbit status
+`,
+	"upgrade": `orbit upgrade — force-reinstall the latest orbit binary
+
+Usage:
+  orbit upgrade
+
+Use this if the startup auto-update isn't working.
+`,
+}
+
+// helpFor returns the help text for a subcommand, or the global usage as a fallback.
+func helpFor(cmd string) string {
+	if h, ok := cmdHelp[cmd]; ok {
+		return h
+	}
+	return usage
+}
 
 func main() {
 	args := os.Args[1:]
@@ -62,6 +115,22 @@ func main() {
 		cmd = args[0]
 	}
 	flags, bools := parseFlags(args)
+
+	// Top-level help: `orbit`, `orbit help [cmd]`, `orbit --help`, `orbit -h`.
+	if cmd == "" || cmd == "help" || cmd == "--help" || cmd == "-h" {
+		if len(args) > 1 {
+			fmt.Print(helpFor(args[1]))
+		} else {
+			fmt.Print(usage)
+		}
+		return
+	}
+	// Per-subcommand help: `orbit <cmd> --help|-h` prints that command's help
+	// instead of running it.
+	if wantsHelp(args[1:]) {
+		fmt.Print(helpFor(cmd))
+		return
+	}
 
 	switch cmd {
 	case "register":
@@ -76,8 +145,6 @@ func main() {
 		cmdUpgrade()
 	case "version", "--version", "-v":
 		fmt.Println(version)
-	case "", "help", "--help", "-h":
-		fmt.Print(usage)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n\n%s", cmd, usage)
 		os.Exit(1)
@@ -85,34 +152,28 @@ func main() {
 }
 
 func cmdRegister(flags map[string]string, bools map[string]bool) {
-	// A machine can host many runners — one per directory. Re-registering the
-	// same directory overwrites its config, so confirm first.
+	// One runner per machine. Re-registering re-issues its credential, so confirm
+	// before clobbering the config.
 	if existing := loadConfig(); existing != nil && !bools["force"] {
 		ok := confirm(fmt.Sprintf(
-			"This directory already has runner %q registered.\nRegister a new one here (overwrites %s)? [Y/n] ",
-			existing.Name, configPath()), true)
+			"This machine is already registered as %q (%s).\nRegister again (re-issues its credential)? [Y/n] ",
+			existing.Name, existing.ServerURL), true)
 		if !ok {
-			fmt.Println("aborted — use `orbit register` in another directory, or pass --force")
+			fmt.Println("aborted — pass --force to re-register without confirming")
 			os.Exit(0)
 		}
 	}
 
 	server := strings.TrimRight(getStr(flags, "server", defaultServer), "/")
-	// Name defaults to "<dir> @ <hostname>"; confirm/edit it interactively unless
+	// Register just this machine as a runner; agents are registered separately.
+	// The name defaults to the hostname — confirm/edit it interactively unless
 	// --name was passed.
 	name := flags["name"]
 	if name == "" {
-		name = promptName(defaultAgentName())
+		name = promptName(defaultRunnerName())
 	}
 	labels := parseLabels(flags["labels"])
 	maxConcurrent := getInt(flags, "max-concurrent", 16)
-	// Detect the coding agents installed here (Claude Code, Codex) and let the
-	// user pick which to register; the default is all of them. Then make the
-	// chosen agents usable — install any that are missing, and confirm Claude
-	// Code is logged in — before registering this machine.
-	selected := selectAgents()
-	ensureAgentsReady(selected)
-	agents := agentKeys(selected)
 	token := flags["token"]
 	foreground := bools["foreground"]
 	// The directory Claude Code runs in (the project to work on). Defaults to the
@@ -131,20 +192,21 @@ func cmdRegister(flags map[string]string, bools map[string]bool) {
 	if token != "" {
 		res, err := t.register(RegisterRequest{
 			EnrollmentToken: token, Name: name, Hostname: hostnameOr(),
-			Labels: labels, MaxConcurrent: maxConcurrent, Version: version,
+			Labels: labels, MaxConcurrent: maxConcurrent, Version: version, WorkDir: workDir,
 		})
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "registration failed:", err)
 			os.Exit(1)
 		}
-		finishRegister(res.RunnerID, res.RunnerToken, res.Name, server, labels, agents, maxConcurrent, workDir, withService, foreground)
+		finishRegister(res.RunnerID, res.RunnerToken, res.Name,
+			server, labels, maxConcurrent, workDir, withService, foreground)
 		return
 	}
 
 	// Device-login flow: approve this machine in the browser, like `claude` login.
 	start, err := t.deviceStart(DeviceStartRequest{
 		Name: name, Hostname: hostnameOr(), Labels: labels,
-		MaxConcurrent: maxConcurrent, Version: version,
+		MaxConcurrent: maxConcurrent, Version: version, WorkDir: workDir,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "registration failed:", err)
@@ -164,7 +226,8 @@ func cmdRegister(flags map[string]string, bools map[string]bool) {
 			continue // transient — keep waiting until the deadline
 		}
 		if poll.Status == "approved" {
-			finishRegister(poll.RunnerID, poll.RunnerToken, poll.Name, server, labels, agents, maxConcurrent, workDir, withService, foreground)
+			finishRegister(poll.RunnerID, poll.RunnerToken, poll.Name,
+				server, labels, maxConcurrent, workDir, withService, foreground)
 			return
 		}
 		if poll.Status == "expired" {
@@ -175,22 +238,21 @@ func cmdRegister(flags map[string]string, bools map[string]bool) {
 	os.Exit(1)
 }
 
-func finishRegister(runnerID, runnerToken, name, server string, labels, agents []string, maxConcurrent int, workDir string, withService, foreground bool) {
+// finishRegister persists the machine runner credential and installs the
+// background service (unless running in the foreground).
+func finishRegister(runnerID, runnerToken, name string, server string, labels []string, maxConcurrent int, workDir string, withService, foreground bool) {
 	cfg := &RunnerConfig{
 		ServerURL: server, RunnerID: runnerID, RunnerToken: runnerToken,
-		Name: name, Labels: labels, MaxConcurrent: maxConcurrent, WorkDir: workDir, Agents: agents,
+		Name: name, Labels: labels, MaxConcurrent: maxConcurrent, WorkDir: workDir,
 	}
 	if err := saveConfig(cfg); err != nil {
 		fmt.Fprintln(os.Stderr, "failed to save config:", err)
 		os.Exit(1)
 	}
-	fmt.Printf("\n✓ registered runner %q (%s).\n", name, runnerID)
-	if len(agents) > 0 {
-		fmt.Printf("  agents:  %s\n", strings.Join(agents, ", "))
-	}
+	fmt.Printf("\n✓ registered runner %q (%s).\n", cfg.Name, cfg.RunnerID)
 
 	if foreground {
-		fmt.Println("running in the foreground — Ctrl-C to stop")
+		fmt.Printf("running %q in the foreground — Ctrl-C to stop\n", cfg.Name)
 		runLoop(cfg)
 		return
 	}
@@ -198,25 +260,23 @@ func finishRegister(runnerID, runnerToken, name, server string, labels, agents [
 		fmt.Println("  Start it with:  orbit run")
 		return
 	}
-	// Auto-install the background service so the machine starts working immediately.
-	if err := setupService(); err != nil {
-		fmt.Fprintf(os.Stderr, "\nnote: could not auto-install the service (%s)\n", firstLine(err.Error()))
+	if err := setupService(machineHome()); err != nil {
+		fmt.Fprintf(os.Stderr, "\nnote: could not auto-install the background service (%s)\n", firstLine(err.Error()))
 		fmt.Fprintln(os.Stderr, "  you can run it in the foreground instead:  orbit run")
 	}
 }
 
-// cmdUnregister tears down this directory's runner: stops/removes the service,
-// deletes the runner from the control plane, and drops the local config.
+// cmdUnregister tears down this machine's runner: stops/removes the service,
+// deletes the runner (and its agents) from the control plane, and drops the config.
 func cmdUnregister(bools map[string]bool) {
 	cfg := loadConfig()
 	if cfg == nil {
-		cwd, _ := os.Getwd()
-		fmt.Printf("no runner registered in %s\n", cwd)
+		fmt.Println("no runner registered on this machine")
 		return
 	}
 	if !bools["yes"] && !bools["force"] {
 		if !confirm(fmt.Sprintf(
-			"Unregister runner %q — stop its service, delete it from %s, and remove local config? [y/N] ",
+			"Unregister runner %q — stop its service, delete it (and its agents) from %s, and remove local config? [y/N] ",
 			cfg.Name, cfg.ServerURL), false) {
 			fmt.Println("aborted")
 			return
@@ -226,9 +286,9 @@ func cmdUnregister(bools map[string]bool) {
 	uninstallService() // stop + remove the background service first
 
 	if err := NewTransport(cfg.ServerURL, cfg.RunnerToken).deregister(); err != nil {
-		fmt.Fprintf(os.Stderr, "note: could not delete the runner from the control plane (%s)\n", firstLine(err.Error()))
+		fmt.Fprintf(os.Stderr, "note: could not delete %q from the control plane (%s)\n", cfg.Name, firstLine(err.Error()))
 	} else {
-		fmt.Println("✓ deleted from the control plane")
+		fmt.Printf("✓ deleted %q from the control plane\n", cfg.Name)
 	}
 
 	if err := os.Remove(configPath()); err != nil && !os.IsNotExist(err) {
@@ -251,12 +311,12 @@ func cmdRun() {
 func cmdStatus() {
 	cfg := loadConfig()
 	if cfg == nil {
-		cwd, _ := os.Getwd()
-		fmt.Printf("no runner registered in %s\nRun `orbit register` to add one.\n", cwd)
+		fmt.Printf("no runner registered on this machine\nRun `orbit register` to add one.\n")
 		return
 	}
-	fmt.Printf("orbit %s\nrunner:  %s (%s)\nserver:  %s\nlabels:  %s\nconfig:  %s\n",
-		version, cfg.Name, cfg.RunnerID, cfg.ServerURL, labelsOrDash(cfg.Labels), configPath())
+	fmt.Printf("orbit %s\n", version)
+	fmt.Printf("\nrunner:  %s (%s)\nserver:  %s\nlabels:  %s\nconfig:  %s\n",
+		cfg.Name, cfg.RunnerID, cfg.ServerURL, labelsOrDash(cfg.Labels), configPath())
 
 	me, err := NewTransport(cfg.ServerURL, cfg.RunnerToken).me()
 	if err != nil {
@@ -279,6 +339,16 @@ func cmdStatus() {
 		st = "online"
 	}
 	fmt.Printf("status:  %s (last heartbeat %s)\n", st, ago)
+	if len(me.Agents) > 0 {
+		fmt.Println("agents:")
+		for _, a := range me.Agents {
+			dir := a.WorkDir
+			if dir == "" {
+				dir = "—"
+			}
+			fmt.Printf("  • %s → %s\n", a.Name, dir)
+		}
+	}
 }
 
 func cmdUpgrade() {
@@ -290,6 +360,17 @@ func cmdUpgrade() {
 }
 
 // ── small helpers ─────────────────────────────────────────────────────────
+
+// wantsHelp reports whether a help flag appears in argv. It scans the raw args
+// because parseFlags only recognizes `--`-prefixed flags and would miss `-h`.
+func wantsHelp(argv []string) bool {
+	for _, a := range argv {
+		if a == "--help" || a == "-h" {
+			return true
+		}
+	}
+	return false
+}
 
 // parseFlags supports `--key value`, `--key=value`, and boolean `--flag`.
 func parseFlags(argv []string) (map[string]string, map[string]bool) {
@@ -355,13 +436,9 @@ func hostnameOr() string {
 	return "runner"
 }
 
-// defaultAgentName is "<current directory name> @ <hostname>".
-func defaultAgentName() string {
-	dir := "runner"
-	if cwd, err := os.Getwd(); err == nil {
-		dir = filepath.Base(cwd)
-	}
-	return dir + " @ " + hostnameOr()
+// defaultRunnerName is the machine's hostname, used as the default runner name.
+func defaultRunnerName() string {
+	return hostnameOr()
 }
 
 // promptName asks the user to confirm/edit the runner name; Enter keeps the
@@ -370,7 +447,7 @@ func promptName(def string) string {
 	if !interactive() {
 		return def
 	}
-	fmt.Printf("Agent name [%s]: ", def)
+	fmt.Printf("Runner name [%s]: ", def)
 	line, _ := stdinReader.ReadString('\n')
 	if s := strings.TrimSpace(line); s != "" {
 		return s

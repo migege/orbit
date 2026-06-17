@@ -1,5 +1,9 @@
 // Orbit control-plane data model. See src/shared/src/enums.ts for the
 // TypeScript mirrors of these enums (kept in sync by string value).
+//
+// DB-level table/column/enum names are mapped to snake_case via @@map/@map to
+// follow PostgreSQL conventions. Prisma Client field names stay camelCase, so
+// application code is unaffected; only raw SQL references the mapped names.
 
 generator client {
   provider = "prisma-client-js"
@@ -8,21 +12,6 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
-}
-
-enum TaskStatus {
-  DRAFT
-  QUEUED
-  RUNNING
-  SUCCEEDED
-  FAILED
-  CANCELLED
-}
-
-enum TaskSource {
-  AGENT
-  MANUAL
-  EXTERNAL
 }
 
 enum RunStatus {
@@ -34,281 +23,275 @@ enum RunStatus {
   // Interactive sessions (Route B). Appended last to match ALTER TYPE ADD VALUE.
   AWAITING_INPUT
   INTERRUPTED
+
+  @@map("run_status")
 }
 
 enum RunnerStatus {
   ONLINE
   OFFLINE
   DRAINING
+
+  @@map("runner_status")
 }
 
 model User {
-  id           String   @id @default(uuid())
+  id           String   @id @default(uuid(7)) @db.Uuid
   email        String   @unique
   name         String
-  passwordHash String
-  createdAt    DateTime @default(now())
+  passwordHash String   @map("password_hash")
+  createdAt    DateTime @default(now()) @map("created_at")
 
   agents           Agent[]
   runners          Runner[]
   enrollmentTokens EnrollmentToken[]
-  createdTasks     Task[]              @relation("TaskCreator")
-  ownedTasks       Task[]              @relation("TaskOwner")
-  subscriptions    TaskSubscription[]
+  ownedSessions    Session[]         @relation("SessionOwner")
+  createdSessions  Session[]         @relation("SessionCreator")
+
+  @@map("user")
 }
 
 // A machine the user registered via `orbit register`. Claude Code runs here.
 model Runner {
-  id              String       @id @default(uuid())
+  id              String       @id @default(uuid(7)) @db.Uuid
   name            String
   // User-set friendly name shown in the UI. `name` stays the machine-reported
   // identity used to match re-registrations, so renaming never creates a dup.
-  displayName     String?
+  displayName     String?      @map("display_name")
   hostname        String?
-  ownerId         String
+  ownerId         String       @map("owner_id") @db.Uuid
   owner           User         @relation(fields: [ownerId], references: [id])
   labels          String[]     @default([])
   status          RunnerStatus @default(OFFLINE)
-  maxConcurrent   Int          @default(1)
+  maxConcurrent   Int          @default(1) @map("max_concurrent")
   version         String?
-  tokenHash       String // hash of the long-lived runner credential
-  lastHeartbeatAt DateTime?
-  enrolledAt      DateTime     @default(now())
+  tokenHash       String       @map("token_hash") // hash of the long-lived runner credential
+  lastHeartbeatAt DateTime?    @map("last_heartbeat_at")
+  enrolledAt      DateTime     @default(now()) @map("enrolled_at")
 
-  tasks Task[]
-  runs  TaskRun[]
+  sessions Session[]
+  // Agents `orbit register` minted for this machine (one per project dir + tool).
+  agents   Agent[]
 
   @@index([ownerId])
+  @@map("runner")
 }
 
 // One-time token a user generates in the UI and passes to `orbit register`.
 model EnrollmentToken {
-  id        String    @id @default(uuid())
-  tokenHash String    @unique
-  ownerId   String
+  id        String    @id @default(uuid(7)) @db.Uuid
+  tokenHash String    @unique @map("token_hash")
+  ownerId   String    @map("owner_id") @db.Uuid
   owner     User      @relation(fields: [ownerId], references: [id])
   label     String?
-  expiresAt DateTime?
-  usedAt    DateTime?
-  createdAt DateTime  @default(now())
+  expiresAt DateTime? @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@map("enrollment_token")
 }
 
 // A pending `orbit register` device-login session (RFC 8628-style browser flow).
 // The CLI polls with the secret deviceCode; a logged-in user approves the machine
 // in the browser by the short, human-typable userCode.
 model DeviceEnrollment {
-  id             String    @id @default(uuid())
-  deviceCodeHash String    @unique // hash of the secret the CLI polls with
-  userCode       String    @unique // short code shown in the browser + terminal
+  id             String    @id @default(uuid(7)) @db.Uuid
+  deviceCodeHash String    @unique @map("device_code_hash") // hash of the secret the CLI polls with
+  userCode       String    @unique @map("user_code") // short code shown in the browser + terminal
   name           String
   hostname       String?
   labels         String[]  @default([])
-  maxConcurrent  Int       @default(1)
+  maxConcurrent  Int       @default(1) @map("max_concurrent")
   version        String?
   status         String    @default("PENDING") // PENDING | APPROVED
-  runnerId       String? // set once approved -> a Runner is created
-  runnerToken    String? // raw runner credential, delivered to the CLI once then cleared
-  approvedById   String?
-  approvedAt     DateTime?
-  expiresAt      DateTime
-  createdAt      DateTime  @default(now())
+  // Agent (coding-tool) keys requested at device/start; approval mints one Runner
+  // for the machine (named by hostname) and one Agent per key (named `<name>/<key>`).
+  agents         String[]  @default([])
+  // The project directory the minted agents run in (claude's cwd), from the CLI.
+  workDir        String?   @map("work_dir")
+  runnerId       String?   @map("runner_id") @db.Uuid // the machine runner minted on approval
+  runnerToken    String?   @map("runner_token") // raw runner credential, delivered to the CLI once then cleared
+  // The minted agents [{agentKey,agentId,name,workDir}], delivered to the CLI once
+  // on poll then wiped (mirrors runnerToken above). Column kept named `runners`.
+  mintedAgents   Json?     @map("runners")
+  approvedById   String?   @map("approved_by_id") @db.Uuid
+  approvedAt     DateTime? @map("approved_at")
+  expiresAt      DateTime  @map("expires_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  @@map("device_enrollment")
 }
 
-// An agent definition: how to drive Claude Code for a class of tasks.
+// An agent definition: how to drive Claude Code for a class of sessions.
 model Agent {
-  id                 String   @id @default(uuid())
+  id                 String   @id @default(uuid(7)) @db.Uuid
   name               String
   description        String?
   model              String   @default("claude-sonnet-4-6")
-  appendSystemPrompt String?
-  systemPrompt       String?
-  allowedTools       Json     @default("[]")
-  disallowedTools    Json     @default("[]")
-  permissionMode     String   @default("dontAsk")
-  maxTurns           Int?
-  maxBudgetUsd       Float?
-  mcpConfig          Json?
+  appendSystemPrompt String?  @map("append_system_prompt")
+  systemPrompt       String?  @map("system_prompt")
+  allowedTools       Json     @default("[]") @map("allowed_tools")
+  disallowedTools    Json     @default("[]") @map("disallowed_tools")
+  permissionMode     String   @default("dontAsk") @map("permission_mode")
+  maxTurns           Int?     @map("max_turns")
+  maxBudgetUsd       Float?   @map("max_budget_usd")
+  mcpConfig          Json?    @map("mcp_config")
   // routing: bind to a specific runner and/or match runner labels
-  targetRunnerId     String?
-  targetLabels       String[] @default([])
+  targetRunnerId     String?  @map("target_runner_id") @db.Uuid
+  targetLabels       String[] @default([]) @map("target_labels")
+  // The machine (Runner) this agent belongs to, set when `orbit register` mints it;
+  // null for hand-made config agents. Cascade so unregistering a machine drops them.
+  runnerId           String?  @map("runner_id") @db.Uuid
+  runner             Runner?  @relation(fields: [runnerId], references: [id], onDelete: Cascade)
+  // The project directory claude runs in for this agent, and its coding-tool key.
+  workDir            String?  @map("work_dir")
+  agentKey           String?  @map("agent_key")
   enabled            Boolean  @default(true)
-  ownerId            String
+  ownerId            String   @map("owner_id") @db.Uuid
   owner              User     @relation(fields: [ownerId], references: [id])
-  createdAt          DateTime @default(now())
+  createdAt          DateTime @default(now()) @map("created_at")
 
-  tasks Task[]
-  runs  TaskRun[]
+  sessions Session[]
 
   @@index([ownerId])
+  @@index([runnerId])
+  @@map("agent")
 }
 
-// A task — also the queue row. `status = QUEUED` rows are claimable by runners.
-model Task {
-  id               String     @id @default(uuid())
-  title            String
-  input            Json       @default("{}")
-  prompt           String // instruction handed to Claude Code
-  source           TaskSource @default(MANUAL)
-  type             String?
-  status           TaskStatus @default(DRAFT)
-  priority         Int        @default(0)
-  agentId          String?
-  agent            Agent?     @relation(fields: [agentId], references: [id])
-  assignedRunnerId String?
-  assignedRunner   Runner?    @relation(fields: [assignedRunnerId], references: [id])
-  creatorId        String
-  creator          User       @relation("TaskCreator", fields: [creatorId], references: [id])
-  ownerId          String
-  owner            User       @relation("TaskOwner", fields: [ownerId], references: [id])
-  estimates        String?
-  startTime        DateTime?
-  dueDate          DateTime?
-  scheduledAt      DateTime?
-  createdAt        DateTime   @default(now())
-  updatedAt        DateTime   @updatedAt
-  // Interactive session (Route B): a long-lived conversation backed by one run.
-  interactive      Boolean    @default(false)
-  sessionUuid      String? // pre-generated Claude session id for --session-id/--resume
-  activeRunId      String? // the current live TaskRun the UI subscribes to
-  // Per-session overrides; null falls back to the agent, then a server default.
-  model            String?
-  permissionMode   String?
-  // Claude effort level (low|medium|high|xhigh|max); null omits --effort so
-  // claude uses the model's default.
-  effort           String?
+// A first-class interactive chat session (Route B): a long-lived conversation
+// driven by one claude process on a runner. Chat events, user-input turns, tool
+// calls, and llm usage hang directly off the Session.
+model Session {
+  id                String    @id @default(uuid(7)) @db.Uuid
+  title             String
+  prompt            String // first-turn seed
+  ownerId           String    @map("owner_id") @db.Uuid
+  owner             User      @relation("SessionOwner", fields: [ownerId], references: [id])
+  creatorId         String    @map("creator_id") @db.Uuid
+  creator           User      @relation("SessionCreator", fields: [creatorId], references: [id])
+  assignedRunnerId  String?   @map("assigned_runner_id") @db.Uuid
+  assignedRunner    Runner?   @relation(fields: [assignedRunnerId], references: [id])
+  agentId           String?   @map("agent_id") @db.Uuid
+  agent             Agent?    @relation(fields: [agentId], references: [id])
+  // Pre-generated Claude session id: --session-id on first spawn, --resume on
+  // reclaim/respawn.
+  claudeSessionId   String?   @map("claude_session_id")
+  model             String? // per-session override; null -> agent -> server default
+  permissionMode    String?   @map("permission_mode")
+  // Claude effort level (low|medium|high|xhigh|max); null omits --effort so claude
+  // uses the model's default.
+  effort            String?
+  // PENDING = created, claimable by its assigned runner.
+  status            RunStatus @default(PENDING)
+  // billing, accrued per turn
+  sumInputTokens    Int       @default(0) @map("sum_input_tokens")
+  sumOutputTokens   Int       @default(0) @map("sum_output_tokens")
+  sumCacheRead      Int       @default(0) @map("sum_cache_read")
+  sumCacheWrite     Int       @default(0) @map("sum_cache_write")
+  numTurns          Int       @default(0) @map("num_turns")
+  costUsd           Float     @default(0) @map("cost_usd")
+  lastTurnAt        DateTime? @map("last_turn_at")
+  cancelRequestedAt DateTime? @map("cancel_requested_at")
+  startedAt         DateTime? @map("started_at")
+  finishedAt        DateTime? @map("finished_at")
+  error             String?
+  result            String?
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
 
-  runs          TaskRun[]
-  subscriptions TaskSubscription[]
+  events    RunEvent[]
+  turns     ConversationTurn[]
+  toolCalls ToolCall[]
+  llmUsage  LlmUsage[]
 
-  @@index([status, priority, scheduledAt, createdAt])
-  @@index([assignedRunnerId])
+  @@index([assignedRunnerId, status])
   @@index([ownerId])
-  @@index([source])
+  @@index([status])
+  @@map("session")
 }
 
-// One execution attempt of a task on a runner.
-model TaskRun {
-  id              String    @id @default(uuid())
-  taskId          String
-  task            Task      @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  runnerId        String?
-  runner          Runner?   @relation(fields: [runnerId], references: [id])
-  agentId         String?
-  agent           Agent?    @relation(fields: [agentId], references: [id])
-  status          RunStatus @default(PENDING)
-  claudeSessionId String?
-  startedAt       DateTime?
-  finishedAt      DateTime?
-  error           String?
-  result          String?
-  subtype         String?
-  sumInputTokens  Int       @default(0)
-  sumOutputTokens Int       @default(0)
-  sumCacheRead    Int       @default(0)
-  sumCacheWrite   Int       @default(0)
-  numTurns        Int       @default(0)
-  costUsd         Float     @default(0)
-  createdAt       DateTime  @default(now())
-  // Interactive session (Route B)
-  interactive       Boolean   @default(false)
-  lastTurnAt        DateTime?
-  idleDeadlineAt    DateTime?
-  cancelRequestedAt DateTime?
-
-  events            RunEvent[]
-  toolCalls         ToolCall[]
-  llmUsage          LlmUsage[]
-  conversationTurns ConversationTurn[]
-
-  @@index([taskId])
-  @@index([runnerId, status])
-}
-
-// Normalized streamed events for a run (replay + live SSE).
+// Normalized streamed events for a session (replay + live SSE).
 model RunEvent {
-  id        String   @id @default(uuid())
-  runId     String
-  run       TaskRun  @relation(fields: [runId], references: [id], onDelete: Cascade)
+  id        String   @id @default(uuid(7)) @db.Uuid
+  sessionId String   @map("session_id") @db.Uuid
+  session   Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   seq       Int
   type      String
   payload   Json
-  createdAt DateTime @default(now())
+  // conversation_turn.id that produced this event; null for session-level events.
+  // No FK: high-volume append-only log (cf. Activity); both cascade-delete via session.
+  turnId    String?  @map("turn_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at")
 
-  @@unique([runId, seq])
-  @@index([runId, seq])
+  @@unique([sessionId, seq])
+  @@index([sessionId, seq])
+  @@index([turnId])
+  @@map("run_event")
 }
 
-// Audit of every tool the agent invoked during a run.
+// Audit of every tool the agent invoked during a session.
 model ToolCall {
-  id         String    @id @default(uuid())
-  runId      String
-  run        TaskRun   @relation(fields: [runId], references: [id], onDelete: Cascade)
+  id         String    @id @default(uuid(7)) @db.Uuid
+  sessionId  String    @map("session_id") @db.Uuid
+  session    Session   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   name       String
   input      Json?
   output     Json?
-  isError    Boolean   @default(false)
-  startedAt  DateTime?
-  finishedAt DateTime?
+  isError    Boolean   @default(false) @map("is_error")
+  startedAt  DateTime? @map("started_at")
+  finishedAt DateTime? @map("finished_at")
 
-  @@index([runId])
+  @@index([sessionId])
+  @@map("tool_call")
 }
 
 // Per-model token/cost detail for billing rollups.
 model LlmUsage {
-  id                       String   @id @default(uuid())
-  runId                    String
-  run                      TaskRun  @relation(fields: [runId], references: [id], onDelete: Cascade)
+  id                       String   @id @default(uuid(7)) @db.Uuid
+  sessionId                String   @map("session_id") @db.Uuid
+  session                  Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   model                    String
-  inputTokens              Int      @default(0)
-  outputTokens             Int      @default(0)
-  cacheCreationInputTokens Int      @default(0)
-  cacheReadInputTokens     Int      @default(0)
-  costUsd                  Float    @default(0)
-  createdAt                DateTime @default(now())
+  inputTokens              Int      @default(0) @map("input_tokens")
+  outputTokens             Int      @default(0) @map("output_tokens")
+  cacheCreationInputTokens Int      @default(0) @map("cache_creation_input_tokens")
+  cacheReadInputTokens     Int      @default(0) @map("cache_read_input_tokens")
+  costUsd                  Float    @default(0) @map("cost_usd")
+  createdAt                DateTime @default(now()) @map("created_at")
 
-  @@index([runId])
+  @@index([sessionId])
+  @@map("usage")
 }
 
 // Durable, server-owned queue of user inputs for an interactive session (Route B).
-// The runner long-polls these via GET /runner/runs/:id/inbox; delivery is
-// at-least-once with a lease + idempotency on (runId, clientTurnId).
+// The runner long-polls these via GET /runner/sessions/:id/inbox; delivery is
+// at-least-once with a lease + idempotency on (sessionId, clientTurnId).
 model ConversationTurn {
-  id              String    @id @default(uuid())
-  runId           String
-  run             TaskRun   @relation(fields: [runId], references: [id], onDelete: Cascade)
-  seq             Int // server-assigned, per-run delivery ordering
-  clientTurnId    String // client-supplied idempotency key
+  id              String    @id @default(uuid(7)) @db.Uuid
+  sessionId       String    @map("session_id") @db.Uuid
+  session         Session   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  seq             Int // server-assigned, per-session delivery ordering
+  clientTurnId    String    @map("client_turn_id") // client-supplied idempotency key
   kind            String    @default("message") // message | interrupt | end
   content         String? // user message text (null for interrupt/end)
   status          String    @default("PENDING") // PENDING | IN_FLIGHT | ANSWERED
-  deliveredAt     DateTime?
-  leaseDeadlineAt DateTime?
-  answeredAt      DateTime?
-  createdAt       DateTime  @default(now())
+  deliveredAt     DateTime? @map("delivered_at")
+  leaseDeadlineAt DateTime? @map("lease_deadline_at")
+  answeredAt      DateTime? @map("answered_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
 
-  @@unique([runId, clientTurnId])
-  @@unique([runId, seq])
-  @@index([runId, status])
-}
-
-model TaskSubscription {
-  userId    String
-  taskId    String
-  user      User     @relation(fields: [userId], references: [id])
-  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  createdAt DateTime @default(now())
-
-  @@id([userId, taskId])
+  @@unique([sessionId, clientTurnId])
+  @@unique([sessionId, seq])
+  @@index([sessionId, status])
+  @@map("conversation_turn")
 }
 
 // Lightweight activity feed (no FKs, append-only).
 model Activity {
-  id        String   @id @default(uuid())
-  actorId   String?
-  taskId    String?
+  id        String   @id @default(uuid(7)) @db.Uuid
+  actorId   String?  @map("actor_id") @db.Uuid
   type      String
   payload   Json?
-  createdAt DateTime @default(now())
+  createdAt DateTime @default(now()) @map("created_at")
 
-  @@index([taskId])
+  @@map("activity")
 }

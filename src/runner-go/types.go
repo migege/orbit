@@ -4,11 +4,13 @@ package main
 // plane's ValidationPipe passes these plain objects through unchanged.
 
 type DeviceStartRequest struct {
-	Name          string   `json:"name"`
+	Name          string   `json:"name"` // the runner (machine) name; defaults to the hostname
 	Hostname      string   `json:"hostname,omitempty"`
 	Labels        []string `json:"labels"`
 	MaxConcurrent int      `json:"maxConcurrent"`
 	Version       string   `json:"version,omitempty"`
+	// Default project directory; agents (registered separately) run claude here.
+	WorkDir string `json:"workDir,omitempty"`
 }
 
 type DeviceStartResponse struct {
@@ -22,22 +24,24 @@ type DevicePollResponse struct {
 	Status      string `json:"status"`
 	RunnerID    string `json:"runnerId"`
 	RunnerToken string `json:"runnerToken"`
-	Name        string `json:"name"`
+	Name        string `json:"name"` // the runner (machine) name
 }
 
 type RegisterRequest struct {
 	EnrollmentToken string   `json:"enrollmentToken"`
-	Name            string   `json:"name"`
+	Name            string   `json:"name"` // the runner (machine) name; defaults to the hostname
 	Hostname        string   `json:"hostname,omitempty"`
 	Labels          []string `json:"labels"`
 	MaxConcurrent   int      `json:"maxConcurrent"`
 	Version         string   `json:"version,omitempty"`
+	// Default project directory; agents (registered separately) run claude here.
+	WorkDir string `json:"workDir,omitempty"`
 }
 
 type RegisterResponse struct {
 	RunnerID    string `json:"runnerId"`
 	RunnerToken string `json:"runnerToken"`
-	Name        string `json:"name"`
+	Name        string `json:"name"` // the runner (machine) name
 }
 
 type HeartbeatRequest struct {
@@ -47,18 +51,28 @@ type HeartbeatRequest struct {
 }
 
 type HeartbeatResponse struct {
-	CancelRunIDs []string `json:"cancelRunIds"`
+	CancelSessionIDs []string `json:"cancelSessionIds"`
 }
 
 type MeResponse struct {
-	ID              string   `json:"id"`
-	Name            string   `json:"name"`
-	Status          string   `json:"status"`
-	Online          bool     `json:"online"`
-	LastHeartbeatAt *string  `json:"lastHeartbeatAt"`
-	Version         *string  `json:"version"`
-	Labels          []string `json:"labels"`
-	MaxConcurrent   int      `json:"maxConcurrent"`
+	ID              string        `json:"id"`
+	Name            string        `json:"name"`
+	Status          string        `json:"status"`
+	Online          bool          `json:"online"`
+	LastHeartbeatAt *string       `json:"lastHeartbeatAt"`
+	Version         *string       `json:"version"`
+	Labels          []string      `json:"labels"`
+	MaxConcurrent   int           `json:"maxConcurrent"`
+	Agents          []RunnerAgent `json:"agents"`
+}
+
+// RunnerAgent is one agent registered under this machine's runner, as reported by
+// `GET /runner/me` and shown by `orbit status`.
+type RunnerAgent struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	AgentKey string `json:"agentKey,omitempty"`
+	WorkDir  string `json:"workDir,omitempty"`
 }
 
 type AgentExecConfig struct {
@@ -74,16 +88,14 @@ type AgentExecConfig struct {
 	McpConfig          map[string]interface{} `json:"mcpConfig"`
 }
 
-type ClaimedJob struct {
-	RunID           string                 `json:"runId"`
-	TaskID          string                 `json:"taskId"`
-	Title           string                 `json:"title"`
-	Input           map[string]interface{} `json:"input"`
-	Prompt          string                 `json:"prompt"`
-	Agent           AgentExecConfig        `json:"agent"`
-	ResumeSessionID string                 `json:"resumeSessionId"`
-	// Interactive sessions (Route B)
-	Interactive bool   `json:"interactive"`
+// ClaimedSession is one interactive session a runner has claimed (or reclaimed).
+type ClaimedSession struct {
+	SessionID string          `json:"sessionId"`
+	Title     string          `json:"title"`
+	Prompt    string          `json:"prompt"`
+	Agent     AgentExecConfig `json:"agent"`
+	// WorkDir is claude's cwd for this session, from the session's agent.
+	WorkDir     string `json:"workDir,omitempty"`
 	SessionUUID string `json:"sessionUuid"`
 	MaxSeq      int    `json:"maxSeq"`
 	// Reclaimed marks a session re-attached after a runner restart: the claude
@@ -103,17 +115,18 @@ type RunInboxResponse struct {
 	Content string `json:"content,omitempty"`
 }
 
-type ReclaimRun struct {
-	RunID       string          `json:"runId"`
-	TaskID      string          `json:"taskId"`
+type ReclaimSession struct {
+	SessionID   string          `json:"sessionId"`
 	Title       string          `json:"title"`
 	SessionUUID string          `json:"sessionUuid"`
 	MaxSeq      int             `json:"maxSeq"`
 	Agent       AgentExecConfig `json:"agent"`
+	// WorkDir is claude's cwd for this session, from the session's agent.
+	WorkDir string `json:"workDir,omitempty"`
 }
 
 type ReclaimResponse struct {
-	Runs []ReclaimRun `json:"runs"`
+	Sessions []ReclaimSession `json:"sessions"`
 }
 
 type TurnCompleteRequest struct {
@@ -131,6 +144,7 @@ type RunEvent struct {
 	Seq     int                    `json:"seq"`
 	Type    string                 `json:"type"`
 	TS      string                 `json:"ts"`
+	TurnID  string                 `json:"turnId,omitempty"`
 	Payload map[string]interface{} `json:"payload"`
 }
 
