@@ -37,6 +37,18 @@ func runInteractiveSession(t *Transport, job *ClaimedSession, ctx context.Contex
 	seq := job.MaxSeq + 1
 	var seqMu sync.Mutex
 
+	// turnId of the message currently being processed; stamped onto every emitted
+	// event so output is attributable to the conversation_turn that produced it.
+	// "" for session-level events (claude system init, resumed, stderr). Turns are
+	// strictly serialized server-side, so a single tracked value suffices.
+	var curTurnMu sync.Mutex
+	curTurn := ""
+	setTurn := func(id string) {
+		curTurnMu.Lock()
+		curTurn = id
+		curTurnMu.Unlock()
+	}
+
 	var bufMu sync.Mutex
 	var buf []RunEvent
 	flush := func() {
@@ -57,8 +69,11 @@ func runInteractiveSession(t *Transport, job *ClaimedSession, ctx context.Contex
 		s := seq
 		seq++
 		seqMu.Unlock()
+		curTurnMu.Lock()
+		tid := curTurn
+		curTurnMu.Unlock()
 		bufMu.Lock()
-		buf = append(buf, RunEvent{Seq: s, Type: eventType, TS: nowISO(), Payload: payload})
+		buf = append(buf, RunEvent{Seq: s, Type: eventType, TS: nowISO(), TurnID: tid, Payload: payload})
 		bufMu.Unlock()
 		// Do NOT postEvents inline: emit runs on the stdout-reader goroutine, and a
 		// slow post must never stall draining claude's stdout (backpressure freeze).
@@ -91,12 +106,13 @@ func runInteractiveSession(t *Transport, job *ClaimedSession, ctx context.Contex
 		}
 		// A reclaimed session's claude session already exists, so even its first
 		// spawn must --resume (firstSpawn=false), not --session-id.
-		st, ended := runSessionProcess(ctx, t, job, execDir, scratch, emit, attempt == 0 && !job.Reclaimed)
+		st, ended := runSessionProcess(ctx, t, job, execDir, scratch, emit, setTurn, attempt == 0 && !job.Reclaimed)
 		if ended {
 			status = st
 			break
 		}
 		if attempt < maxRespawns {
+			setTurn("") // 'resumed' is session-level, not part of any turn
 			emit(evSystem, map[string]interface{}{"subtype": "resumed", "attempt": attempt + 1})
 			logln(fmt.Sprintf("interactive run %s — claude exited unexpectedly; resuming (attempt %d)", job.SessionID, attempt+1))
 			time.Sleep(time.Duration(attempt+1) * time.Second)
@@ -122,7 +138,10 @@ func runInteractiveSession(t *Transport, job *ClaimedSession, ctx context.Contex
 // runSessionProcess spawns ONE claude process and drives it until the session
 // ends (an 'end' turn closes stdin) or the process exits. Returns (status, ended);
 // ended=false means an unexpected crash that the caller should --resume.
-func runSessionProcess(ctx context.Context, t *Transport, job *ClaimedSession, execDir, scratchDir string, emit emitFn, firstSpawn bool) (string, bool) {
+func runSessionProcess(ctx context.Context, t *Transport, job *ClaimedSession, execDir, scratchDir string, emit emitFn, setTurn func(string), firstSpawn bool) (string, bool) {
+	// Reset turn attribution for this (possibly re-spawned) process: events before
+	// the first turn is (re-)fed — claude's system/init — are session-level (null).
+	setTurn("")
 	a := job.Agent
 	// --max-turns / --max-budget-usd are process-wide (Phase 0), so they are
 	// intentionally NOT passed for a long-lived interactive session.
@@ -214,6 +233,10 @@ func runSessionProcess(ctx context.Context, t *Transport, job *ClaimedSession, e
 			}
 			switch resp.Kind {
 			case "message":
+				// Attribute this process's output to this turn. Set BEFORE the dedup
+				// early-return so a lease re-delivery (turn still running) still tags
+				// the resumed/replayed output with the correct turn.
+				setTurn(resp.TurnID)
 				// The inbox lease can re-deliver a turn still running (turn > lease).
 				// Dedup by turnId so we never double-feed claude or desync `pending`.
 				inflightMu.Lock()
@@ -305,6 +328,7 @@ func runSessionProcess(ctx context.Context, t *Transport, job *ClaimedSession, e
 				inflightMu.Lock()
 				delete(inflight, turnID)
 				inflightMu.Unlock()
+				setTurn("") // turn acked; until the next message, events are session-level
 			}
 		}
 	}

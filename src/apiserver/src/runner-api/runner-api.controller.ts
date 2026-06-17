@@ -437,6 +437,7 @@ export class RunnerApiController {
           seq: e.seq,
           type: e.type,
           payload: e.payload as Prisma.InputJsonValue,
+          turnId: e.turnId ?? null,
           createdAt: new Date(e.ts),
         })),
         skipDuplicates: true,

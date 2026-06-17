@@ -143,6 +143,7 @@ type RunEvent struct {
 	Seq     int                    `json:"seq"`
 	Type    string                 `json:"type"`
 	TS      string                 `json:"ts"`
+	TurnID  string                 `json:"turnId,omitempty"`
 	Payload map[string]interface{} `json:"payload"`
 }
 

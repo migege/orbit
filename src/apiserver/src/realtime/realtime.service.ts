@@ -126,6 +126,7 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
                   seq: row.seq,
                   type: row.type as RunEventType,
                   payload: row.payload as Record<string, unknown>,
+                  turnId: row.turnId ?? undefined,
                   ts: row.createdAt.toISOString(),
                 },
               });

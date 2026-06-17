@@ -101,12 +101,20 @@ export class SessionsController {
         return concat(history$, live$);
       }),
       map(
-        (e: { seq: number; type: string; payload: unknown; ts?: string; createdAt?: Date }) =>
+        (e: {
+          seq: number;
+          type: string;
+          payload: unknown;
+          turnId?: string | null;
+          ts?: string;
+          createdAt?: Date;
+        }) =>
           ({
             data: {
               seq: e.seq,
               type: e.type,
               payload: e.payload,
+              turnId: e.turnId ?? null,
               ts: e.ts ?? e.createdAt,
             },
           }) as MessageEvent,

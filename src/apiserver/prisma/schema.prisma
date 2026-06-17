@@ -215,10 +215,14 @@ model RunEvent {
   seq       Int
   type      String
   payload   Json
+  // conversation_turn.id that produced this event; null for session-level events.
+  // No FK: high-volume append-only log (cf. Activity); both cascade-delete via session.
+  turnId    String?  @map("turn_id") @db.Uuid
   createdAt DateTime @default(now()) @map("created_at")
 
   @@unique([sessionId, seq])
   @@index([sessionId, seq])
+  @@index([turnId])
   @@map("run_event")
 }
 

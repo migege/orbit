@@ -28,6 +28,8 @@ export interface NormalizedRunEvent {
   type: RunEventType;
   /** ISO-8601 timestamp from the runner. */
   ts: string;
+  /** conversation_turn.id that produced this event; absent for session-level events. */
+  turnId?: string;
   /** Event-type-specific data (text delta, tool name+input, result summary, ...). */
   payload: Record<string, unknown>;
 }
