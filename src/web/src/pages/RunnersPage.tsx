@@ -1,13 +1,11 @@
 import { DeleteOutlined, EditOutlined, MoreOutlined, PlusOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { App as AntdApp, Button, Dropdown, Input, Modal, Spin, type MenuProps } from 'antd';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { encodeId } from '../lib/idCodec';
 import type { Runner } from '../components/TasksSidePanel';
-
-const isMac = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform);
 
 // The runner list used to live in the left sidebar; it now has its own page so
 // "Runners" can sit in the top nav alongside Active/Skills. Selecting a runner
@@ -51,20 +49,6 @@ export function RunnersPage() {
 
   const open = (r: Runner) => navigate(`/runners/${encodeId(r.id)}`);
 
-  // ⌘1 / ⌘2 / … (Ctrl on non-Mac) opens the Nth runner.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;
-      if (e.key < '1' || e.key > '9') return;
-      const idx = Number(e.key) - 1;
-      if (idx >= list.length) return;
-      e.preventDefault();
-      navigate(`/runners/${encodeId(list[idx].id)}`);
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [list, navigate]);
-
   const menu = (r: Runner): MenuProps['items'] => [
     {
       key: 'rename',
@@ -100,11 +84,6 @@ export function RunnersPage() {
   return (
     <>
       <h1 className="page-title">Runners</h1>
-      <div className="tasks-toolbar">
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/runners/register')}>
-          Add runner
-        </Button>
-      </div>
 
       {runners.isLoading ? (
         <div style={{ padding: 48, textAlign: 'center' }}>
@@ -113,8 +92,8 @@ export function RunnersPage() {
       ) : list.length === 0 ? (
         <div className="runners-empty">No runners yet — register a machine to get started.</div>
       ) : (
-        <div className="runners-grid">
-          {list.map((r, idx) => (
+        <div className="runners-list">
+          {list.map((r) => (
             <div
               key={r.id}
               className={`runner-card ${menuOpenId === r.id ? 'menu-open' : ''}`}
@@ -132,12 +111,6 @@ export function RunnersPage() {
                   {typeof r.maxConcurrent === 'number' ? ` · ${r.maxConcurrent} slots` : ''}
                 </div>
               </div>
-              {idx < 9 && (
-                <span className="runner-kbd">
-                  {isMac ? '⌘' : 'Ctrl+'}
-                  {idx + 1}
-                </span>
-              )}
               <Dropdown
                 trigger={['click']}
                 placement="bottomRight"
@@ -157,6 +130,12 @@ export function RunnersPage() {
           ))}
         </div>
       )}
+
+      <div className="tasks-toolbar">
+        <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/runners/register')}>
+          Register Runner
+        </Button>
+      </div>
 
       <Modal
         title="Rename runner"
