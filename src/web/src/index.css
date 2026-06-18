@@ -1029,6 +1029,11 @@ body {
 .md {
   font-size: 14px;
   line-height: 1.6;
+  /* Markdown is rendered to real HTML; reset the pre-wrap inherited from
+     .chat-msg (meant for raw user/streaming text) so the structural newlines
+     mdast-util-to-hast injects between blocks/list-items don't render as blank
+     lines and inflate the spacing. */
+  white-space: normal;
 }
 .md > *:first-child {
   margin-top: 0;
