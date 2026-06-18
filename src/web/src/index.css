@@ -456,9 +456,9 @@ body {
   margin-bottom: 6px;
 }
 
-/* shared column grid: title | estimates | start | due | creator | created | id */
+/* shared column grid: title | estimates | start | due | creator | created */
 .orbit-tasklist {
-  --cols: minmax(200px, 1fr) 88px 116px 116px 140px 150px 96px;
+  --cols: minmax(200px, 1fr) 88px 116px 116px 140px 150px;
   border-top: 1px solid #eceef1;
 }
 .col-head-row,
@@ -549,12 +549,6 @@ body {
   gap: 8px;
   min-width: 0;
 }
-.task-id {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px;
-  color: #8f959e;
-}
-
 /* hover-revealed row actions, floated over the right edge */
 .row-actions {
   position: absolute;

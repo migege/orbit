@@ -19,7 +19,6 @@ import {
   Spin,
   Switch,
   Tooltip,
-  Typography,
 } from 'antd';
 import { useMemo, useState } from 'react';
 import { Link, useLocation, useMatch, useNavigate } from 'react-router-dom';
@@ -244,9 +243,6 @@ export function TasksPage() {
           <span className="task-cell">{creatorName ?? '—'}</span>
         </div>
         <div className="task-cell">{fmtDateTime(r.createdAt)}</div>
-        <Typography.Text className="task-id" copyable={{ text: r.id, tooltips: ['Copy ID', 'Copied'] }}>
-          {r.id.slice(0, 8)}
-        </Typography.Text>
         {showActions && (
           <div className="row-actions">
             {runnable && (
@@ -325,7 +321,6 @@ export function TasksPage() {
             <div className="col-head">Due Date</div>
             <div className="col-head">Creator</div>
             <div className="col-head">Created at</div>
-            <div className="col-head">Task ID</div>
           </div>
 
           {isListView ? (
