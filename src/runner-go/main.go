@@ -4,10 +4,12 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -404,7 +406,10 @@ func cmdResume(args []string) {
 		return
 	}
 
-	sessionID := args[0]
+	// Web URLs carry the base62 public id; the runner and server key sessions by
+	// the raw UUID. Decode here so both the local run dir and the server lookup
+	// resolve.
+	sessionID := decodeSessionID(args[0])
 	sessionDir := filepath.Join(runs, sessionID)
 	metaPath := filepath.Join(sessionDir, "meta.json")
 	meta := readSessionMeta(metaPath)
@@ -450,6 +455,36 @@ func cmdResume(args []string) {
 		}
 		os.Exit(1)
 	}
+}
+
+const base62Alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+
+var uuidRE = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+// decodeSessionID turns the base62 public id shown in web URLs into the
+// canonical lowercase UUID the runner and server key by. A raw UUID passes
+// through; anything that isn't decodable base62 is returned unchanged so the
+// lookup degrades to "not found" instead of crashing. Mirrors the web's
+// decodeId / @orbit/shared toUuid.
+func decodeSessionID(id string) string {
+	if uuidRE.MatchString(id) {
+		return strings.ToLower(id)
+	}
+	n := new(big.Int)
+	base := big.NewInt(62)
+	for _, ch := range id {
+		v := strings.IndexRune(base62Alphabet, ch)
+		if v < 0 {
+			return id // not valid base62 — let the lookup fail cleanly
+		}
+		n.Mul(n, base)
+		n.Add(n, big.NewInt(int64(v)))
+	}
+	if n.BitLen() > 128 {
+		return id // overflows a 128-bit UUID
+	}
+	hex := fmt.Sprintf("%032x", n)
+	return fmt.Sprintf("%s-%s-%s-%s-%s", hex[0:8], hex[8:12], hex[12:16], hex[16:20], hex[20:32])
 }
 
 func readSessionMeta(path string) *sessionMeta {

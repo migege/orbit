@@ -36,6 +36,7 @@ import {
   SessionCompleteRequest,
   TurnCompleteRequest,
 } from '@orbit/shared';
+import { Base62UuidPipe } from '../common/base62-uuid.pipe';
 import { generateToken, generateUserCode, sha256 } from '../common/crypto.util';
 import { PrismaService } from '../prisma/prisma.service';
 import { QueueService } from '../queue/queue.service';
@@ -605,7 +606,7 @@ export class RunnerApiController {
   @Get('sessions/:id/meta')
   async getSessionMeta(
     @CurrentRunner() runner: { id: string },
-    @Param('id') sessionId: string,
+    @Param('id', Base62UuidPipe) sessionId: string,
   ): Promise<{ sessionUuid: string; workDir: string | null; title: string }> {
     const session = await this.assertSessionOwnership(sessionId, runner.id);
     if (!session.claudeSessionId) {
