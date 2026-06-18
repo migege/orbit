@@ -4,7 +4,25 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 )
+
+// expandTilde resolves a leading ~ or ~/ to the running user's home directory.
+// An agent's workDir (from the server) or the config's workDir may be written
+// with a tilde; Go's exec/chdir does not expand it, so we do it here.
+func expandTilde(p string) string {
+	if p != "~" && !strings.HasPrefix(p, "~/") {
+		return p
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return p
+	}
+	if p == "~" {
+		return home
+	}
+	return filepath.Join(home, p[2:])
+}
 
 // RunnerConfig is the persisted credential + identity for this machine's runner.
 // There is one runner per machine; its agents (project dirs + tools) live server-side.

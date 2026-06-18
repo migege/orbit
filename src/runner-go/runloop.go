@@ -19,14 +19,15 @@ func runLoop(cfg *RunnerConfig) {
 	// session the project directory of its agent. sessionExecDir resolves it, falling
 	// back to the config's workDir (the last dir registered) then the process cwd.
 	sessionExecDir := func(workDir string) string {
-		if workDir != "" {
-			return workDir
+		dir := workDir
+		if dir == "" {
+			dir = cfg.WorkDir
 		}
-		if cfg.WorkDir != "" {
-			return cfg.WorkDir
+		if dir == "" {
+			dir, _ = os.Getwd()
 		}
-		cwd, _ := os.Getwd()
-		return cwd
+		// Agent/config workDirs may carry a leading ~; chdir won't expand it.
+		return expandTilde(dir)
 	}
 
 	var mu sync.Mutex
