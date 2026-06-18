@@ -291,32 +291,41 @@ export function TasksSidePanel() {
             <span className="tp-group-name">Task List</span>
             <CaretDownOutlined className={`tp-caret ${listOpen ? '' : 'collapsed'}`} />
           </div>
-          {listOpen &&
-            (taskLists.data ?? []).map((l) => {
-              const key = encodeId(l.id);
-              return (
-                <div
-                  key={l.id}
-                  className={`tp-item inset ${sel === key ? 'active' : ''}`}
-                  onClick={() => {
-                    setSel(key);
-                    navigate(`/lists/${key}`);
-                  }}
-                >
-                  <span
-                    style={{
-                      width: 7,
-                      height: 7,
-                      borderRadius: '50%',
-                      background: '#c0c4cc',
-                      flex: 'none',
-                      marginRight: 8,
+          {listOpen && (
+            <>
+              {(taskLists.data ?? []).map((l) => {
+                const key = encodeId(l.id);
+                return (
+                  <div
+                    key={l.id}
+                    className={`tp-item inset ${sel === key ? 'active' : ''}`}
+                    onClick={() => {
+                      setSel(key);
+                      navigate(`/lists/${key}`);
                     }}
-                  />
-                  <span className="tp-label">{l.title}</span>
-                </div>
-              );
-            })}
+                  >
+                    <span
+                      style={{
+                        width: 7,
+                        height: 7,
+                        borderRadius: '50%',
+                        background: '#c0c4cc',
+                        flex: 'none',
+                        marginRight: 8,
+                      }}
+                    />
+                    <span className="tp-label">{l.title}</span>
+                  </div>
+                );
+              })}
+              <div className="tp-item inset" onClick={() => setCreatingList(true)}>
+                <span className="tp-ico">
+                  <PlusOutlined />
+                </span>
+                <span className="tp-label">Add</span>
+              </div>
+            </>
+          )}
         </div>
 
         <div className="tp-group">
@@ -324,11 +333,6 @@ export function TasksSidePanel() {
             <span className="tp-group-name">Archived</span>
             <CaretDownOutlined className={`tp-caret ${archOpen ? '' : 'collapsed'}`} />
           </div>
-        </div>
-
-        <div className="tp-newgroup" onClick={() => setCreatingList(true)}>
-          <PlusOutlined />
-          <span>New Group</span>
         </div>
       </div>
 

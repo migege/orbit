@@ -220,20 +220,6 @@ body {
 .tp-add:hover {
   color: #3370ff;
 }
-.tp-newgroup {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  height: 36px;
-  margin-top: 4px;
-  padding: 0 16px;
-  color: #8f959e;
-  font-size: 14px;
-  cursor: pointer;
-}
-.tp-newgroup:hover {
-  color: #3370ff;
-}
 .tp-user {
   flex: none;
   border-top: 1px solid #eceef1;
