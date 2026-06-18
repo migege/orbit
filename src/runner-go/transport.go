@@ -22,6 +22,10 @@ func NewTransport(baseURL, token string) *Transport {
 }
 
 func (t *Transport) do(ctx context.Context, method, path string, body, out interface{}, timeout time.Duration) error {
+	return t.doHeaders(ctx, method, path, body, out, timeout, nil)
+}
+
+func (t *Transport) doHeaders(ctx context.Context, method, path string, body, out interface{}, timeout time.Duration, headers map[string]string) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -40,6 +44,9 @@ func (t *Transport) do(ctx context.Context, method, path string, body, out inter
 	req.Header.Set("content-type", "application/json")
 	if t.token != "" {
 		req.Header.Set("authorization", "Bearer "+t.token)
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
 	}
 	resp, err := t.client.Do(req)
 	if err != nil {
@@ -147,4 +154,62 @@ func (t *Transport) inbox(ctx context.Context, sessionID string) (*RunInboxRespo
 
 func (t *Transport) turnComplete(sessionID string, b TurnCompleteRequest) error {
 	return t.do(nil, "POST", "/runner/sessions/"+sessionID+"/turn-complete", b, nil, 35*time.Second)
+}
+
+// ── Task/TaskList ops for the `orbit mcp` server ───────────────────────────
+// These hit the runner-token-authenticated endpoints under /runner; the server
+// scopes everything to the runner's owner. Creating work passes X-Orbit-Agent-Id
+// so the task/comment is attributed to the acting agent. Each returns the raw
+// JSON response so the MCP layer can hand it back verbatim.
+
+const taskOpTimeout = 20 * time.Second
+
+func agentHeader(agentID string) map[string]string {
+	if agentID == "" {
+		return nil
+	}
+	return map[string]string{"X-Orbit-Agent-Id": agentID}
+}
+
+func (t *Transport) listTasks() (json.RawMessage, error) {
+	var out json.RawMessage
+	err := t.do(nil, "GET", "/runner/tasks", nil, &out, taskOpTimeout)
+	return out, err
+}
+
+func (t *Transport) getTask(id string) (json.RawMessage, error) {
+	var out json.RawMessage
+	err := t.do(nil, "GET", "/runner/tasks/"+id, nil, &out, taskOpTimeout)
+	return out, err
+}
+
+func (t *Transport) createTask(agentID string, body interface{}) (json.RawMessage, error) {
+	var out json.RawMessage
+	err := t.doHeaders(nil, "POST", "/runner/tasks", body, &out, taskOpTimeout, agentHeader(agentID))
+	return out, err
+}
+
+func (t *Transport) updateTask(id string, body interface{}) (json.RawMessage, error) {
+	var out json.RawMessage
+	err := t.do(nil, "PATCH", "/runner/tasks/"+id, body, &out, taskOpTimeout)
+	return out, err
+}
+
+func (t *Transport) commentTask(id, agentID, bodyText string) (json.RawMessage, error) {
+	var out json.RawMessage
+	err := t.doHeaders(nil, "POST", "/runner/tasks/"+id+"/comments",
+		map[string]string{"body": bodyText}, &out, taskOpTimeout, agentHeader(agentID))
+	return out, err
+}
+
+func (t *Transport) listTaskLists() (json.RawMessage, error) {
+	var out json.RawMessage
+	err := t.do(nil, "GET", "/runner/task-lists", nil, &out, taskOpTimeout)
+	return out, err
+}
+
+func (t *Transport) createTaskList(title string) (json.RawMessage, error) {
+	var out json.RawMessage
+	err := t.do(nil, "POST", "/runner/task-lists", map[string]string{"title": title}, &out, taskOpTimeout)
+	return out, err
 }

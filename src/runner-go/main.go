@@ -98,6 +98,16 @@ Usage:
 
 Use this if the startup auto-update isn't working.
 `,
+	"mcp": `orbit mcp — run the Task/TaskList MCP server (stdio)
+
+Usage:
+  orbit mcp
+
+Speaks the Model Context Protocol over stdin/stdout so a Claude Code session can
+manage Orbit Tasks. The runner injects this server into each session via --mcp-config;
+it is not meant to be run by hand. It reads the runner credential from config.json and
+the session context (ORBIT_SESSION_ID / ORBIT_AGENT_ID / ORBIT_TASK_ID) from the env.
+`,
 }
 
 // helpFor returns the help text for a subcommand, or the global usage as a fallback.
@@ -143,6 +153,8 @@ func main() {
 		cmdStatus()
 	case "upgrade":
 		cmdUpgrade()
+	case "mcp":
+		cmdMcp()
 	case "version", "--version", "-v":
 		fmt.Println(version)
 	default:

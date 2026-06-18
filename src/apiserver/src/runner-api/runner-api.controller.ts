@@ -298,6 +298,8 @@ export class RunnerApiController {
         maxSeq: agg._max.seq ?? 0,
         agent: agentCfg,
         workDir: agent?.workDir ?? undefined,
+        agentId: s.agentId ?? undefined,
+        taskId: s.taskId ?? undefined,
       });
     }
     return { sessions: out };

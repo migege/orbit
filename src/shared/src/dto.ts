@@ -137,6 +137,11 @@ export interface ClaimedSession {
   /** True when reviving an ended session: claude's session already exists, so the
    *  runner must --resume (not --session-id) even on its first spawn. */
   resume?: boolean;
+  /** DB id of the session's agent, injected into the claude process (ORBIT_AGENT_ID)
+   *  so the `orbit mcp` server can attribute task work to it. Omitted if no agent. */
+  agentId?: string;
+  /** DB id of the parent Task this session runs under, if any (ORBIT_TASK_ID). */
+  taskId?: string;
 }
 
 export interface RunEventBatch {
@@ -176,6 +181,10 @@ export interface ReclaimSession {
   agent: AgentExecConfig;
   /** Project directory to run claude in (claude's cwd), from the session's agent. */
   workDir?: string;
+  /** DB id of the session's agent (ORBIT_AGENT_ID), cf. ClaimedSession.agentId. */
+  agentId?: string;
+  /** DB id of the parent Task this session runs under, if any (ORBIT_TASK_ID). */
+  taskId?: string;
 }
 
 /** Control plane → runner response for GET /runner/sessions/reclaim. */

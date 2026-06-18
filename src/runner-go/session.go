@@ -164,9 +164,19 @@ func runSessionProcess(ctx context.Context, t *Transport, job *ClaimedSession, e
 	if len(a.DisallowedTools) > 0 {
 		args = append(args, "--disallowedTools", strings.Join(a.DisallowedTools, ","))
 	}
-	if a.McpConfig != nil {
+	// Always pass an --mcp-config: merge the agent's configured servers with the
+	// built-in `orbit` server (this same binary in `mcp` mode), so every session can
+	// manage Tasks. os.Executable() is resolved per-spawn, so it survives self-update.
+	servers := map[string]interface{}{}
+	for k, v := range a.McpConfig {
+		servers[k] = v
+	}
+	if exe, err := os.Executable(); err == nil {
+		servers["orbit"] = map[string]interface{}{"command": exe, "args": []string{"mcp"}}
+	}
+	if len(servers) > 0 {
 		mcpPath := filepath.Join(scratchDir, "mcp.json")
-		b, _ := json.Marshal(map[string]interface{}{"mcpServers": a.McpConfig})
+		b, _ := json.Marshal(map[string]interface{}{"mcpServers": servers})
 		_ = os.WriteFile(mcpPath, b, 0o644)
 		args = append(args, "--mcp-config", mcpPath)
 	}
@@ -180,7 +190,14 @@ func runSessionProcess(ctx context.Context, t *Transport, job *ClaimedSession, e
 	defer procCancel()
 	cmd := exec.CommandContext(procCtx, "claude", args...)
 	cmd.Dir = execDir
-	cmd.Env = os.Environ()
+	// Inject session context so the built-in `orbit mcp` server (a child of claude)
+	// knows where it is. The runner token is NOT passed here — `orbit mcp` reads it
+	// from config.json so it never lands in the claude process environment.
+	cmd.Env = append(os.Environ(),
+		"ORBIT_SESSION_ID="+job.SessionID,
+		"ORBIT_AGENT_ID="+job.AgentID, // empty => orbit mcp falls back to USER attribution
+		"ORBIT_TASK_ID="+job.TaskID,   // empty => no "current task"
+	)
 	stdin, _ := cmd.StdinPipe()
 	stdout, _ := cmd.StdoutPipe()
 	stderr, _ := cmd.StderrPipe()

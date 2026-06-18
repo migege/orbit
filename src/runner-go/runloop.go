@@ -104,6 +104,8 @@ func runLoop(cfg *RunnerConfig) {
 				Title:       r.Title,
 				Agent:       r.Agent,
 				WorkDir:     r.WorkDir,
+				AgentID:     r.AgentID,
+				TaskID:      r.TaskID,
 				Reclaimed:   true,
 				SessionUUID: r.SessionUUID,
 				MaxSeq:      r.MaxSeq,

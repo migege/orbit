@@ -119,6 +119,9 @@ export class QueueService {
       sessionUuid: session.claudeSessionId ?? session.id,
       maxSeq,
       resume,
+      // Injected into the claude process so the `orbit mcp` server knows its context.
+      agentId: session.agentId ?? undefined,
+      taskId: session.taskId ?? undefined,
       agent: {
         // Per-session override wins over the agent, then a server default.
         model: session.model ?? agent?.model ?? 'claude-sonnet-4-6',

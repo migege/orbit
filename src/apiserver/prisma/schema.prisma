@@ -67,7 +67,6 @@ model User {
   createdSessions  Session[]         @relation("SessionCreator")
   ownedTasks       Task[] // tasks this user owns (tenant scope)
   taskLists        TaskList[] // task lists this user owns (tenant scope)
-  taskComments     TaskComment[]
 
   @@map("user")
 }
@@ -375,13 +374,15 @@ model Task {
 
 // Comments on a Task (dedicated table; append-only MVP: create/list/delete).
 model TaskComment {
-  id        String   @id @default(uuid(7)) @db.Uuid
-  taskId    String   @map("task_id") @db.Uuid
-  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  authorId  String   @map("author_id") @db.Uuid
-  author    User     @relation(fields: [authorId], references: [id])
-  body      String
-  createdAt DateTime @default(now()) @map("created_at")
+  id         String      @id @default(uuid(7)) @db.Uuid
+  taskId     String      @map("task_id") @db.Uuid
+  task       Task        @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  // Polymorphic author (no FK, cf. Task.creatorId): a comment can be written by a
+  // user (web) or by an agent (via the runner MCP path). Names are resolved in code.
+  authorType CreatorType @map("author_type")
+  authorId   String      @map("author_id") @db.Uuid
+  body       String
+  createdAt  DateTime    @default(now()) @map("created_at")
 
   @@index([taskId, createdAt])
   @@map("task_comment")

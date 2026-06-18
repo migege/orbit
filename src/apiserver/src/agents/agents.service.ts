@@ -3,6 +3,10 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateAgentDto, UpdateAgentDto } from './dto';
 
+// The `orbit mcp` server is injected into every session, but under DONT_ASK its tools
+// are blocked unless allow-listed. Default new agents to allow the whole orbit server.
+const ORBIT_MCP_TOOL = 'mcp__orbit__*';
+
 @Injectable()
 export class AgentsService {
   constructor(private readonly prisma: PrismaService) {}
@@ -32,7 +36,9 @@ export class AgentsService {
         model: dto.model ?? 'claude-sonnet-4-6',
         appendSystemPrompt: dto.appendSystemPrompt,
         systemPrompt: dto.systemPrompt,
-        allowedTools: (dto.allowedTools ?? []) as Prisma.InputJsonValue,
+        allowedTools: Array.from(
+          new Set([...(dto.allowedTools ?? []), ORBIT_MCP_TOOL]),
+        ) as Prisma.InputJsonValue,
         disallowedTools: (dto.disallowedTools ?? []) as Prisma.InputJsonValue,
         permissionMode: dto.permissionMode ?? 'dontAsk',
         maxTurns: dto.maxTurns,

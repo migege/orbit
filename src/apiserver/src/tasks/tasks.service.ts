@@ -4,9 +4,12 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { CreatorType, Prisma } from '@prisma/client';
+import { CreatorType, Prisma, TaskComment } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateTaskCommentDto, CreateTaskDto, UpdateTaskDto } from './dto';
+
+/** A polymorphic actor (user or agent) that authored a task or comment. */
+export type Creator = { type: CreatorType; id: string };
 
 @Injectable()
 export class TasksService {
@@ -36,7 +39,22 @@ export class TasksService {
     if (!list) throw new ForbiddenException('task list not found');
   }
 
-  async create(ownerId: string, dto: CreateTaskDto) {
+  /**
+   * Validate an agent belongs to the owner and return it as a task/comment creator.
+   * Used by the runner MCP path to attribute work to the acting agent. Returns
+   * undefined when no agent id is supplied so callers fall back to USER attribution.
+   */
+  async resolveAgentCreator(ownerId: string, agentId?: string): Promise<Creator | undefined> {
+    if (!agentId) return undefined;
+    const agent = await this.prisma.agent.findFirst({
+      where: { id: agentId, ownerId },
+      select: { id: true },
+    });
+    if (!agent) throw new ForbiddenException('agent not found');
+    return { type: CreatorType.AGENT, id: agent.id };
+  }
+
+  async create(ownerId: string, dto: CreateTaskDto, creator?: Creator) {
     if (!dto.title) throw new BadRequestException('title is required');
     await this.assertOwnedAgent(ownerId, dto.assigneeId);
     await this.assertOwnedList(ownerId, dto.listId);
@@ -45,9 +63,9 @@ export class TasksService {
         title: dto.title,
         description: dto.description,
         ownerId,
-        // Created through the user-facing API -> the human is the creator.
-        creatorType: CreatorType.USER,
-        creatorId: ownerId,
+        // Defaults to the human (user-facing API); the runner path passes the agent.
+        creatorType: creator?.type ?? CreatorType.USER,
+        creatorId: creator?.id ?? ownerId,
         assigneeId: dto.assigneeId,
         listId: dto.listId,
         dueDate: dto.dueDate ? new Date(dto.dueDate) : undefined,
@@ -71,15 +89,35 @@ export class TasksService {
       where: { id, ownerId },
       include: {
         assignee: { select: { id: true, name: true, model: true } },
-        comments: {
-          orderBy: { createdAt: 'asc' },
-          include: { author: { select: { id: true, name: true } } },
-        },
+        // author is polymorphic (no FK), so names are resolved separately below.
+        comments: { orderBy: { createdAt: 'asc' } },
         sessions: { select: { id: true, title: true, status: true } },
       },
     });
     if (!task) throw new NotFoundException('task not found');
-    return task;
+    return { ...task, comments: await this.resolveCommentAuthors(task.comments) };
+  }
+
+  /**
+   * Resolve each comment's polymorphic author (USER|AGENT) to a display name in one
+   * batched pass (no FK to include). Returns the comments with an added authorName.
+   */
+  private async resolveCommentAuthors(comments: TaskComment[]) {
+    if (comments.length === 0) return [];
+    const userIds = comments.filter((c) => c.authorType === CreatorType.USER).map((c) => c.authorId);
+    const agentIds = comments.filter((c) => c.authorType === CreatorType.AGENT).map((c) => c.authorId);
+    const [users, agents] = await Promise.all([
+      userIds.length
+        ? this.prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, name: true } })
+        : [],
+      agentIds.length
+        ? this.prisma.agent.findMany({ where: { id: { in: agentIds } }, select: { id: true, name: true } })
+        : [],
+    ]);
+    const names = new Map<string, string>();
+    for (const u of users) names.set(u.id, u.name);
+    for (const a of agents) names.set(a.id, a.name);
+    return comments.map((c) => ({ ...c, authorName: names.get(c.authorId) ?? null }));
   }
 
   async update(ownerId: string, id: string, dto: UpdateTaskDto) {
@@ -109,11 +147,17 @@ export class TasksService {
     return { ok: true };
   }
 
-  async addComment(ownerId: string, id: string, dto: CreateTaskCommentDto) {
+  async addComment(ownerId: string, id: string, dto: CreateTaskCommentDto, author?: Creator) {
     await this.get(ownerId, id);
     if (!dto.body) throw new BadRequestException('body is required');
     return this.prisma.taskComment.create({
-      data: { taskId: id, authorId: ownerId, body: dto.body },
+      data: {
+        taskId: id,
+        // Defaults to the human (user-facing API); the runner path passes the agent.
+        authorType: author?.type ?? CreatorType.USER,
+        authorId: author?.id ?? ownerId,
+        body: dto.body,
+      },
     });
   }
 

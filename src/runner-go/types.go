@@ -101,6 +101,10 @@ type ClaimedSession struct {
 	// Resume marks a session revived from an ended state: like a reclaim, claude's
 	// session already exists, so even the first spawn must --resume. Server-set.
 	Resume bool `json:"resume"`
+	// AgentID/TaskID are injected into the claude process (ORBIT_AGENT_ID/ORBIT_TASK_ID)
+	// so the `orbit mcp` server can attribute task work and resolve the current task.
+	AgentID string `json:"agentId,omitempty"`
+	TaskID  string `json:"taskId,omitempty"`
 	// Reclaimed marks a session re-attached after a runner restart: the claude
 	// session already exists, so the first spawn must --resume, not --session-id.
 	// Runner-internal (never sent by the server).
@@ -126,6 +130,9 @@ type ReclaimSession struct {
 	Agent       AgentExecConfig `json:"agent"`
 	// WorkDir is claude's cwd for this session, from the session's agent.
 	WorkDir string `json:"workDir,omitempty"`
+	// Injected into the claude process, cf. ClaimedSession.AgentID/TaskID.
+	AgentID string `json:"agentId,omitempty"`
+	TaskID  string `json:"taskId,omitempty"`
 }
 
 type ReclaimResponse struct {
