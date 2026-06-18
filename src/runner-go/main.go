@@ -2,10 +2,12 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -33,6 +35,7 @@ Usage:
   orbit run                         Start the runner loop in the foreground
   orbit unregister [--yes]          Remove this runner: delete it server-side, stop the service, drop local config
   orbit status                      Show this directory's runner and its control-plane status
+  orbit resume [session-id]         Resume a session in this terminal via claude --resume
   orbit upgrade                     Force-reinstall the latest binary (if auto-update isn't working)
 
 Run 'orbit <command> --help' for command-specific options.
@@ -90,6 +93,15 @@ Options:
 
 Usage:
   orbit status
+`,
+	"resume": `orbit resume — resume a session in this terminal
+
+Usage:
+  orbit resume [session-id]
+
+Resumes the given session by running 'claude --resume' in the session's
+original work directory. The session ID is the one shown in the web UI URL
+(e.g. /sessions/<id>). If omitted, lists sessions available on this machine.
 `,
 	"upgrade": `orbit upgrade — force-reinstall the latest orbit binary
 
@@ -151,6 +163,8 @@ func main() {
 		cmdUnregister(bools)
 	case "status":
 		cmdStatus()
+	case "resume":
+		cmdResume(args[1:])
 	case "upgrade":
 		cmdUpgrade()
 	case "mcp":
@@ -361,6 +375,93 @@ func cmdStatus() {
 			fmt.Printf("  • %s → %s\n", a.Name, dir)
 		}
 	}
+}
+
+func cmdResume(args []string) {
+	runs := runsDir()
+
+	// No session ID: list sessions available on this machine.
+	if len(args) == 0 || args[0] == "" {
+		entries, err := os.ReadDir(runs)
+		if err != nil || len(entries) == 0 {
+			fmt.Println("no sessions found on this machine")
+			return
+		}
+		fmt.Println("sessions on this machine:")
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			id := e.Name()
+			meta := readSessionMeta(filepath.Join(runs, id, "meta.json"))
+			if meta != nil && meta.Title != "" {
+				fmt.Printf("  %s  %s\n", id, meta.Title)
+			} else {
+				fmt.Printf("  %s\n", id)
+			}
+		}
+		fmt.Println("\nRun:  orbit resume <session-id>")
+		return
+	}
+
+	sessionID := args[0]
+	sessionDir := filepath.Join(runs, sessionID)
+	metaPath := filepath.Join(sessionDir, "meta.json")
+	meta := readSessionMeta(metaPath)
+	if meta == nil {
+		// Fall back to the server for sessions that predate local meta storage.
+		cfg := loadConfig()
+		if cfg == nil {
+			fmt.Fprintln(os.Stderr, "no runner config — run `orbit register` first")
+			os.Exit(1)
+		}
+		resp, err := NewTransport(cfg.ServerURL, cfg.RunnerToken).sessionMeta(sessionID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "session %q not found: %v\n", sessionID, err)
+			os.Exit(1)
+		}
+		meta = &sessionMeta{SessionUUID: resp.SessionUUID, Title: resp.Title}
+		if resp.WorkDir != nil {
+			meta.WorkDir = *resp.WorkDir
+		}
+		// Cache it so future resumes are offline-capable.
+		_ = os.MkdirAll(sessionDir, 0o755)
+		if b, err := json.Marshal(meta); err == nil {
+			_ = os.WriteFile(metaPath, b, 0o644)
+		}
+	}
+
+	fmt.Printf("resuming session %s", sessionID)
+	if meta.Title != "" {
+		fmt.Printf(" — %s", meta.Title)
+	}
+	fmt.Println()
+
+	cmd := exec.Command("claude", "--resume", meta.SessionUUID)
+	if meta.WorkDir != "" {
+		cmd.Dir = expandTilde(meta.WorkDir)
+	}
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			os.Exit(exitErr.ExitCode())
+		}
+		os.Exit(1)
+	}
+}
+
+func readSessionMeta(path string) *sessionMeta {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var m sessionMeta
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil
+	}
+	return &m
 }
 
 func cmdUpgrade() {

@@ -194,6 +194,20 @@ func agentHeader(agentID string) map[string]string {
 	return map[string]string{"X-Orbit-Agent-Id": agentID}
 }
 
+type SessionMetaResponse struct {
+	SessionUUID string  `json:"sessionUuid"`
+	WorkDir     *string `json:"workDir"`
+	Title       string  `json:"title"`
+}
+
+func (t *Transport) sessionMeta(sessionID string) (*SessionMetaResponse, error) {
+	var out SessionMetaResponse
+	if err := t.do(nil, "GET", "/runner/sessions/"+sessionID+"/meta", nil, &out, 10*time.Second); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 func (t *Transport) listTasks() (json.RawMessage, error) {
 	var out json.RawMessage
 	err := t.do(nil, "GET", "/runner/tasks", nil, &out, taskOpTimeout)

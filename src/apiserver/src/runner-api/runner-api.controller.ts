@@ -600,6 +600,27 @@ export class RunnerApiController {
     return { ok: true };
   }
 
+  /** Return the claude session UUID + workDir so `orbit resume` can launch claude --resume. */
+  @UseGuards(RunnerAuthGuard)
+  @Get('sessions/:id/meta')
+  async getSessionMeta(
+    @CurrentRunner() runner: { id: string },
+    @Param('id') sessionId: string,
+  ): Promise<{ sessionUuid: string; workDir: string | null; title: string }> {
+    const session = await this.assertSessionOwnership(sessionId, runner.id);
+    if (!session.claudeSessionId) {
+      throw new NotFoundException('session has no claude session ID');
+    }
+    const agent = session.agentId
+      ? await this.prisma.agent.findUnique({ where: { id: session.agentId } })
+      : null;
+    return {
+      sessionUuid: session.claudeSessionId,
+      workDir: agent?.workDir ?? null,
+      title: session.title,
+    };
+  }
+
   private async assertSessionOwnership(sessionId: string, runnerId: string) {
     const session = await this.prisma.session.findUnique({ where: { id: sessionId } });
     if (!session || session.assignedRunnerId !== runnerId) {

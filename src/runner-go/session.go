@@ -28,9 +28,22 @@ func nextReqID() string {
 // session (Route B): it pulls user turns from the per-run inbox, feeds them over
 // stdin as stream-json, streams events back, acks each turn via /turn-complete,
 // and respawns with --resume on an unexpected crash. It finalizes the run on exit.
+// sessionMeta is written to the scratch directory so `orbit resume` can find
+// the claude session UUID and work directory without querying the server.
+type sessionMeta struct {
+	SessionUUID string `json:"sessionUuid"`
+	WorkDir     string `json:"workDir"`
+	Title       string `json:"title"`
+}
+
 func runInteractiveSession(t *Transport, job *ClaimedSession, ctx context.Context, execDir string) {
 	scratch := filepath.Join(runsDir(), job.SessionID)
 	_ = os.MkdirAll(scratch, 0o755)
+
+	// Persist enough metadata for `orbit resume` to work offline.
+	if b, err := json.Marshal(sessionMeta{SessionUUID: job.SessionUUID, WorkDir: execDir, Title: job.Title}); err == nil {
+		_ = os.WriteFile(filepath.Join(scratch, "meta.json"), b, 0o644)
+	}
 
 	// Session-scoped, monotonic event seq that survives respawn. Continues from the
 	// server's high-water mark so post-respawn events don't collide (skipDuplicates).
