@@ -211,15 +211,16 @@ function ToolView({ node, live }: { node: ToolNode; live?: boolean }) {
   // node.input keeps its reference across tree rebuilds (the source event object is
   // reused when events are appended), so this holds the computed body/icon — and the
   // <Diff>/<MD>/<KeyVals> elements inside it — stable instead of rebuilding each append.
-  const { label, summary, summaryMono, body, icon } = useMemo(
+  const { label, summary, summaryMono, body, icon, tone, path, meta } = useMemo(
     () => describeTool(node.name, node.input),
     [node.name, node.input],
   );
   const isTask = node.name === 'Task';
+  const p = path ? splitPath(path) : null;
   const hasDetail = !!body || node.children.length > 0 || !!node.result;
   const [open, setOpen] = useState(!!node.result?.isError);
   return (
-    <div className={`chat-tool-card${isTask ? ' chat-tool-task' : ''}`}>
+    <div className={`chat-tool-card chat-tone-${tone ?? 'default'}${isTask ? ' chat-tool-task' : ''}`}>
       <div
         className={`chat-tool-row${hasDetail ? '' : ' no-detail'}`}
         onClick={hasDetail ? () => setOpen((o) => !o) : undefined}
@@ -229,9 +230,15 @@ function ToolView({ node, live }: { node: ToolNode; live?: boolean }) {
         )}
         <span className="chat-tool-icon">{icon}</span>
         <span className="chat-tool-name">{label}</span>
-        {summary && (
-          <span className={`chat-tool-summary${summaryMono ? ' mono' : ''}`}>{summary}</span>
+        {p ? (
+          <span className="chat-tool-summary mono chat-path" title={path}>
+            <b className="chat-path-file">{p.base}</b>
+            {p.dir && <span className="chat-path-dir">{p.dir}</span>}
+          </span>
+        ) : (
+          summary && <span className={`chat-tool-summary${summaryMono ? ' mono' : ''}`}>{summary}</span>
         )}
+        {meta && <span className="chat-tool-meta">{meta}</span>}
         <ToolStatus node={node} live={live} />
       </div>
       {hasDetail && open && (
@@ -271,12 +278,17 @@ function ToolStatus({ node, live }: { node: ToolNode; live?: boolean }) {
   );
 }
 
+type Tone = 'read' | 'exec' | 'write' | 'agent' | 'default';
+
 type ToolDesc = {
   label: string;
   summary?: string;
   summaryMono?: boolean; // render the summary in monospace (paths/patterns), not prose
   body?: ReactNode;
   icon: ReactNode;
+  tone?: Tone; // colour family for the icon chip + card left rail
+  path?: string; // a file path → rendered as bold filename + dimmed parent dir
+  meta?: string; // small trailing badge (line range, edit count)
 };
 
 // describeTool maps a tool name + input to a folded-row label/summary/icon and an
@@ -285,25 +297,26 @@ function describeTool(name: string, input: any): ToolDesc {
   const i = input ?? {};
   switch (name) {
     case 'Bash':
-      return { label: 'Bash', icon: <CodeOutlined />, summary: i.description, body: <Pre text={String(i.command ?? '')} prompt /> };
+      return { label: 'Bash', icon: <CodeOutlined />, tone: 'exec', summary: i.description, body: <Pre text={String(i.command ?? '')} prompt /> };
     case 'Read':
-      return { label: 'Read', icon: <FileTextOutlined />, summary: fileLabel(i.file_path, i.offset, i.limit), summaryMono: true };
+      return { label: 'Read', icon: <FileTextOutlined />, tone: 'read', path: i.file_path, meta: lineMeta(i.offset, i.limit) };
     case 'Write':
       return {
         label: 'Write',
         icon: <FileAddOutlined />,
-        summary: i.file_path,
-        summaryMono: true,
+        tone: 'write',
+        path: i.file_path,
         body: i.content ? <Pre text={String(i.content)} /> : undefined,
       };
     case 'Edit':
-      return { label: 'Edit', icon: <EditOutlined />, summary: i.file_path, summaryMono: true, body: <Diff oldStr={i.old_string} newStr={i.new_string} /> };
+      return { label: 'Edit', icon: <EditOutlined />, tone: 'write', path: i.file_path, body: <Diff oldStr={i.old_string} newStr={i.new_string} /> };
     case 'MultiEdit':
       return {
         label: 'MultiEdit',
         icon: <EditOutlined />,
-        summary: `${i.file_path ?? ''} · ${i.edits?.length ?? 0} edits`,
-        summaryMono: true,
+        tone: 'write',
+        path: i.file_path,
+        meta: `${i.edits?.length ?? 0} edits`,
         body: (
           <>
             {(i.edits ?? []).map((e: any, k: number) => (
@@ -313,21 +326,22 @@ function describeTool(name: string, input: any): ToolDesc {
         ),
       };
     case 'Glob':
-      return { label: 'Glob', icon: <FolderOpenOutlined />, summary: [i.pattern, i.path].filter(Boolean).join('  ·  '), summaryMono: true };
+      return { label: 'Glob', icon: <FolderOpenOutlined />, tone: 'read', summary: [i.pattern, i.path].filter(Boolean).join('  ·  '), summaryMono: true };
     case 'Grep':
-      return { label: 'Grep', icon: <SearchOutlined />, summary: [i.pattern, i.path, i.glob].filter(Boolean).join('  ·  '), summaryMono: true };
+      return { label: 'Grep', icon: <SearchOutlined />, tone: 'read', summary: [i.pattern, i.path, i.glob].filter(Boolean).join('  ·  '), summaryMono: true };
     case 'TodoWrite':
       return { label: 'Todos', icon: <CheckSquareOutlined />, body: <Todos todos={i.todos ?? []} /> };
     case 'WebFetch':
-      return { label: 'WebFetch', icon: <GlobalOutlined />, summary: i.url, summaryMono: true };
+      return { label: 'WebFetch', icon: <GlobalOutlined />, tone: 'read', summary: i.url, summaryMono: true };
     case 'WebSearch':
-      return { label: 'WebSearch', icon: <SearchOutlined />, summary: i.query };
+      return { label: 'WebSearch', icon: <SearchOutlined />, tone: 'read', summary: i.query };
     case 'ToolSearch':
-      return { label: 'ToolSearch', icon: <ApiOutlined />, summary: i.query, summaryMono: true, body: hasKeys(i) ? <KeyVals obj={i} /> : undefined };
+      return { label: 'ToolSearch', icon: <ApiOutlined />, tone: 'read', summary: i.query, summaryMono: true, body: hasKeys(i) ? <KeyVals obj={i} /> : undefined };
     case 'Task':
       return {
         label: `Task${i.subagent_type ? ` · ${i.subagent_type}` : ''}`,
         icon: <PartitionOutlined />,
+        tone: 'agent',
         summary: i.description,
         body: i.prompt ? (
           <div className="chat-tool-prompt">
@@ -575,10 +589,23 @@ function kvSummary(o: any): string | undefined {
   return undefined;
 }
 
-function fileLabel(path?: string, offset?: number, limit?: number): string | undefined {
-  if (!path) return undefined;
-  if (offset || limit) return `${path}  (from ${offset ?? 0}${limit ? `, ${limit} lines` : ''})`;
-  return path;
+// Split a file path into a bold leaf filename + a dimmed, abbreviated parent dir
+// (…/<last segment>/) so the row leads with the file, not the long absolute path.
+// The full path stays available on hover via the row's title attribute.
+function splitPath(path: string): { base: string; dir: string } {
+  const clean = path.replace(/\/+$/, '');
+  const cut = clean.lastIndexOf('/');
+  if (cut < 0) return { base: clean, dir: '' };
+  const segs = clean.slice(0, cut).split('/').filter(Boolean);
+  return { base: clean.slice(cut + 1), dir: segs.length ? `…/${segs[segs.length - 1]}/` : '/' };
+}
+
+// Read's offset/limit → a compact line-range badge (e.g. L240–400) instead of an
+// inline "(from 240, 160 lines)" tail on the path.
+function lineMeta(offset?: number, limit?: number): string | undefined {
+  if (!offset && !limit) return undefined;
+  const start = offset ?? 0;
+  return limit ? `L${start}–${start + limit}` : `L${start}+`;
 }
 
 const safeJson = (v: any): string => {

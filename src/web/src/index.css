@@ -1134,11 +1134,31 @@ body {
 
 /* tool cards — folded one-line rows that expand on click */
 .chat-tool-card {
+  --tone: #d6d9de;
+  --tone-bg: #eef0f3;
   margin: 6px 0;
   border: 1px solid #e7e9ec;
+  border-left: 3px solid var(--tone);
   border-radius: 8px;
   overflow: hidden;
   background: #fff;
+}
+/* per-tool colour family: drives the icon chip + the card's left rail */
+.chat-tone-read {
+  --tone: #2563eb;
+  --tone-bg: #e8f0fe;
+}
+.chat-tone-exec {
+  --tone: #0d9488;
+  --tone-bg: #e2f6f3;
+}
+.chat-tone-write {
+  --tone: #d97706;
+  --tone-bg: #fdf0dd;
+}
+.chat-tone-agent {
+  --tone: #7c3aed;
+  --tone-bg: #f1ebfd;
 }
 .chat-tool-row {
   display: flex;
@@ -1166,7 +1186,13 @@ body {
 .chat-tool-icon {
   flex: none;
   display: inline-flex;
-  color: #8f959e;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: var(--tone-bg);
+  color: var(--tone);
   font-size: 13px;
 }
 .chat-tool-name {
@@ -1176,7 +1202,7 @@ body {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 .chat-tool-summary {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1188,9 +1214,28 @@ body {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
 }
+/* path summary: bold leaf filename + dimmed parent dir */
+.chat-path-file {
+  font-weight: 600;
+  color: #1f2329;
+}
+.chat-path-dir {
+  margin-left: 6px;
+  font-weight: 400;
+  color: #b7bcc4;
+}
+/* trailing metadata badge (line range, edit count) */
+.chat-tool-meta {
+  flex: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: #8f959e;
+  background: #f1f2f5;
+  border-radius: 5px;
+  padding: 0 6px;
+}
 .chat-tool-status {
   flex: none;
-  margin-left: auto;
   font-size: 13px;
 }
 .chat-tool-status.ok {
@@ -1206,13 +1251,10 @@ body {
   color: #c0c4cc;
 }
 .chat-tool-task .chat-tool-row {
-  background: #f3f7ff;
+  background: #faf8ff;
 }
 .chat-tool-task .chat-tool-row:hover {
-  background: #eaf1ff;
-}
-.chat-tool-task .chat-tool-icon {
-  color: #3370ff;
+  background: #f4eefe;
 }
 .chat-tool-detail {
   border-top: 1px solid #eceef1;
