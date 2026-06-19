@@ -1142,11 +1142,12 @@ body {
   color: #8f959e;
 }
 /* Assistant turns are long-form Markdown — render them as a document (no bubble,
-   capped reading measure) rather than a chat pill; only short user/streaming-raw
-   turns keep a bubble. Equal specificity to .chat-msg, but later, so these win. */
+   spanning the full session width) rather than a chat pill; only short
+   user/streaming-raw turns keep a bubble. max-width:none overrides .chat-msg's
+   80% cap (equal specificity, but later, so this wins). */
 .chat-assistant {
   background: transparent;
-  max-width: 780px;
+  max-width: none;
   padding: 0 12px;
   border-radius: 0;
 }
