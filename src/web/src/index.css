@@ -251,6 +251,21 @@ body {
   gap: 12px;
   margin: 16px 0 8px;
 }
+/* Inline bar with batch actions, shown only while rows are selected. */
+.tasks-bulkbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  padding: 4px 10px;
+  background: #f0f5ff;
+  border: 1px solid #d6e4ff;
+  border-radius: 8px;
+}
+.tasks-bulkbar-count {
+  font-size: 13px;
+  color: #1f2329;
+}
 
 /* ---- Runners page (the runner list, moved out of the sidebar) ---- */
 .runners-empty {
@@ -444,8 +459,14 @@ body {
 
 /* shared column grid: title | assignee */
 .orbit-tasklist {
-  --cols: minmax(200px, 1fr) 160px;
+  --cols: 28px minmax(200px, 1fr) 160px;
   border-top: 1px solid #eceef1;
+}
+/* Multi-select checkbox column (header + per row). */
+.task-check {
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 .col-head-row,
 .task-row {
