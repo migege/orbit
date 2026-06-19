@@ -1788,11 +1788,10 @@ body {
   opacity: 0.5;
   cursor: not-allowed;
 }
-.approval-hint {
-  margin-left: auto;
-  align-self: center;
+.approval-btn-kbd {
+  margin-left: 8px;
   font-size: 11px;
-  color: #8f959e;
+  opacity: 0.75;
 }
 
 /* ---- Task detail panel (slide-in beside the task list) ---- */

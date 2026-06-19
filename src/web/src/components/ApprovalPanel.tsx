@@ -17,8 +17,13 @@ function planText(input: unknown): string {
 
 type OnDecide = (id: string, behavior: 'allow' | 'deny', answers?: Record<string, string[]>) => void;
 
-/** ⌘/Ctrl + Enter fires the card's primary action while it's the active (sole pending)
- *  approval. Skipped while typing in an input so it doesn't clash with the composer. */
+// The hotkey accepts metaKey || ctrlKey on every platform; only the hint label is
+// platform-specific — ⌘ on macOS, Ctrl elsewhere.
+const IS_MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent);
+const SHORTCUT_HINT = IS_MAC ? '⌘ + Enter' : 'Ctrl + Enter';
+
+/** ⌘/Ctrl + Enter fires the card's primary action while it's the active card (the first
+ *  pending one). Skipped while typing in an input so it doesn't clash with the composer. */
 function useApproveHotkey(active: boolean, onTrigger: () => void): void {
   const fn = useRef(onTrigger);
   fn.current = onTrigger;
@@ -75,11 +80,11 @@ export function ApprovalPanel({
       <div className="approval-actions">
         <button className="approval-btn approve" onClick={() => onDecide(approval.id, 'allow')}>
           {isPlan(approval) ? '批准并实施' : '批准'}
+          {active && <span className="approval-btn-kbd">{SHORTCUT_HINT}</span>}
         </button>
         <button className="approval-btn deny" onClick={() => onDecide(approval.id, 'deny')}>
           {isPlan(approval) ? '继续规划' : '拒绝'}
         </button>
-        {active && <span className="approval-hint">⌘/Ctrl + Enter 批准</span>}
       </div>
     </div>
   );
@@ -205,11 +210,11 @@ function QuestionForm({
       <div className="approval-actions">
         <button className="approval-btn approve" disabled={!complete} onClick={submit}>
           提交
+          {active && complete && <span className="approval-btn-kbd">{SHORTCUT_HINT}</span>}
         </button>
         <button className="approval-btn deny" onClick={() => onDecide(approval.id, 'deny')}>
           不回答
         </button>
-        {active && complete && <span className="approval-hint">⌘/Ctrl + Enter 提交</span>}
       </div>
     </div>
   );
