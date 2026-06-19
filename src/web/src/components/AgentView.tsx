@@ -41,7 +41,7 @@ import {
   sessionEventsUrl,
   updateSessionConfig,
 } from '../api';
-import { Transcript } from './Transcript';
+import { StreamingMessage, Transcript } from './Transcript';
 import { ApprovalPanel } from './ApprovalPanel';
 import type { Runner } from './TasksSidePanel';
 
@@ -945,7 +945,7 @@ export function AgentView({ runner }: { runner: Runner }) {
               ))}
             <Transcript events={events} live={live} />
             {streamingThink && <div className="chat-think-stream chat-streaming">💭 {streamingThink}</div>}
-            {streamingText && <div className="chat-msg chat-assistant chat-streaming">{streamingText}</div>}
+            {streamingText && <StreamingMessage text={streamingText} />}
             {approvals.map((a) => (
               <ApprovalPanel key={a.id} approval={a} onDecide={decide} active={approvals.length === 1} />
             ))}
