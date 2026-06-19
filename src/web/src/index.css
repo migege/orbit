@@ -1080,6 +1080,26 @@ body {
      after a short message. fit-content shrinks to the text; margin-left:auto right-aligns. */
   width: fit-content;
 }
+/* A message queued behind the running turn: a dimmed user bubble with a withdraw
+   action, shown until the runner picks it up (then it renders as a normal user turn). */
+.chat-queued {
+  background: #f2f5fb;
+  border: 1px dashed #c4d3f0;
+  opacity: 0.9;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.chat-queued-meta {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  font-size: 12px;
+}
+.chat-queued-tag {
+  color: #8f959e;
+}
 /* Assistant turns are long-form Markdown — render them as a document (no bubble,
    capped reading measure) rather than a chat pill; only short user/streaming-raw
    turns keep a bubble. Equal specificity to .chat-msg, but later, so these win. */
