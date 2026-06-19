@@ -946,8 +946,10 @@ export function AgentView({ runner }: { runner: Runner }) {
             <Transcript events={events} live={live} />
             {streamingThink && <div className="chat-think-stream chat-streaming">💭 {streamingThink}</div>}
             {streamingText && <div className="chat-msg chat-assistant chat-streaming">{streamingText}</div>}
-            {approvals.map((a) => (
-              <ApprovalPanel key={a.id} approval={a} onDecide={decide} active={approvals.length === 1} />
+            {approvals.map((a, i) => (
+              // Only the first (oldest) pending card owns the ⌘/Ctrl+Enter shortcut; once
+              // it's decided the next card becomes first, so the key walks the queue in order.
+              <ApprovalPanel key={a.id} approval={a} onDecide={decide} active={i === 0} />
             ))}
             {queued.map((q) => (
               <div className="chat-msg chat-user chat-queued" key={q.turnId}>
