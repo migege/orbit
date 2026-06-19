@@ -248,13 +248,19 @@ export function AgentView({ runner }: { runner: Runner }) {
   // agent; on a /sessions/<id> deep link the URL carries no agent, so fall back to
   // the selected session's own agent.
   const scopeAgentId = lockedAgentId ?? selected?.agent?.id ?? null;
+  // The tab the user actually sees: a system session forces the System tab even when
+  // `view` is still 'active' (e.g. deep-linking one — the Segmented highlights it as
+  // System). The list and arrow-nav must step through that tab's sessions, not `view`'s.
+  const onSystemTab = view === 'system' || selected?.source === 'system';
   const visibleSessions = useMemo(() => {
     let list = scopeAgentId ? sessions.filter((s) => s.agent?.id === scopeAgentId) : sessions;
     // System (auto-created) sessions get their own tab; the active query still returns
-    // them for slot accounting and deep-link resolution, so hide them from the Active list.
-    if (view === 'active') list = list.filter((s) => s.source !== 'system');
+    // them for slot accounting and deep-link resolution. Show only system sessions on the
+    // System tab; hide them from the Active list.
+    if (onSystemTab) list = list.filter((s) => s.source === 'system');
+    else if (view === 'active') list = list.filter((s) => s.source !== 'system');
     return list;
-  }, [sessions, scopeAgentId, view]);
+  }, [sessions, scopeAgentId, view, onSystemTab]);
 
   // Right-pane mode. A real session (/sessions/<id>) shows its conversation; with
   // none selected we're composing a new session — explicitly (/agents/<id>/new),
