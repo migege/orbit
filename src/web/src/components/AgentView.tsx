@@ -112,30 +112,32 @@ const SWITCH_DEBOUNCE_MS = 150;
 // the cache without bound. Least-recently-selected entries are evicted first.
 const TRANSCRIPT_CACHE_MAX = 20;
 
-// Shell-style composer history, kept per-agent in localStorage so the Up/Down arrows
-// recall this agent's recently sent prompts. Stored oldest-first, newest last; capped
-// so it can't grow without bound. Keyed by the agent the message goes to ('default'
-// when none is picked yet).
+// Shell-style composer history, kept per-session in localStorage so the Up/Down arrows
+// recall only this session's recently sent prompts (never another session's). Stored
+// oldest-first, newest last; capped so it can't grow without bound. Keyed by session id;
+// a not-yet-created session (new-session draft) has no id and so no history to recall.
 const HISTORY_KEY_PREFIX = 'orbit.composerHistory:';
 const HISTORY_MAX = 100;
-const historyKey = (agentId?: string): string => `${HISTORY_KEY_PREFIX}${agentId ?? 'default'}`;
-function loadHistory(agentId?: string): string[] {
+const historyKey = (sessionId: string): string => `${HISTORY_KEY_PREFIX}${sessionId}`;
+function loadHistory(sessionId?: string | null): string[] {
+  if (!sessionId) return [];
   try {
-    const arr = JSON.parse(localStorage.getItem(historyKey(agentId)) ?? '[]');
+    const arr = JSON.parse(localStorage.getItem(historyKey(sessionId)) ?? '[]');
     return Array.isArray(arr) ? arr.filter((x) => typeof x === 'string') : [];
   } catch {
     return [];
   }
 }
-function pushHistory(agentId: string | undefined, entry: string): void {
+function pushHistory(sessionId: string | undefined, entry: string): void {
+  if (!sessionId) return;
   const e = entry.trim();
   if (!e) return;
-  const list = loadHistory(agentId);
+  const list = loadHistory(sessionId);
   if (list[list.length - 1] === e) return; // skip if identical to the last sent
   list.push(e);
   while (list.length > HISTORY_MAX) list.shift();
   try {
-    localStorage.setItem(historyKey(agentId), JSON.stringify(list));
+    localStorage.setItem(historyKey(sessionId), JSON.stringify(list));
   } catch {
     // ignore quota/serialization errors — history is best-effort
   }
@@ -227,7 +229,7 @@ export function AgentView({ runner }: { runner: Runner }) {
   const composingRoute = (agentMatch?.params['*'] ?? '') === 'new';
   const [text, setText] = useState('');
   // Composer history cursor: -1 = editing the live draft; otherwise an index into the
-  // agent's stored history. `histDraft` stashes what was typed before recall started,
+  // session's stored history. `histDraft` stashes what was typed before recall started,
   // so stepping back past the newest entry restores it (shell-style).
   const [histIdx, setHistIdx] = useState(-1);
   const [histDraft, setHistDraft] = useState('');
@@ -675,7 +677,8 @@ export function AgentView({ runner }: { runner: Runner }) {
       });
       return { id: created.id };
     },
-    onSuccess: ({ id, queuedItem }) => {
+    onSuccess: ({ id, queuedItem }, content) => {
+      pushHistory(id, content); // record under the resolved session id, new sessions included
       navigate(`/sessions/${encodeId(id)}`);
       setText('');
       setView('active'); // a new/continued session lives in the active list
@@ -815,7 +818,6 @@ export function AgentView({ runner }: { runner: Runner }) {
   const onSend = (): void => {
     const c = text.trim();
     if (!c || send.isPending) return;
-    pushHistory(shownAgentId, c);
     setHistIdx(-1);
     send.mutate(c);
   };
@@ -896,11 +898,11 @@ export function AgentView({ runner }: { runner: Runner }) {
   const configEditable = live ? idle && runner.online : true;
   // A live session's agent is fixed; otherwise reflect the local pick.
   const shownAgentId: string | undefined = live ? (selected.agent?.id ?? undefined) : agentId;
-  // Switching agent or session leaves whatever history recall was in progress; reset
-  // the cursor so the next Up starts fresh from the (per-agent) history.
+  // Switching session leaves whatever history recall was in progress; reset the cursor
+  // so the next Up starts fresh from the (per-session) history.
   useEffect(() => {
     setHistIdx(-1);
-  }, [shownAgentId, selectedId]);
+  }, [selectedId]);
   // Title shown above the session list (and in the draft header). /sessions/<id>
   // has no agent in the URL, so fall back to the open session's agent, then runner.
   const headAgentName =
@@ -1217,7 +1219,7 @@ export function AgentView({ runner }: { runner: Runner }) {
                   }, 0);
                 };
                 if (e.key === 'ArrowUp' && noSelection && onFirstLine) {
-                  const list = loadHistory(shownAgentId);
+                  const list = loadHistory(selectedId);
                   if (list.length) {
                     e.preventDefault();
                     if (histIdx === -1) setHistDraft(text);
@@ -1230,7 +1232,7 @@ export function AgentView({ runner }: { runner: Runner }) {
                 }
                 if (e.key === 'ArrowDown' && noSelection && onLastLine && histIdx !== -1) {
                   e.preventDefault();
-                  const list = loadHistory(shownAgentId);
+                  const list = loadHistory(selectedId);
                   if (histIdx < list.length - 1) {
                     const idx = histIdx + 1;
                     setHistIdx(idx);
