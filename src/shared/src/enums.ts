@@ -29,6 +29,7 @@ export enum PermissionMode {
   DEFAULT = 'default',
   ACCEPT_EDITS = 'acceptEdits',
   PLAN = 'plan',
+  AUTO = 'auto',
   DONT_ASK = 'dontAsk',
   BYPASS = 'bypassPermissions',
 }
