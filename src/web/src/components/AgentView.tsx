@@ -699,7 +699,7 @@ export function AgentView({ runner }: { runner: Runner }) {
                   <div className="session-actions" onClick={(e) => e.stopPropagation()}>
                     {view === 'active' && (
                       <>
-                        <Tooltip title={ended ? 'Complete' : '完成并结束会话'}>
+                        <Tooltip title={ended ? 'Complete' : 'Complete & end session'}>
                           <Button
                             size="small"
                             type="text"

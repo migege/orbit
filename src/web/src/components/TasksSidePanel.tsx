@@ -2,12 +2,11 @@ import {
   CaretDownOutlined,
   DesktopOutlined,
   LogoutOutlined,
-  PlusOutlined,
   ThunderboltOutlined,
   UserOutlined,
 } from '@ant-design/icons';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { App as AntdApp, Avatar, Dropdown, Input, Modal } from 'antd';
+import { useQuery } from '@tanstack/react-query';
+import { Avatar, Dropdown } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useLocation, useMatch, useNavigate } from 'react-router-dom';
 import { api, clearToken, getSession } from '../api';
@@ -193,45 +192,6 @@ export function TasksSidePanel() {
     return () => window.removeEventListener('keydown', onKey);
   }, [agentList, openAgent]);
 
-  const { message } = AntdApp.useApp();
-  const qc = useQueryClient();
-  const [creatingAgent, setCreatingAgent] = useState(false);
-  const [agentName, setAgentName] = useState('');
-
-  const createAgentMut = useMutation({
-    mutationFn: (name: string) => api('/agents', { method: 'POST', body: { name } }),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['agents'] });
-      setCreatingAgent(false);
-      setAgentName('');
-    },
-    onError: (e: Error) => message.error(e.message || 'Create failed'),
-  });
-
-  const submitAgent = () => {
-    const name = agentName.trim();
-    if (name) createAgentMut.mutate(name);
-  };
-
-  const [creatingList, setCreatingList] = useState(false);
-  const [listTitle, setListTitle] = useState('');
-
-  const createListMut = useMutation({
-    mutationFn: (title: string) => api<TaskList>('/task-lists', { method: 'POST', body: { title } }),
-    onSuccess: (created) => {
-      void qc.invalidateQueries({ queryKey: ['task-lists'] });
-      setCreatingList(false);
-      setListTitle('');
-      navigate(`/lists/${encodeId(created.id)}`);
-    },
-    onError: (e: Error) => message.error(e.message || 'Create failed'),
-  });
-
-  const submitList = () => {
-    const t = listTitle.trim();
-    if (t) createListMut.mutate(t);
-  };
-
   return (
     <aside className="tasks-panel" style={{ width: sidebarWidth }}>
       <div className="tp-brand">
@@ -286,12 +246,6 @@ export function TasksSidePanel() {
                   </div>
                 );
               })}
-              <div className="tp-item inset" onClick={() => setCreatingAgent(true)}>
-                <span className="tp-ico">
-                  <PlusOutlined />
-                </span>
-                <span className="tp-label">Add</span>
-              </div>
             </>
           )}
         </div>
@@ -330,12 +284,6 @@ export function TasksSidePanel() {
                   </div>
                 );
               })}
-              <div className="tp-item inset" onClick={() => setCreatingList(true)}>
-                <span className="tp-ico">
-                  <PlusOutlined />
-                </span>
-                <span className="tp-label">Add</span>
-              </div>
             </>
           )}
         </div>
@@ -371,54 +319,6 @@ export function TasksSidePanel() {
         aria-orientation="vertical"
         onMouseDown={startResize}
       />
-
-      <Modal
-        title="New agent"
-        open={creatingAgent}
-        okText="Create"
-        cancelText="Cancel"
-        okButtonProps={{ disabled: !agentName.trim() }}
-        confirmLoading={createAgentMut.isPending}
-        onOk={submitAgent}
-        onCancel={() => {
-          setCreatingAgent(false);
-          setAgentName('');
-        }}
-        destroyOnClose
-      >
-        <Input
-          value={agentName}
-          onChange={(e) => setAgentName(e.target.value)}
-          onPressEnter={submitAgent}
-          placeholder="Agent name"
-          maxLength={60}
-          autoFocus
-        />
-      </Modal>
-
-      <Modal
-        title="New list"
-        open={creatingList}
-        okText="Create"
-        cancelText="Cancel"
-        okButtonProps={{ disabled: !listTitle.trim() }}
-        confirmLoading={createListMut.isPending}
-        onOk={submitList}
-        onCancel={() => {
-          setCreatingList(false);
-          setListTitle('');
-        }}
-        destroyOnClose
-      >
-        <Input
-          value={listTitle}
-          onChange={(e) => setListTitle(e.target.value)}
-          onPressEnter={submitList}
-          placeholder="List title"
-          maxLength={120}
-          autoFocus
-        />
-      </Modal>
     </aside>
   );
 }
