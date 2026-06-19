@@ -175,6 +175,10 @@ export function TasksPage() {
   // The rows currently shown (a single list's tasks, or all tasks otherwise).
   const rows = isListView ? listRows : taskRows;
 
+  // The task list is one of several views this page hosts; the others (agent console,
+  // runners, register guide) render in its place. Arrow keys must only drive the list.
+  const showTaskList = !showRegister && !showRunners && !runnerDetailId && !inAgentView;
+
   // Up/Down arrows step through the task rows, opening each like tabs — the same
   // selection a click drives. Skipped while typing in an input/textarea (so the detail
   // panel's comment box keeps its own arrows) or while the New Task modal is open. With
@@ -183,7 +187,7 @@ export function TasksPage() {
     const onKey = (e: KeyboardEvent): void => {
       if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
       if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
-      if (open) return;
+      if (!showTaskList || open) return;
       const el = document.activeElement;
       if (
         el instanceof HTMLElement &&
@@ -203,7 +207,7 @@ export function TasksPage() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [rows, selectedTaskId, open]);
+  }, [rows, selectedTaskId, open, showTaskList]);
 
   // Keep the highlighted row in view when arrowing through a long list.
   useEffect(() => {
