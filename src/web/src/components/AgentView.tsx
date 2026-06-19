@@ -20,7 +20,7 @@ import {
 } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { App as AntApp, Button, Dropdown, Input, type MenuProps, Segmented, Select, Tooltip } from 'antd';
-import { type MouseEvent as ReactMouseEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { type MouseEvent as ReactMouseEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMatch, useNavigate } from 'react-router-dom';
 import { decodeId, encodeId } from '../lib/idCodec';
 import {
@@ -251,6 +251,32 @@ export function AgentView({ runner }: { runner: Runner }) {
   const transcriptCache = useRef<Map<string, RunEvent[]>>(new Map());
   const scrollRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null); // the left session-list column, for arrow-key scrolling
+  // The user's prompt for the turn currently in view, surfaced as a sticky bar when a long
+  // answer has pushed that bubble off the top — so what was asked stays findable. null hides it.
+  const [stuck, setStuck] = useState<{ seq: string | null; text: string } | null>(null);
+  // Smart auto-scroll: only keep pinned to the bottom when the user is already there, so
+  // reading history (or jumping to the sticky prompt) isn't yanked back by streaming updates.
+  const atBottomRef = useRef(true);
+  // Recompute, on scroll and after content changes: are we at the bottom, and which top-level
+  // user bubble (if any) has scrolled above the viewport top (= the prompt to surface)?
+  const measure = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) {
+      setStuck(null);
+      return;
+    }
+    atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    const topY = el.getBoundingClientRect().top;
+    const bubbles = Array.from(
+      el.querySelectorAll<HTMLElement>('.chat-user:not(.chat-queued)'),
+    ).filter((b) => !b.closest('.chat-subagent')); // ignore prompts nested in a sub-agent transcript
+    let cur: HTMLElement | null = null;
+    for (const b of bubbles) {
+      if (b.getBoundingClientRect().bottom <= topY + 1) cur = b;
+      else break;
+    }
+    setStuck(cur ? { seq: cur.getAttribute('data-seq'), text: cur.textContent || '' } : null);
+  }, []);
   // Width of the left session column; drag the divider to resize, persisted to
   // localStorage so the choice survives a reload.
   const [colWidth, setColWidth] = useState<number>(() => {
@@ -422,6 +448,8 @@ export function AgentView({ runner }: { runner: Runner }) {
     setApprovals([]);
     setQueued([]);
     setIdle(false);
+    setStuck(null);
+    atBottomRef.current = true; // a freshly opened/switched session starts pinned to the latest
     if (!selectedId) {
       setEvents([]);
       seen.current = new Set();
@@ -571,8 +599,20 @@ export function AgentView({ runner }: { runner: Runner }) {
   }, [runStatus]);
 
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [events, streamingText, streamingThink, approvals, queued]);
+    const el = scrollRef.current;
+    if (!el) return;
+    if (atBottomRef.current) el.scrollTo({ top: el.scrollHeight });
+    measure(); // content grew — the in-view prompt may have just scrolled off the top
+  }, [events, streamingText, streamingThink, approvals, queued, measure]);
+
+  // Track at-bottom + which prompt to surface as the user scrolls.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const onScroll = (): void => measure();
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
+  }, [selectedId, measure]);
 
   // Allow/deny a pending tool-permission request; optimistically drop it (the
   // approval_resolved SSE also removes it), re-fetching to resync on failure.
@@ -999,6 +1039,23 @@ export function AgentView({ runner }: { runner: Runner }) {
             </div>
           </div>
         </div>
+
+        {stuck && (
+          <button
+            className="chat-sticky-question"
+            title={stuck.text}
+            onClick={() => {
+              const seq = stuck?.seq;
+              if (!seq) return;
+              scrollRef.current
+                ?.querySelector<HTMLElement>(`.chat-user[data-seq="${seq}"]`)
+                ?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+            }}
+          >
+            <span className="chat-sticky-label">↑ 你的提问</span>
+            <span className="chat-sticky-text">{stuck.text}</span>
+          </button>
+        )}
 
         {selectedId ? (
           <div className="agent-sessions" ref={scrollRef}>
