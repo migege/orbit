@@ -6,6 +6,7 @@ import {
   MoreOutlined,
   PlusOutlined,
   RobotOutlined,
+  ThunderboltOutlined,
 } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -13,6 +14,7 @@ import {
   Button,
   Dropdown,
   Input,
+  InputNumber,
   Modal,
   Select,
   Spin,
@@ -95,6 +97,19 @@ export function RunnerDetailPage({ runnerId }: { runnerId: string }) {
       setRenaming(false);
     },
     onError: (e: Error) => message.error(e.message || 'Rename failed'),
+  });
+
+  // Edit the runner's concurrency cap — same PATCH the rename uses.
+  const [slotsOpen, setSlotsOpen] = useState(false);
+  const [slotsVal, setSlotsVal] = useState(1);
+  const slotsMut = useMutation({
+    mutationFn: (maxConcurrent: number) =>
+      api(`/runners/${runnerId}`, { method: 'PATCH', body: { maxConcurrent } }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['runners'] });
+      setSlotsOpen(false);
+    },
+    onError: (e: Error) => message.error(e.message || 'Update failed'),
   });
   const deleteMut = useMutation({
     mutationFn: () => api(`/runners/${runnerId}`, { method: 'DELETE' }),
@@ -196,6 +211,15 @@ export function RunnerDetailPage({ runnerId }: { runnerId: string }) {
       onClick: () => {
         setRenameVal(runner.displayName || runner.name);
         setRenaming(true);
+      },
+    },
+    {
+      key: 'slots',
+      icon: <ThunderboltOutlined />,
+      label: 'Set max concurrent',
+      onClick: () => {
+        setSlotsVal(runner.maxConcurrent ?? 1);
+        setSlotsOpen(true);
       },
     },
     { type: 'divider' },
@@ -348,6 +372,31 @@ export function RunnerDetailPage({ runnerId }: { runnerId: string }) {
         />
         <div style={{ marginTop: 8, color: '#8f959e', fontSize: 12 }}>
           Leave empty to use the machine name ({runner.name}).
+        </div>
+      </Modal>
+
+      <Modal
+        title="Set max concurrent"
+        open={slotsOpen}
+        okText="Save"
+        cancelText="Cancel"
+        confirmLoading={slotsMut.isPending}
+        onOk={() => slotsMut.mutate(slotsVal)}
+        onCancel={() => setSlotsOpen(false)}
+        destroyOnClose
+      >
+        <InputNumber
+          value={slotsVal}
+          onChange={(v) => setSlotsVal(typeof v === 'number' ? v : 1)}
+          min={1}
+          max={64}
+          precision={0}
+          style={{ width: '100%' }}
+          autoFocus
+        />
+        <div style={{ marginTop: 8, color: '#8f959e', fontSize: 12 }}>
+          Max sessions this runner runs at once. Takes effect on the next claim — no
+          restart needed.
         </div>
       </Modal>
 
