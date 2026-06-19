@@ -38,16 +38,39 @@ func runLoop(cfg *RunnerConfig) {
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	go func() { <-sig; loopCancel() }()
 
+	// Slash assets (commands/skills) discovered on this machine, surfaced to the web
+	// composer's `/` autocomplete. Scanned now and refreshed every ~5 min; the cached
+	// value rides each heartbeat. workDirs = the runner's default dir plus each agent's.
+	assetWorkDirs := func() []string {
+		dirs := []string{cfg.WorkDir}
+		if me, err := t.me(); err == nil {
+			for _, a := range me.Agents {
+				dirs = append(dirs, a.WorkDir)
+			}
+		}
+		return dirs
+	}
+	var assetMu sync.Mutex
+	hbCommands, hbSkills := scanSlashAssets(assetWorkDirs())
+
 	// Heartbeat every 30s; honor server-requested cancellations.
 	hbStop := make(chan struct{})
 	go func() {
 		ticker := time.NewTicker(heartbeatInterval)
 		defer ticker.Stop()
+		cycles := 0
 		for {
 			select {
 			case <-hbStop:
 				return
 			case <-ticker.C:
+				cycles++
+				if cycles%10 == 0 { // re-scan assets every ~5 min
+					c, s := scanSlashAssets(assetWorkDirs())
+					assetMu.Lock()
+					hbCommands, hbSkills = c, s
+					assetMu.Unlock()
+				}
 				mu.Lock()
 				idle := cfg.MaxConcurrent - len(active)
 				cancels := make(map[string]context.CancelFunc, len(active))
@@ -58,7 +81,13 @@ func runLoop(cfg *RunnerConfig) {
 				if idle < 0 {
 					idle = 0
 				}
-				resp, err := t.heartbeat(HeartbeatRequest{Status: "ONLINE", IdleCapacity: idle, Version: version})
+				assetMu.Lock()
+				cmds, skills := hbCommands, hbSkills
+				assetMu.Unlock()
+				resp, err := t.heartbeat(HeartbeatRequest{
+					Status: "ONLINE", IdleCapacity: idle, Version: version,
+					Commands: cmds, Skills: skills,
+				})
 				if err != nil {
 					logln("heartbeat failed:", err)
 					continue
