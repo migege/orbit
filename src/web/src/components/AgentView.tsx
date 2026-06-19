@@ -430,6 +430,15 @@ export function AgentView({ runner }: { runner: Runner }) {
     setModel(pickedAgent.model);
   }, [selectedId, pickedAgent?.id, pickedAgent?.model]);
 
+  // Likewise seed the Mode pill from the picked agent's configured default. Without
+  // this the pill stays at the hardcoded 'Default', so a new session always sends
+  // permissionMode 'default' — which the server's session→agent fallback treats as
+  // an explicit choice, silently ignoring the agent's configured mode.
+  useEffect(() => {
+    if (selectedId || !pickedAgent) return;
+    setMode(PERMISSION_TO_MODE[pickedAgent.permissionMode ?? 'dontAsk'] ?? 'Default');
+  }, [selectedId, pickedAgent?.id, pickedAgent?.permissionMode]);
+
   // Slot accounting: a runner hosts at most maxConcurrent live sessions. When it's
   // full, a newly created session sits PENDING instead of starting — surface that
   // as an explicit concurrency wait rather than a silent "Starting…".
