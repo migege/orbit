@@ -209,9 +209,23 @@ export class TasksService {
       `你在任务「${task.title}」的评论区被 @ 提到。\n\n` +
       `评论内容：\n${body}\n\n` +
       `请用 task_get 查看该任务的完整信息与历史评论，并用 task_comment 在该任务下回复。`;
-    // Smart: continue the most recent session for this task+agent when it's resumable
-    // (live, or ended-but-revivable). resume() throws ConflictException when it can't be
-    // revived (never ran / runner offline / not started yet) — fall back to a new session.
+    await this.runAgentOnTask(ownerId, task, agent, prompt, `回应评论：${task.title}`);
+  }
+
+  /**
+   * Run an agent against a task: continue the agent's most recent session for this task
+   * when it's resumable (live, or ended-but-revivable), otherwise start a fresh one.
+   * resume() throws ConflictException when the session can't be revived (never ran /
+   * runner offline / not started yet) — fall back to a new session. Returns the session id.
+   */
+  private async runAgentOnTask(
+    ownerId: string,
+    task: { id: string; title: string },
+    agent: { id: string; runnerId: string | null },
+    prompt: string,
+    newSessionTitle: string,
+  ): Promise<string | undefined> {
+    if (!agent.runnerId) return undefined;
     const latest = await this.prisma.session.findFirst({
       where: { taskId: task.id, agentId: agent.id, ownerId },
       orderBy: { createdAt: 'desc' },
@@ -220,21 +234,54 @@ export class TasksService {
     if (latest) {
       try {
         await this.sessions.resume(ownerId, latest.id, { clientTurnId: randomUUID(), content: prompt });
-        return;
+        return latest.id;
       } catch (e) {
         if (!(e instanceof ConflictException)) throw e;
       }
     }
-    await this.sessions.create(
+    const session = await this.sessions.create(
       ownerId,
       {
         prompt,
         agentId: agent.id,
         taskId: task.id,
-        title: `回应评论：${task.title}`.slice(0, 80),
+        title: newSessionTitle.slice(0, 80),
       },
       { source: 'system' },
     );
+    return session.id;
+  }
+
+  /**
+   * Manually kick off the task's responsible agent from the "开始执行" button: same
+   * resume-first-else-create flow as an @-mention, but as a user-facing action, so a
+   * missing assignee / runner becomes a hard error instead of a silent skip.
+   */
+  async execute(ownerId: string, id: string) {
+    const task = await this.prisma.task.findFirst({
+      where: { id, ownerId },
+      select: {
+        id: true,
+        title: true,
+        description: true,
+        assignee: { select: { id: true, runnerId: true } },
+      },
+    });
+    if (!task) throw new NotFoundException('task not found');
+    if (!task.assignee) throw new BadRequestException('请先为任务指定负责 Agent');
+    if (!task.assignee.runnerId) throw new BadRequestException('负责 Agent 未绑定 runner，无法执行');
+    const prompt =
+      `请开始执行任务「${task.title}」。\n\n` +
+      (task.description ? `任务描述：\n${task.description}\n\n` : '') +
+      `请用 task_get 查看该任务的完整信息与历史评论，完成后用 task_comment 在该任务下汇报进展与结果。`;
+    const sessionId = await this.runAgentOnTask(
+      ownerId,
+      { id: task.id, title: task.title },
+      { id: task.assignee.id, runnerId: task.assignee.runnerId },
+      prompt,
+      `执行任务：${task.title}`,
+    );
+    return { ok: true, sessionId };
   }
 
   async removeComment(ownerId: string, id: string, commentId: string) {

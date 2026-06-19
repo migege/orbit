@@ -43,6 +43,11 @@ export class TasksController {
     return this.tasks.remove(user.userId, id);
   }
 
+  @Post(':id/execute')
+  execute(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.tasks.execute(user.userId, id);
+  }
+
   @Post(':id/comments')
   addComment(
     @CurrentUser() user: AuthUser,

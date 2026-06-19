@@ -1,6 +1,6 @@
-import { CloseOutlined } from '@ant-design/icons';
+import { CloseOutlined, PlayCircleOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { App as AntApp, Avatar, Button, Input, Select, Spin } from 'antd';
+import { App as AntApp, Avatar, Button, Input, Select, Spin, Tooltip } from 'antd';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import Markdown from 'react-markdown';
@@ -148,6 +148,18 @@ export function TaskDetailPanel({
     onError: (e: Error) => message.error(e.message),
   });
 
+  // "开始执行": tell the task's responsible agent to start (or continue) a session on it.
+  // The backend validates assignee + runner; refresh the panel so the new run shows up.
+  const execute = useMutation({
+    mutationFn: () => api(`/tasks/${taskId}/execute`, { method: 'POST' }),
+    onSuccess: () => {
+      message.success('已触发负责 Agent 开始执行');
+      qc.invalidateQueries({ queryKey: ['task', taskId] });
+      qc.invalidateQueries({ queryKey: ['tasks'] });
+    },
+    onError: (e: Error) => message.error(e.message),
+  });
+
   const addComment = useMutation({
     mutationFn: (vars: { body: string; mentions: string[] }) =>
       api(`/tasks/${taskId}/comments`, { method: 'POST', body: vars }),
@@ -227,6 +239,8 @@ export function TaskDetailPanel({
   const status = STATUS_META[task?.status as string] ?? { label: task?.status ?? '', tone: 'muted' };
   const comments = q.data?.comments ?? [];
   const sessions = q.data?.sessions ?? [];
+  // Need a responsible agent to execute; the runner check is enforced by the backend.
+  const canExecute = !!task?.assignee;
 
   return (
     <aside className="task-detail-panel">
@@ -246,7 +260,23 @@ export function TaskDetailPanel({
             {task?.createdAt && <span className="tdp-meta-item muted">· {fmt(task.createdAt)}</span>}
           </div>
         </div>
-        <Button type="text" icon={<CloseOutlined />} onClick={onClose} aria-label="Close" />
+        <div className="tdp-head-actions">
+          <Tooltip title={canExecute ? '' : '请先指定负责 Agent'}>
+            <span style={{ display: 'inline-flex' }}>
+              <Button
+                type="primary"
+                icon={<PlayCircleOutlined />}
+                loading={execute.isPending}
+                disabled={!canExecute}
+                onClick={() => execute.mutate()}
+                style={canExecute ? undefined : { pointerEvents: 'none' }}
+              >
+                开始执行
+              </Button>
+            </span>
+          </Tooltip>
+          <Button type="text" icon={<CloseOutlined />} onClick={onClose} aria-label="Close" />
+        </div>
       </div>
 
       {q.isLoading ? (

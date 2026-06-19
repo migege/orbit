@@ -1847,6 +1847,12 @@ body {
   flex: 1;
   min-width: 0;
 }
+.tdp-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
 .tdp-title {
   font-size: 16px;
   font-weight: 600;
