@@ -830,7 +830,6 @@ export function AgentView({ runner }: { runner: Runner }) {
                   </div>
                 </div>
                 <div className="session-right">
-                  <div className="session-time">{fmtTime(s.lastTurnAt ?? s.createdAt)}</div>
                   <div className="session-actions" onClick={(e) => e.stopPropagation()}>
                     <Dropdown
                       trigger={['click']}
@@ -848,6 +847,7 @@ export function AgentView({ runner }: { runner: Runner }) {
                       </span>
                     </Dropdown>
                   </div>
+                  <div className="session-time">{fmtTime(s.lastTurnAt ?? s.createdAt)}</div>
                 </div>
               </div>
             );
