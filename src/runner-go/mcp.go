@@ -163,7 +163,7 @@ func (s *mcpServer) callTool(name string, args map[string]interface{}) map[strin
 		}
 		body := map[string]interface{}{"title": title}
 		copyIfPresent(body, args, "description", "listId", "assigneeId", "dueDate")
-		raw, err := s.t.createTask(s.agentID, body)
+		raw, err := s.t.createTask(s.agentID, s.sessionID, body)
 		if err != nil {
 			return toolResult("create task failed: "+err.Error(), true)
 		}

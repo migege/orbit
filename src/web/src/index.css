@@ -1975,6 +1975,16 @@ body {
   color: #1f2329;
   word-break: break-word;
 }
+/* 「创建来源」会话链接，跳转到创建此任务的 session */
+.tdp-field-link {
+  color: #3370ff;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tdp-field-link:hover {
+  text-decoration: underline;
+}
 /* 内联可编辑的「负责 Agent」下拉，外观对齐其它文本字段 */
 .tdp-assignee-select {
   flex: 1;

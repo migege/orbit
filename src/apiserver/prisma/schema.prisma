@@ -201,7 +201,7 @@ model Session {
   agent             Agent?    @relation(fields: [agentId], references: [id])
   // Optional parent work item; deleting the Task detaches but keeps the session.
   taskId            String?   @map("task_id") @db.Uuid
-  task              Task?     @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  task              Task?     @relation("SessionTask", fields: [taskId], references: [id], onDelete: SetNull)
   // Pre-generated Claude session id: --session-id on first spawn, --resume on
   // reclaim/respawn.
   claudeSessionId   String?   @map("claude_session_id")
@@ -242,6 +242,8 @@ model Session {
   toolCalls ToolCall[]
   llmUsage  LlmUsage[]
   approvals Approval[]
+  // Tasks an agent created from within this session (cf. Task.creatorSession).
+  createdTasks Task[] @relation("TaskCreatorSession")
 
   @@index([assignedRunnerId, status])
   @@index([ownerId])
@@ -394,6 +396,11 @@ model Task {
   // Polymorphic creator (no FK, cf. Activity.actorId): who/what authored the task.
   creatorType CreatorType @map("creator_type")
   creatorId   String      @map("creator_id") @db.Uuid
+  // The session an in-session agent created this task from (real FK, optional; null for
+  // user-created tasks). Deleting the session detaches but keeps the task. Lets the task
+  // detail page link back to its origin run.
+  creatorSessionId String?  @map("creator_session_id") @db.Uuid
+  creatorSession   Session? @relation("TaskCreatorSession", fields: [creatorSessionId], references: [id], onDelete: SetNull)
   // The agent assigned to execute it (real FK, optional).
   assigneeId  String?     @map("assignee_id") @db.Uuid
   assignee    Agent?      @relation(fields: [assigneeId], references: [id])
@@ -405,7 +412,7 @@ model Task {
   updatedAt   DateTime    @updatedAt @map("updated_at")
 
   comments TaskComment[]
-  sessions Session[] // agent sessions run under this task (one Task -> many Session)
+  sessions Session[] @relation("SessionTask") // agent sessions run under this task (one Task -> many Session)
 
   @@index([ownerId])
   @@index([assigneeId])

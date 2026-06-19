@@ -310,6 +310,18 @@ export function TaskDetailPanel({
               <span className="tdp-field-label">创建人</span>
               <span className="tdp-field-value">{summary?.creatorName ?? '—'}</span>
             </div>
+            {q.data?.creatorSession && (
+              <div className="tdp-field">
+                <span className="tdp-field-label">创建来源</span>
+                <Link
+                  to={`/sessions/${encodeId(q.data.creatorSession.id)}`}
+                  className="tdp-field-value tdp-field-link"
+                  title="跳转到创建此任务的会话"
+                >
+                  {q.data.creatorSession.title || '未命名会话'}
+                </Link>
+              </div>
+            )}
             <div className="tdp-field">
               <span className="tdp-field-label">创建时间</span>
               <span className="tdp-field-value">{fmt(task?.createdAt)}</span>

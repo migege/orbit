@@ -63,10 +63,14 @@ export class TasksService {
     return { type: CreatorType.AGENT, id: agent.id };
   }
 
-  async create(ownerId: string, dto: CreateTaskDto, creator?: Creator) {
+  async create(ownerId: string, dto: CreateTaskDto, creator?: Creator, creatorSessionId?: string) {
     if (!dto.title) throw new BadRequestException('title is required');
     await this.assertOwnedAgent(ownerId, dto.assigneeId);
     await this.assertOwnedList(ownerId, dto.listId);
+    // Link to the originating session only when it's one this owner has (the runner
+    // injects its own session id, so this is a guard, not a trust boundary). A stale id
+    // would otherwise fail the FK insert.
+    const sessionId = await this.resolveOwnedSession(ownerId, creatorSessionId);
     return this.prisma.task.create({
       data: {
         title: dto.title,
@@ -75,11 +79,22 @@ export class TasksService {
         // Defaults to the human (user-facing API); the runner path passes the agent.
         creatorType: creator?.type ?? CreatorType.USER,
         creatorId: creator?.id ?? ownerId,
+        creatorSessionId: sessionId,
         assigneeId: dto.assigneeId,
         listId: dto.listId,
         dueDate: dto.dueDate ? new Date(dto.dueDate) : undefined,
       },
     });
+  }
+
+  /** Return the session id only if it exists under this owner; otherwise undefined. */
+  private async resolveOwnedSession(ownerId: string, sessionId?: string): Promise<string | undefined> {
+    if (!sessionId) return undefined;
+    const session = await this.prisma.session.findFirst({
+      where: { id: sessionId, ownerId },
+      select: { id: true },
+    });
+    return session?.id;
   }
 
   list(ownerId: string) {
@@ -101,6 +116,7 @@ export class TasksService {
         // author is polymorphic (no FK), so names are resolved separately below.
         comments: { orderBy: { createdAt: 'asc' } },
         sessions: { select: { id: true, title: true, status: true } },
+        creatorSession: { select: { id: true, title: true, status: true } },
       },
     });
     if (!task) throw new NotFoundException('task not found');
