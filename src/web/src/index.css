@@ -594,13 +594,29 @@ body {
   min-height: 0;
 }
 .session-col {
-  width: 264px;
   flex: none;
   display: flex;
   flex-direction: column;
   min-height: 0;
-  border-right: 1px solid #eceef1;
-  margin-right: 20px;
+}
+/* Draggable divider between the session list and the conversation. The visible
+   1px line matches the old column border; ::before widens the grab area. */
+.session-resizer {
+  flex: none;
+  width: 1px;
+  margin: 0 10px;
+  position: relative;
+  background: #eceef1;
+  cursor: col-resize;
+}
+.session-resizer::before {
+  content: '';
+  position: absolute;
+  inset: 0 -6px;
+}
+.session-resizer:hover,
+.session-resizer.resizing {
+  background: #3370ff;
 }
 .session-col-head {
   display: flex;
@@ -667,12 +683,6 @@ body {
   display: flex;
   flex-direction: column;
   height: 100%;
-}
-@media (max-width: 1200px) {
-  .session-col {
-    width: 220px;
-    margin-right: 14px;
-  }
 }
 .agent-header {
   display: flex;

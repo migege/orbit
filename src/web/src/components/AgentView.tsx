@@ -19,7 +19,7 @@ import {
 } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { App as AntApp, Button, Input, Segmented, Select, Tooltip } from 'antd';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { type MouseEvent as ReactMouseEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { useMatch, useNavigate } from 'react-router-dom';
 import { decodeId, encodeId } from '../lib/idCodec';
 import {
@@ -86,6 +86,12 @@ const EFFORT_OPTIONS = [
   { value: 'xhigh', label: 'xHigh' },
   { value: 'max', label: 'Max' },
 ];
+
+// Drag-resizable width of the left session column, persisted across reloads.
+const SESSION_COL_KEY = 'orbit.sessionColWidth';
+const SESSION_COL_MIN = 200;
+const SESSION_COL_MAX = 560;
+const SESSION_COL_DEFAULT = 264;
 
 const fmtTime = (d?: string): string =>
   d ? new Date(d).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
@@ -178,6 +184,13 @@ export function AgentView({ runner }: { runner: Runner }) {
   const seen = useRef<Set<number>>(new Set());
   const scrollRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null); // the left session-list column, for arrow-key scrolling
+  // Width of the left session column; drag the divider to resize, persisted to
+  // localStorage so the choice survives a reload.
+  const [colWidth, setColWidth] = useState<number>(() => {
+    const saved = Number(localStorage.getItem(SESSION_COL_KEY));
+    return saved >= SESSION_COL_MIN && saved <= SESSION_COL_MAX ? saved : SESSION_COL_DEFAULT;
+  });
+  const [resizing, setResizing] = useState(false);
 
   // The list is scoped by `view`. A selected session (its transcript is open) is
   // always resolved from the active set — that's where live sessions and the runner's
@@ -565,6 +578,33 @@ export function AgentView({ runner }: { runner: Runner }) {
     onSettled: () => qc.invalidateQueries({ queryKey: ['sessions'] }),
   });
 
+  // Drag the divider between the session list and the conversation to resize the
+  // left column. Listeners live on `document` so a fast drag that outruns the 1px
+  // handle keeps tracking; body cursor/select are pinned for the drag's duration.
+  const startResize = (e: ReactMouseEvent): void => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = colWidth;
+    let latest = startW;
+    setResizing(true);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    const onMove = (ev: MouseEvent): void => {
+      latest = Math.min(SESSION_COL_MAX, Math.max(SESSION_COL_MIN, startW + ev.clientX - startX));
+      setColWidth(latest);
+    };
+    const onUp = (): void => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      setResizing(false);
+      localStorage.setItem(SESSION_COL_KEY, String(latest));
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  };
+
   const onSend = (): void => {
     const c = text.trim();
     if (!c || send.isPending) return;
@@ -606,7 +646,7 @@ export function AgentView({ runner }: { runner: Runner }) {
 
   return (
     <div className="agent-split">
-      <aside className="session-col">
+      <aside className="session-col" style={{ width: colWidth }}>
         <div className="session-col-head">
           <span className={`agent-status-dot ${runner.online ? 'online' : ''}`} />
           <span className="session-col-title">{headAgentName}</span>
@@ -718,6 +758,13 @@ export function AgentView({ runner }: { runner: Runner }) {
           })}
         </div>
       </aside>
+
+      <div
+        className={`session-resizer${resizing ? ' resizing' : ''}`}
+        onMouseDown={startResize}
+        role="separator"
+        aria-orientation="vertical"
+      />
 
       <div className="agent-view">
         <div className="agent-header">
