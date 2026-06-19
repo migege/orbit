@@ -2,14 +2,14 @@ import {
   CaretDownOutlined,
   DesktopOutlined,
   LogoutOutlined,
-  PlusOutlined,
   ThunderboltOutlined,
   UserOutlined,
 } from '@ant-design/icons';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { App as AntdApp, Avatar, Dropdown, Input, Modal } from 'antd';
+import { useQuery } from '@tanstack/react-query';
+import { Avatar, Dropdown } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useLocation, useMatch, useNavigate } from 'react-router-dom';
+import type { SlashCommandInfo } from '@orbit/shared';
 import { api, clearToken, getSession } from '../api';
 import { decodeId, encodeId } from '../lib/idCodec';
 
@@ -43,13 +43,16 @@ export interface Runner {
   status?: string;
   lastHeartbeatAt?: string | null;
   enrolledAt?: string | null;
+  // Slash commands / skills the runner reported, for the composer's `/` autocomplete.
+  commands?: SlashCommandInfo[];
+  skills?: SlashCommandInfo[];
 }
 
 interface Agent {
   id: string;
   name: string;
   // ISO-8601 creation timestamp; the sidebar sorts on it so the list is
-  // newest-first regardless of the API's ordering.
+  // oldest-first regardless of the API's ordering.
   createdAt: string;
   // The machine this agent belongs to (null for config-only agents); an agent
   // with no runner has no console to open.
@@ -138,10 +141,12 @@ export function TasksSidePanel() {
 
   // The "Agents" list is the user's agent definitions (model + tools).
   const agents = useQuery({ queryKey: ['agents'], queryFn: () => api<Agent[]>('/agents') });
-  // Newest-added first. Sort client-side so the order holds even if the API
-  // returns them unordered; ISO timestamps compare lexicographically.
+  // Oldest-added first, so ⌘1 always maps to the first agent created and the
+  // shortcuts stay stable as newer agents append below. Sort client-side so the
+  // order holds even if the API returns them unordered; ISO timestamps compare
+  // lexicographically.
   const agentList = useMemo(
-    () => [...(agents.data ?? [])].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)),
+    () => [...(agents.data ?? [])].sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1)),
     [agents.data],
   );
 
@@ -192,45 +197,6 @@ export function TasksSidePanel() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [agentList, openAgent]);
-
-  const { message } = AntdApp.useApp();
-  const qc = useQueryClient();
-  const [creatingAgent, setCreatingAgent] = useState(false);
-  const [agentName, setAgentName] = useState('');
-
-  const createAgentMut = useMutation({
-    mutationFn: (name: string) => api('/agents', { method: 'POST', body: { name } }),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['agents'] });
-      setCreatingAgent(false);
-      setAgentName('');
-    },
-    onError: (e: Error) => message.error(e.message || 'Create failed'),
-  });
-
-  const submitAgent = () => {
-    const name = agentName.trim();
-    if (name) createAgentMut.mutate(name);
-  };
-
-  const [creatingList, setCreatingList] = useState(false);
-  const [listTitle, setListTitle] = useState('');
-
-  const createListMut = useMutation({
-    mutationFn: (title: string) => api<TaskList>('/task-lists', { method: 'POST', body: { title } }),
-    onSuccess: (created) => {
-      void qc.invalidateQueries({ queryKey: ['task-lists'] });
-      setCreatingList(false);
-      setListTitle('');
-      navigate(`/lists/${encodeId(created.id)}`);
-    },
-    onError: (e: Error) => message.error(e.message || 'Create failed'),
-  });
-
-  const submitList = () => {
-    const t = listTitle.trim();
-    if (t) createListMut.mutate(t);
-  };
 
   return (
     <aside className="tasks-panel" style={{ width: sidebarWidth }}>
@@ -286,12 +252,6 @@ export function TasksSidePanel() {
                   </div>
                 );
               })}
-              <div className="tp-item inset" onClick={() => setCreatingAgent(true)}>
-                <span className="tp-ico">
-                  <PlusOutlined />
-                </span>
-                <span className="tp-label">Add</span>
-              </div>
             </>
           )}
         </div>
@@ -330,12 +290,6 @@ export function TasksSidePanel() {
                   </div>
                 );
               })}
-              <div className="tp-item inset" onClick={() => setCreatingList(true)}>
-                <span className="tp-ico">
-                  <PlusOutlined />
-                </span>
-                <span className="tp-label">Add</span>
-              </div>
             </>
           )}
         </div>
@@ -371,54 +325,6 @@ export function TasksSidePanel() {
         aria-orientation="vertical"
         onMouseDown={startResize}
       />
-
-      <Modal
-        title="New agent"
-        open={creatingAgent}
-        okText="Create"
-        cancelText="Cancel"
-        okButtonProps={{ disabled: !agentName.trim() }}
-        confirmLoading={createAgentMut.isPending}
-        onOk={submitAgent}
-        onCancel={() => {
-          setCreatingAgent(false);
-          setAgentName('');
-        }}
-        destroyOnClose
-      >
-        <Input
-          value={agentName}
-          onChange={(e) => setAgentName(e.target.value)}
-          onPressEnter={submitAgent}
-          placeholder="Agent name"
-          maxLength={60}
-          autoFocus
-        />
-      </Modal>
-
-      <Modal
-        title="New list"
-        open={creatingList}
-        okText="Create"
-        cancelText="Cancel"
-        okButtonProps={{ disabled: !listTitle.trim() }}
-        confirmLoading={createListMut.isPending}
-        onOk={submitList}
-        onCancel={() => {
-          setCreatingList(false);
-          setListTitle('');
-        }}
-        destroyOnClose
-      >
-        <Input
-          value={listTitle}
-          onChange={(e) => setListTitle(e.target.value)}
-          onPressEnter={submitList}
-          placeholder="List title"
-          maxLength={120}
-          autoFocus
-        />
-      </Modal>
     </aside>
   );
 }
