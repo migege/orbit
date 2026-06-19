@@ -1,4 +1,14 @@
-import { IsArray, IsDateString, IsIn, IsOptional, IsString, MinLength } from 'class-validator';
+import {
+  IsArray,
+  IsDateString,
+  IsIn,
+  IsInt,
+  IsOptional,
+  IsString,
+  Max,
+  Min,
+  MinLength,
+} from 'class-validator';
 import { TaskStatus } from '@orbit/shared';
 
 const TASK_STATUSES = Object.values(TaskStatus);
@@ -25,6 +35,17 @@ export class UpdateTaskDto {
   // null detaches from its list; a string (re)assigns to that list.
   @IsOptional() @IsString() listId?: string | null;
   @IsOptional() @IsDateString() dueDate?: string | null;
+}
+
+export class BatchExecuteDto {
+  // The tasks to run. Tasks without a responsible agent / bound runner are skipped
+  // server-side rather than failing the batch.
+  @IsArray() @IsString({ each: true }) taskIds!: string[];
+
+  // When set, every runner backing the selected tasks gets its concurrency cap set to
+  // this before dispatch — the only server-side lever on how many run at once (the
+  // claim queue gates live sessions per runner on max_concurrent). The rest queue.
+  @IsOptional() @IsInt() @Min(1) @Max(64) maxConcurrent?: number;
 }
 
 export class CreateTaskCommentDto {

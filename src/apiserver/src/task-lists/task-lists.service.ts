@@ -30,7 +30,15 @@ export class TaskListsService {
         tasks: {
           orderBy: { createdAt: 'desc' },
           include: {
-            assignee: { select: { id: true, name: true, model: true } },
+            assignee: {
+              select: {
+                id: true,
+                name: true,
+                model: true,
+                runnerId: true,
+                runner: { select: { id: true, name: true, displayName: true, maxConcurrent: true } },
+              },
+            },
             _count: { select: { comments: true } },
           },
         },

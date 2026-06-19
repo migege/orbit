@@ -2,6 +2,7 @@ import {
   CheckCircleFilled,
   DeleteOutlined,
   LoadingOutlined,
+  PlayCircleOutlined,
   PlusOutlined,
 } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -9,9 +10,11 @@ import {
   App as AntApp,
   Avatar,
   Button,
+  Checkbox,
   DatePicker,
   Form,
   Input,
+  InputNumber,
   Modal,
   Segmented,
   Select,
@@ -80,6 +83,10 @@ export function TasksPage() {
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  // Multi-select for batch actions, keyed by task id, scoped to the visible rows.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [batchOpen, setBatchOpen] = useState(false);
+  const [concurrency, setConcurrency] = useState(3);
   const [filter, setFilter] = useState('ALL');
   // The "Add a runner" guide is its own route; show it whenever we're on /runners/register.
   const showRegister = loc.pathname === '/runners/register';
@@ -106,6 +113,10 @@ export function TasksPage() {
   const isListView = !!listId;
   // Switching lists/sections closes any open detail panel.
   useEffect(() => setSelectedTaskId(null), [listId, loc.pathname]);
+  // The selection is scoped to what's currently visible; reset it whenever that set
+  // changes (different list/section, or a different status filter) to avoid running
+  // tasks the user can no longer see.
+  useEffect(() => setSelectedIds(new Set()), [listId, loc.pathname, filter]);
   const pageTitle = isListView
     ? (listQ.data?.title ?? '')
     : (SECTION_TITLES[loc.pathname] ?? 'Active');
@@ -156,6 +167,23 @@ export function TasksPage() {
     onSuccess: invalidate,
     onError: (e: Error) => message.error(e.message),
   });
+  const batchRun = useMutation({
+    mutationFn: (body: { taskIds: string[]; maxConcurrent: number }) =>
+      api<{ dispatched: number; failed: unknown[]; skipped: unknown[] }>('/tasks/batch-execute', {
+        method: 'POST',
+        body,
+      }),
+    onSuccess: (res) => {
+      setBatchOpen(false);
+      setSelectedIds(new Set());
+      const parts = [`已触发 ${res.dispatched} 个任务`];
+      if (res.failed.length) parts.push(`${res.failed.length} 个失败`);
+      if (res.skipped.length) parts.push(`${res.skipped.length} 个跳过`);
+      message[res.dispatched ? 'success' : 'warning'](parts.join('，'));
+      invalidate();
+    },
+    onError: (e: Error) => message.error(e.message),
+  });
 
   const taskRows = useMemo(
     () => (tasks.data ?? []).filter((t: any) => matchesFilter(t.status, filter)),
@@ -169,6 +197,47 @@ export function TasksPage() {
 
   // The rows currently shown (a single list's tasks, or all tasks otherwise).
   const rows = isListView ? listRows : taskRows;
+
+  // ── Multi-select / batch-run derived state ──
+  const selectedRows = useMemo(
+    () => rows.filter((r: any) => selectedIds.has(r.id)),
+    [rows, selectedIds],
+  );
+  const allSelected = rows.length > 0 && rows.every((r: any) => selectedIds.has(r.id));
+  const someSelected = rows.some((r: any) => selectedIds.has(r.id));
+  // A task can run only if it has a responsible agent bound to a runner.
+  const runnableRows = useMemo(
+    () => selectedRows.filter((r: any) => r.assignee?.runner?.id),
+    [selectedRows],
+  );
+  // The distinct runners backing the runnable selection — concurrency is set per runner.
+  const involvedRunners = useMemo(() => {
+    const m = new Map<string, any>();
+    for (const r of runnableRows) m.set(r.assignee.runner.id, r.assignee.runner);
+    return [...m.values()];
+  }, [runnableRows]);
+
+  const toggleOne = (id: string) =>
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const toggleAll = () =>
+    setSelectedIds(allSelected ? new Set() : new Set(rows.map((r: any) => r.id)));
+
+  const openBatch = () => {
+    if (runnableRows.length === 0) {
+      message.warning('选中的任务都没有可执行的负责 Agent（或未绑定 runner）');
+      return;
+    }
+    // Pre-fill with the most permissive current cap so confirming doesn't silently
+    // throttle a runner the user didn't mean to touch.
+    const caps = involvedRunners.map((rn: any) => rn.maxConcurrent ?? 1);
+    setConcurrency(caps.length ? Math.max(...caps) : 3);
+    setBatchOpen(true);
+  };
 
   // The task list is one of several views this page hosts; the others (agent console,
   // runners, register guide) render in its place. Arrow keys must only drive the list.
@@ -219,6 +288,9 @@ export function TasksPage() {
         key={r.id}
         onClick={() => setSelectedTaskId(r.id)}
       >
+        <div className="task-check" onClick={(e) => e.stopPropagation()}>
+          <Checkbox checked={selectedIds.has(r.id)} onChange={() => toggleOne(r.id)} />
+        </div>
         <div className="task-title-cell">
           <StatusCircle status={r.status} />
           <span className="task-title">{r.title}</span>
@@ -283,6 +355,22 @@ export function TasksPage() {
           New Task
         </Button>
         <Segmented options={FILTERS} value={filter} onChange={(v) => setFilter(v as string)} />
+        {selectedIds.size > 0 && (
+          <div className="tasks-bulkbar">
+            <span className="tasks-bulkbar-count">已选 {selectedIds.size} 项</span>
+            <Button
+              type="primary"
+              size="small"
+              icon={<PlayCircleOutlined />}
+              onClick={openBatch}
+            >
+              批量运行
+            </Button>
+            <Button type="text" size="small" onClick={() => setSelectedIds(new Set())}>
+              清除
+            </Button>
+          </div>
+        )}
       </div>
 
       {(isListView ? listQ.isLoading : tasks.isLoading) ? (
@@ -296,6 +384,14 @@ export function TasksPage() {
       ) : (
         <div className="orbit-tasklist">
           <div className="col-head-row">
+            <div className="col-head task-check">
+              <Checkbox
+                checked={allSelected}
+                indeterminate={someSelected && !allSelected}
+                onChange={toggleAll}
+                disabled={rows.length === 0}
+              />
+            </div>
             <div className="col-head">Task Title</div>
             <div className="col-head">Assignee</div>
           </div>
@@ -362,6 +458,44 @@ export function TasksPage() {
             <DatePicker style={{ width: '100%' }} />
           </Form.Item>
         </Form>
+      </Modal>
+
+      <Modal
+        title="批量运行任务"
+        open={batchOpen}
+        onCancel={() => setBatchOpen(false)}
+        onOk={() =>
+          batchRun.mutate({
+            taskIds: selectedRows.map((r: any) => r.id),
+            maxConcurrent: concurrency,
+          })
+        }
+        confirmLoading={batchRun.isPending}
+        okText="开始运行"
+        okButtonProps={{ disabled: runnableRows.length === 0 }}
+      >
+        <p style={{ marginTop: 0 }}>
+          将运行选中的 <b>{runnableRows.length}</b> 个任务
+          {selectedRows.length > runnableRows.length
+            ? `，跳过 ${selectedRows.length - runnableRows.length} 个（未指定负责 Agent 或未绑定 runner）`
+            : ''}
+          。
+        </p>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span>并发度</span>
+          <InputNumber
+            min={1}
+            max={64}
+            value={concurrency}
+            onChange={(v) => setConcurrency(v ?? 1)}
+            style={{ width: 96 }}
+          />
+          <span style={{ color: '#8a9099' }}>个任务同时运行</span>
+        </div>
+        <p style={{ marginTop: 10, marginBottom: 0, color: '#8a9099', fontSize: 12 }}>
+          任务会一次性全部提交，最多同时运行该数量，其余排队、有空位时自动开始。该值会设为本批涉及的{' '}
+          {involvedRunners.length} 个运行器的同时运行上限，并持久保存。
+        </p>
       </Modal>
     </div>
   );

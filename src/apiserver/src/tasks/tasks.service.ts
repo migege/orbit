@@ -102,7 +102,17 @@ export class TasksService {
       where: { ownerId },
       orderBy: { createdAt: 'desc' },
       include: {
-        assignee: { select: { id: true, name: true, model: true } },
+        // runner is included so the batch-run modal can show which runners back the
+        // selection and pre-fill the concurrency from their current cap.
+        assignee: {
+          select: {
+            id: true,
+            name: true,
+            model: true,
+            runnerId: true,
+            runner: { select: { id: true, name: true, displayName: true, maxConcurrent: true } },
+          },
+        },
         _count: { select: { comments: true } },
       },
     });
@@ -286,10 +296,7 @@ export class TasksService {
     if (!task) throw new NotFoundException('task not found');
     if (!task.assignee) throw new BadRequestException('请先为任务指定负责 Agent');
     if (!task.assignee.runnerId) throw new BadRequestException('负责 Agent 未绑定 runner，无法执行');
-    const prompt =
-      `请开始执行任务「${task.title}」。\n\n` +
-      (task.description ? `任务描述：\n${task.description}\n\n` : '') +
-      `请用 task_get 查看该任务的完整信息与历史评论，完成后用 task_comment 在该任务下汇报进展与结果。`;
+    const prompt = this.buildExecutePrompt(task);
     const sessionId = await this.runAgentOnTask(
       ownerId,
       { id: task.id, title: task.title },
@@ -298,6 +305,80 @@ export class TasksService {
       `执行任务：${task.title}`,
     );
     return { ok: true, sessionId };
+  }
+
+  private buildExecutePrompt(task: { title: string; description?: string | null }): string {
+    return (
+      `请开始执行任务「${task.title}」。\n\n` +
+      (task.description ? `任务描述：\n${task.description}\n\n` : '') +
+      `请用 task_get 查看该任务的完整信息与历史评论，完成后用 task_comment 在该任务下汇报进展与结果。`
+    );
+  }
+
+  /**
+   * Run several tasks in one action. Each task's responsible agent is kicked off the
+   * same way as {@link execute} (resume-or-create), but a missing assignee/runner skips
+   * that task instead of failing the batch, and per-task errors are collected.
+   *
+   * `maxConcurrent`, when given, is written to every runner backing the selection first:
+   * the claim queue gates live sessions per runner on `max_concurrent`, so this is what
+   * actually bounds how many of the freshly-submitted (PENDING) sessions run at once —
+   * the rest queue and start as slots free.
+   */
+  async batchExecute(ownerId: string, taskIds: string[], maxConcurrent?: number) {
+    const tasks = await this.prisma.task.findMany({
+      where: { id: { in: taskIds }, ownerId },
+      select: {
+        id: true,
+        title: true,
+        description: true,
+        assignee: { select: { id: true, runnerId: true } },
+      },
+    });
+
+    const runnable: typeof tasks = [];
+    const skipped: { id: string; title: string; reason: string }[] = [];
+    for (const t of tasks) {
+      if (!t.assignee) skipped.push({ id: t.id, title: t.title, reason: '未指定负责 Agent' });
+      else if (!t.assignee.runnerId)
+        skipped.push({ id: t.id, title: t.title, reason: '负责 Agent 未绑定 runner' });
+      else runnable.push(t);
+    }
+    // taskIds with no matching owned task (deleted / not owned) are silently ignored.
+
+    const runnerIds = [...new Set(runnable.map((t) => t.assignee!.runnerId!))];
+    if (maxConcurrent != null && runnerIds.length) {
+      await this.prisma.runner.updateMany({
+        where: { id: { in: runnerIds }, ownerId },
+        data: { maxConcurrent },
+      });
+    }
+
+    const results = await Promise.all(
+      runnable.map(async (t) => {
+        try {
+          const sessionId = await this.runAgentOnTask(
+            ownerId,
+            { id: t.id, title: t.title },
+            { id: t.assignee!.id, runnerId: t.assignee!.runnerId },
+            this.buildExecutePrompt(t),
+            `执行任务：${t.title}`,
+          );
+          return { id: t.id, ok: true as const, sessionId };
+        } catch (e) {
+          this.logger.warn(`batchExecute: task ${t.id} failed: ${e}`);
+          return { id: t.id, ok: false as const, error: e instanceof Error ? e.message : String(e) };
+        }
+      }),
+    );
+
+    return {
+      dispatched: results.filter((r) => r.ok).length,
+      failed: results.filter((r) => !r.ok),
+      skipped,
+      runnerIds,
+      maxConcurrent: maxConcurrent ?? null,
+    };
   }
 
   async removeComment(ownerId: string, id: string, commentId: string) {
