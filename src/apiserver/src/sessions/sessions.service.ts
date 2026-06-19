@@ -236,6 +236,17 @@ export class SessionsService {
   /** End a live session (closes the runner's claude process). */
   async end(ownerId: string, id: string) {
     const session = await this.getLive(ownerId, id);
+    await this.endLive(session);
+    return { ok: true };
+  }
+
+  /**
+   * Signal the runner to tear down a session's claude process: mark cancel-requested,
+   * enqueue an `end` control turn, and (if claimed) ask the runner to cancel now. The
+   * status settles to CANCELLED async once the runner reports back. Caller must have
+   * already loaded the session and confirmed it isn't terminal.
+   */
+  private async endLive(session: { id: string; assignedRunnerId: string | null }) {
     await this.prisma.session.update({
       where: { id: session.id },
       data: { cancelRequestedAt: new Date() },
@@ -243,7 +254,6 @@ export class SessionsService {
     await this.enqueueControlTurn(session.id, 'end');
     if (session.assignedRunnerId) this.realtime.requestCancel(session.assignedRunnerId, session.id);
     this.realtime.notifyInbox(session.id);
-    return { ok: true };
   }
 
   /**
@@ -382,21 +392,30 @@ export class SessionsService {
 
   /**
    * Load an owner's session and assert it has ended — only terminal sessions can be
-   * archived or deleted. Hiding a live one would desync the "what's running" list and
-   * could orphan the runner's claude process.
+   * deleted. Hiding a live one would orphan the runner's claude process (archiving a
+   * live session is allowed because it recycles the process first; see `archive`).
    */
   private async getEnded(ownerId: string, id: string) {
     const session = await this.prisma.session.findFirst({ where: { id, ownerId } });
     if (!session) throw new NotFoundException('session not found');
     if (!SessionsService.TERMINAL.includes(session.status)) {
-      throw new ConflictException('end the session before archiving or deleting it');
+      throw new ConflictException('end the session before deleting it');
     }
     return session;
   }
 
-  /** Hide a terminal session from the active list (Archived view). Reversible. */
+  /**
+   * Hide a session from the active list (Archived view). Reversible. A session that
+   * hasn't ended is archived too: we recycle its runner process first (enqueue an
+   * `end` control turn + signal the runner to cancel) so a live claude isn't orphaned.
+   * The status settles to CANCELLED async while the row already sits in Archived.
+   */
   async archive(ownerId: string, id: string) {
-    const session = await this.getEnded(ownerId, id);
+    const session = await this.prisma.session.findFirst({ where: { id, ownerId } });
+    if (!session) throw new NotFoundException('session not found');
+    if (!SessionsService.TERMINAL.includes(session.status) && !session.cancelRequestedAt) {
+      await this.endLive(session);
+    }
     await this.prisma.session.update({ where: { id: session.id }, data: { archivedAt: new Date() } });
     return { ok: true };
   }
