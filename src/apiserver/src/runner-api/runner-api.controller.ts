@@ -351,7 +351,21 @@ export class RunnerApiController {
       WHERE id = (
         SELECT id FROM "conversation_turn"
         WHERE "session_id" = ${sessionId}::uuid
-          AND ("status" = 'PENDING' OR ("status" = 'IN_FLIGHT' AND "lease_deadline_at" < now()))
+          AND (
+            -- Control turns (interrupt/end/reload) land immediately, even mid-message.
+            ("kind" IN ('interrupt', 'end', 'reload')
+              AND ("status" = 'PENDING' OR ("status" = 'IN_FLIGHT' AND "lease_deadline_at" < now())))
+            -- A crashed in-flight message: re-deliver the same one (at-least-once lease).
+            OR ("kind" = 'message' AND "status" = 'IN_FLIGHT' AND "lease_deadline_at" < now())
+            -- The next queued message is released only once no message is in flight, so
+            -- turns run strictly one at a time (queued follow-ups fire in seq order).
+            OR ("kind" = 'message' AND "status" = 'PENDING' AND NOT EXISTS (
+              SELECT 1 FROM "conversation_turn" inflight
+              WHERE inflight."session_id" = ${sessionId}::uuid
+                AND inflight."kind" = 'message'
+                AND inflight."status" = 'IN_FLIGHT'
+            ))
+          )
         ORDER BY (CASE WHEN "kind" IN ('interrupt', 'end', 'reload') THEN 0 ELSE 1 END), "seq" ASC
         FOR UPDATE SKIP LOCKED
         LIMIT 1
@@ -497,6 +511,9 @@ export class RunnerApiController {
         if (rows.length > 0) await tx.llmUsage.createMany({ data: rows });
       }
     });
+    // The turn just parked the session at AWAITING_INPUT; wake the inbox poller so any
+    // queued follow-up message is leased now instead of after the long-poll window.
+    this.realtime.notifyInbox(sessionId);
     return { ok: true };
   }
 

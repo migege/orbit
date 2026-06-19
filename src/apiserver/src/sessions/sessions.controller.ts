@@ -60,6 +60,17 @@ export class SessionsController {
     return this.sessions.createTurn(user.userId, id, dto);
   }
 
+  // Withdraw a still-queued message (turnId is the raw conversation_turn id returned
+  // by POST /turns, not a base62 public id).
+  @Delete(':id/turns/:turnId')
+  cancelTurn(
+    @CurrentUser() user: AuthUser,
+    @Param('id', Base62UuidPipe) id: string,
+    @Param('turnId') turnId: string,
+  ) {
+    return this.sessions.cancelQueuedTurn(user.userId, id, turnId);
+  }
+
   @Post(':id/resume')
   resume(
     @CurrentUser() user: AuthUser,

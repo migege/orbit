@@ -27,6 +27,7 @@ import {
   api,
   type ApprovalInfo,
   archiveSession,
+  cancelQueuedTurn,
   createInteractiveSession,
   decideApproval,
   deleteSession,
@@ -47,7 +48,16 @@ interface RunEvent {
   seq: number;
   type: string;
   payload: any;
+  turnId?: string | null;
   ts?: string;
+}
+
+// A user message accepted while a turn is running: it sits in the inbox (PENDING)
+// until the current turn finishes. Tracked locally so the composer can show it and
+// offer to withdraw it before the runner picks it up.
+interface QueuedTurn {
+  turnId: string;
+  content: string;
 }
 
 const TERMINAL = ['SUCCEEDED', 'FAILED', 'CANCELLED'];
@@ -183,6 +193,7 @@ export function AgentView({ runner }: { runner: Runner }) {
   const [streamingText, setStreamingText] = useState(''); // live assistant text from text_delta
   const [streamingThink, setStreamingThink] = useState(''); // live thinking from thinking_delta
   const [idle, setIdle] = useState(false); // session is AWAITING_INPUT (a new turn is accepted)
+  const [queued, setQueued] = useState<QueuedTurn[]>([]); // messages sent while a turn was running
   const seen = useRef<Set<number>>(new Set());
   const scrollRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null); // the left session-list column, for arrow-key scrolling
@@ -344,6 +355,7 @@ export function AgentView({ runner }: { runner: Runner }) {
     setStreamingText('');
     setStreamingThink('');
     setApprovals([]);
+    setQueued([]);
     seen.current = new Set();
     setIdle(false);
     if (!selectedId) return;
@@ -429,7 +441,12 @@ export function AgentView({ runner }: { runner: Runner }) {
         // Track turn boundaries live so the composer re-enables the instant a turn
         // ends, rather than waiting for the 4s session poll.
         if (ev.type === 'turn_end') setIdle(true);
-        else if (ev.type === 'user') setIdle(false);
+        else if (ev.type === 'user') {
+          setIdle(false);
+          // The runner just picked up this turn — it's now in the transcript, so drop
+          // it from the local queue (no-op if it wasn't ours / already cleared).
+          if (ev.turnId) setQueued((q) => q.filter((x) => x.turnId !== ev.turnId));
+        }
       };
       es.onerror = () => {
         es?.close();
@@ -453,7 +470,7 @@ export function AgentView({ runner }: { runner: Runner }) {
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [events, streamingText, streamingThink, approvals]);
+  }, [events, streamingText, streamingThink, approvals, queued]);
 
   // Allow/deny a pending tool-permission request; optimistically drop it (the
   // approval_resolved SSE also removes it), re-fetching to resync on failure.
@@ -474,13 +491,17 @@ export function AgentView({ runner }: { runner: Runner }) {
   };
 
   const send = useMutation({
-    mutationFn: async (content: string): Promise<string> => {
+    mutationFn: async (content: string): Promise<{ id: string; queuedItem?: QueuedTurn }> => {
       // Continue a live session; revive an ended-but-resumable one (same row, claude
       // --resumes its context); otherwise (no selection, or unresumable) start a
       // fresh session so the composer never dead-locks.
       if (selected && live) {
-        await sendTurn(selected.id, content);
-        return selected.id;
+        const res = await sendTurn(selected.id, content);
+        // A turn already running ⇒ this message is queued (delivered once that turn
+        // finishes); surface it as a pending bubble the user can withdraw. When idle
+        // it's delivered right away, so it'll arrive via its own `user` event instead.
+        const queuedItem = idle ? undefined : { turnId: res.turnId, content };
+        return { id: selected.id, queuedItem };
       }
       if (selected && resumable) {
         // The pills were seeded from this session's stored config, so an untouched
@@ -490,7 +511,7 @@ export function AgentView({ runner }: { runner: Runner }) {
           permissionMode: MODE_TO_PERMISSION[mode],
           effort: effort || undefined,
         });
-        return selected.id;
+        return { id: selected.id };
       }
       const created = await createInteractiveSession({
         prompt: content,
@@ -500,13 +521,14 @@ export function AgentView({ runner }: { runner: Runner }) {
         permissionMode: MODE_TO_PERMISSION[mode],
         effort: effort || undefined,
       });
-      return created.id;
+      return { id: created.id };
     },
-    onSuccess: (id) => {
+    onSuccess: ({ id, queuedItem }) => {
       navigate(`/sessions/${encodeId(id)}`);
       setText('');
-      setIdle(false); // a turn is now starting
       setView('active'); // a new/continued session lives in the active list
+      if (queuedItem) setQueued((q) => [...q, queuedItem]);
+      else setIdle(false); // a turn is now starting
       qc.invalidateQueries({ queryKey: ['sessions'] });
     },
     onError: (e: Error) => message.error(e.message),
@@ -514,9 +536,24 @@ export function AgentView({ runner }: { runner: Runner }) {
   const control = useMutation({
     mutationFn: ({ id, action }: { id: string; action: 'interrupt' | 'end' }) =>
       action === 'interrupt' ? interruptSession(id) : endSession(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['sessions'] }),
+    onSuccess: () => {
+      // Both interrupt and end drop queued follow-ups server-side; mirror that locally.
+      setQueued([]);
+      qc.invalidateQueries({ queryKey: ['sessions'] });
+    },
     onError: (e: Error) => message.error(e.message),
   });
+  // Withdraw a queued message. Optimistically remove it; if the runner already leased
+  // it (it's no longer cancellable) it'll arrive in the transcript via its `user` event.
+  const cancelQueued = async (turnId: string): Promise<void> => {
+    if (!selectedId) return;
+    setQueued((q) => q.filter((x) => x.turnId !== turnId));
+    try {
+      await cancelQueuedTurn(selectedId, turnId);
+    } catch {
+      message.info('该消息已开始处理，无法撤回');
+    }
+  };
   // Soft visibility actions for ended sessions. All reversible, so no confirm dialog —
   // archive/delete fire immediately and surface an Undo toast; restore (used by the
   // toast and the Archived/Trash views) clears both flags back to active.
@@ -626,8 +663,15 @@ export function AgentView({ runner }: { runner: Runner }) {
   // While the selected session is still loading we can't tell if it's live yet;
   // block send to avoid accidentally creating a duplicate session.
   const loadingSession = !!selectedId && !selected;
+  // A live session accepts a message any time it holds a runner slot (RUNNING queues
+  // it, AWAITING_INPUT runs it now) — but not while PENDING (still waiting for a slot,
+  // no claude process yet). A non-live (ended) session revives or starts fresh.
   const canSend =
-    !!text.trim() && !send.isPending && runner.online && !loadingSession && (live ? idle : true);
+    !!text.trim() &&
+    !send.isPending &&
+    runner.online &&
+    !loadingSession &&
+    (live ? SLOT_HELD.includes(selected.status) : true);
 
   // ── `/` command & skill autocomplete ──────────────────────────────────────
   // The runner reports its on-disk slash commands/skills via heartbeat (runner.commands
@@ -703,12 +747,21 @@ export function AgentView({ runner }: { runner: Runner }) {
           block
           size="small"
           value={selectedId ? 'active' : view}
-          disabled={!!selectedId}
-          onChange={(v) => setView(v as 'active' | 'archived' | 'deleted')}
+          onChange={(v) => {
+            const next = v as 'active' | 'archived' | 'deleted';
+            setView(next);
+            // Switching tabs while a session transcript is open closes it: the open
+            // session lives in the active set and archived/trash rows aren't openable,
+            // so browsing another tab means leaving the conversation.
+            if (selectedId) {
+              const a = scopeAgentId ?? agentsForRunner[0]?.id;
+              navigate(a ? `/agents/${encodeId(a)}` : `/runners/${encodeId(runner.id)}`);
+            }
+          }}
           options={[
-            { label: '进行中', value: 'active' },
-            { label: '已完成', value: 'archived' },
-            { label: '回收站', value: 'deleted' },
+            { label: 'Active', value: 'active' },
+            { label: 'Completed', value: 'archived' },
+            { label: 'Trash', value: 'deleted' },
           ]}
         />
         <div className="agent-sessions session-col-list" ref={listRef}>
@@ -844,6 +897,15 @@ export function AgentView({ runner }: { runner: Runner }) {
             {approvals.map((a) => (
               <ApprovalPanel key={a.id} approval={a} onDecide={decide} />
             ))}
+            {queued.map((q) => (
+              <div className="chat-msg chat-user chat-queued" key={q.turnId}>
+                <span className="chat-queued-text">{q.content}</span>
+                <span className="chat-queued-meta">
+                  <span className="chat-queued-tag">排队中</span>
+                  <a onClick={() => cancelQueued(q.turnId)}>撤回</a>
+                </span>
+              </div>
+            ))}
             {selected &&
               !TERMINAL.includes(selected.status) &&
               selected.status !== 'PENDING' &&
@@ -927,7 +989,7 @@ export function AgentView({ runner }: { runner: Runner }) {
                   return;
                 }
               }
-              if (e.key === 'Enter' && !e.shiftKey) {
+              if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                 e.preventDefault();
                 onSend();
               }

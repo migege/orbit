@@ -70,12 +70,18 @@ const uuid = (): string => {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
 };
 
-/** Send the next user message to a live interactive session. */
+/** Send the next user message to a live interactive session. While a turn is running
+ *  the message is queued (delivered when the current turn finishes); the returned
+ *  turnId identifies it, e.g. to withdraw it with cancelQueuedTurn. */
 export const sendTurn = (sessionId: string, content: string) =>
-  api(`/sessions/${sessionId}/turns`, {
+  api<{ turnId: string; seq: number }>(`/sessions/${sessionId}/turns`, {
     method: 'POST',
     body: { clientTurnId: uuid(), content },
   });
+
+/** Withdraw a still-queued message (only works before the runner picks it up). */
+export const cancelQueuedTurn = (sessionId: string, turnId: string) =>
+  api(`/sessions/${sessionId}/turns/${turnId}`, { method: 'DELETE' });
 
 /** Revive an ended session with a new message: the runner --resumes claude's
  *  existing context. Requires the session's runner to be online. `config` re-applies

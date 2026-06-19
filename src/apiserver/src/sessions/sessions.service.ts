@@ -204,15 +204,14 @@ export class SessionsService {
 
   /** Enqueue a user message for the live session. */
   async createTurn(ownerId: string, id: string, dto: SessionTurnDto) {
-    const session = await this.getLive(ownerId, id);
+    await this.getLive(ownerId, id);
     const existing = await this.prisma.conversationTurn.findUnique({
       where: { sessionId_clientTurnId: { sessionId: id, clientTurnId: dto.clientTurnId } },
     });
     if (existing) return { turnId: existing.id, seq: existing.seq }; // idempotent
-    // Serialize: only accept a new message when the session is idle.
-    if (session.status !== RunStatus.AWAITING_INPUT) {
-      throw new ConflictException('a turn is already in progress');
-    }
+    // Accept the message even while a turn is running: it's queued as PENDING and
+    // delivery is serialized in the inbox (dequeueTurn releases the next message only
+    // once the in-flight one is answered). The user can withdraw a still-queued one.
     const turn = await this.insertTurn(id, {
       kind: 'message',
       content: dto.content,
@@ -228,8 +227,26 @@ export class SessionsService {
   /** Abort the in-flight turn of a live session (the process stays alive). */
   async interrupt(ownerId: string, id: string) {
     const session = await this.getLive(ownerId, id);
+    // Drop any queued-but-undelivered follow-ups: interrupting means "stop", so the
+    // user's pending messages shouldn't fire after the in-flight turn is aborted. An
+    // already-delivered message is IN_FLIGHT, not PENDING — it's the turn being aborted.
+    await this.prisma.conversationTurn.deleteMany({
+      where: { sessionId: session.id, kind: 'message', status: 'PENDING' },
+    });
     await this.enqueueControlTurn(session.id, 'interrupt');
     this.realtime.notifyInbox(session.id);
+    return { ok: true };
+  }
+
+  /** Withdraw a queued user message. Only a still-PENDING message can be cancelled;
+   *  once the runner has leased it (IN_FLIGHT) it's already feeding claude and will
+   *  appear in the transcript, so cancelling is rejected. */
+  async cancelQueuedTurn(ownerId: string, id: string, turnId: string) {
+    await this.getLive(ownerId, id);
+    const res = await this.prisma.conversationTurn.deleteMany({
+      where: { id: turnId, sessionId: id, kind: 'message', status: 'PENDING' },
+    });
+    if (res.count === 0) throw new ConflictException('message already started or not found');
     return { ok: true };
   }
 
@@ -250,6 +267,12 @@ export class SessionsService {
     await this.prisma.session.update({
       where: { id: session.id },
       data: { cancelRequestedAt: new Date() },
+    });
+    // Drop queued-but-undelivered messages so they can't replay if the session is
+    // later revived (resume re-claims the same row and would otherwise deliver these
+    // stale PENDING turns ahead of the new message).
+    await this.prisma.conversationTurn.deleteMany({
+      where: { sessionId: session.id, kind: 'message', status: 'PENDING' },
     });
     await this.enqueueControlTurn(session.id, 'end');
     if (session.assignedRunnerId) this.realtime.requestCancel(session.assignedRunnerId, session.id);
