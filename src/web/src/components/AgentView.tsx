@@ -52,19 +52,26 @@ interface RunEvent {
 const TERMINAL = ['SUCCEEDED', 'FAILED', 'CANCELLED'];
 // Session statuses that occupy one of the runner's maxConcurrent slots.
 const SLOT_HELD = ['RUNNING', 'AWAITING_INPUT', 'INTERRUPTED'];
-const MODE_OPTIONS = ['Plan', 'Accept Edits', 'Default'];
-// UI label <-> claude --permission-mode. "Default" maps to dontAsk: a web session
-// has no TTY to answer permission prompts, so a prompting mode would hang the turn.
+// UI label <-> claude --permission-mode value — the full set claude 2.1.x accepts.
+// Prompting modes (Default/Plan/Accept Edits) work without a TTY because the runner
+// routes permission prompts to the orbit approval panel (the MCP permission_prompt
+// tool). "Don't Ask" auto-denies anything not pre-allowed; "Bypass" skips all checks.
 const MODE_TO_PERMISSION: Record<string, string> = {
+  Default: 'default',
   Plan: 'plan',
   'Accept Edits': 'acceptEdits',
-  Default: 'dontAsk',
+  Auto: 'auto',
+  "Don't Ask": 'dontAsk',
+  Bypass: 'bypassPermissions',
 };
-const PERMISSION_TO_MODE: Record<string, string> = {
-  plan: 'Plan',
-  acceptEdits: 'Accept Edits',
-  dontAsk: 'Default',
-};
+const PERMISSION_TO_MODE: Record<string, string> = Object.fromEntries(
+  Object.entries(MODE_TO_PERMISSION).map(([label, value]) => [value, label]),
+);
+const MODE_OPTIONS = Object.keys(MODE_TO_PERMISSION);
+// Auto mode needs a recent model (Opus 4.6+ / Sonnet 4.6); claude rejects
+// --permission-mode auto on Haiku / older models, so gate the option by model.
+const AUTO_CAPABLE_MODELS = new Set(['claude-sonnet-4-6', 'claude-opus-4-8']);
+const supportsAuto = (m: string): boolean => AUTO_CAPABLE_MODELS.has(m);
 const MODEL_OPTIONS = [
   { value: 'claude-sonnet-4-6', label: 'claude-sonnet-4-6' },
   { value: 'claude-opus-4-8', label: 'claude-opus-4-8' },
@@ -195,12 +202,32 @@ export function AgentView({ runner }: { runner: Runner }) {
   // An ended session can be revived (--resume claude's context) only if it actually
   // ran and its runner is online — the transcript lives on that machine's disk.
   const resumable = !!selected && !live && !!selected.startedAt && runner.online;
-  // The session list is scoped to the locked agent when one is set, so the page
-  // reads as a conversation with that agent rather than the whole runner.
+  // The session list (always visible in the left column) is scoped to one agent so
+  // it reads as a conversation with that agent. On /agents/<id> that's the locked
+  // agent; on a /sessions/<id> deep link the URL carries no agent, so fall back to
+  // the selected session's own agent.
+  const scopeAgentId = lockedAgentId ?? selected?.agent?.id ?? null;
   const visibleSessions = useMemo(
-    () => (lockedAgentId ? sessions.filter((s) => s.agent?.id === lockedAgentId) : sessions),
-    [sessions, lockedAgentId],
+    () => (scopeAgentId ? sessions.filter((s) => s.agent?.id === scopeAgentId) : sessions),
+    [sessions, scopeAgentId],
   );
+
+  // Right-pane mode. A real session (/sessions/<id>) shows its conversation; with
+  // none selected we're composing a new session — explicitly (/agents/<id>/new),
+  // while browsing the archived/trash tabs (nothing openable there), or implicitly
+  // when the active list is empty (the first-run empty state).
+  const composing =
+    !selectedId &&
+    (composingRoute || view !== 'active' || (sessionsQ.isSuccess && visibleSessions.length === 0));
+
+  // Default landing: opening /agents/<id> on the active tab (no session, not the
+  // /new draft) jumps to the agent's most recent session so the right pane is never
+  // blank. replace() keeps it out of history; archived/trash tabs never auto-open.
+  useEffect(() => {
+    if (selectedId || composingRoute || view !== 'active' || !sessionsQ.isSuccess) return;
+    const first = visibleSessions[0];
+    if (first) navigate(`/sessions/${encodeId(first.id)}`, { replace: true });
+  }, [selectedId, composingRoute, view, sessionsQ.isSuccess, visibleSessions, navigate]);
 
   // Agents belonging to this machine runner — each is a project dir + coding tool.
   // Picking one tells the server where (which dir) to run a new session.
@@ -507,6 +534,13 @@ export function AgentView({ runner }: { runner: Runner }) {
     if (!c || send.isPending) return;
     send.mutate(c);
   };
+  // Open the new-session draft for this agent. A /sessions/<id> URL carries no
+  // agent, so resolve it from the open session (scopeAgentId), then the first agent.
+  const goNew = (): void => {
+    const a = scopeAgentId ?? agentsForRunner[0]?.id;
+    navigate(a ? `/agents/${encodeId(a)}/new` : `/runners/${encodeId(runner.id)}`);
+    setText('');
+  };
   // While the selected session is still loading we can't tell if it's live yet;
   // block send to avoid accidentally creating a duplicate session.
   const loadingSession = !!selectedId && !selected;
@@ -519,6 +553,9 @@ export function AgentView({ runner }: { runner: Runner }) {
     ? (PERMISSION_TO_MODE[selected.permissionMode ?? 'dontAsk'] ?? 'Default')
     : mode;
   const shownEffort: string = live ? (selected.effort ?? '') : effort;
+  // Auto is offered only on models that support it (see supportsAuto); the option
+  // is greyed out otherwise so an unsupported model can't pick a mode claude rejects.
+  const autoOk = supportsAuto(shownModel);
   // Model & Mode can be changed mid-session, but only between turns: the change
   // re-spawns claude, which would abort a turn in flight (and needs the runner online
   // to act on it). When not live they're freely editable (pre-session config).
@@ -526,164 +563,89 @@ export function AgentView({ runner }: { runner: Runner }) {
   const configEditable = live ? idle && runner.online : true;
   // A live session's agent is fixed; otherwise reflect the local pick.
   const shownAgentId: string | undefined = live ? (selected.agent?.id ?? undefined) : agentId;
+  // Title shown above the session list (and in the draft header). /sessions/<id>
+  // has no agent in the URL, so fall back to the open session's agent, then runner.
+  const headAgentName =
+    lockedAgent?.name ?? selected?.agent?.name ?? runner.displayName ?? runner.name;
 
   return (
-    <div className="agent-view">
-      <div className="agent-header">
-        <span className={`agent-status-dot ${runner.online ? 'online' : ''}`} />
-        <div className="agent-header-main">
-          <div className="agent-name">{lockedAgent ? lockedAgent.name : (runner.displayName ?? runner.name)}</div>
-          <div className="agent-sub">
-            {selected?.title ??
-              (selectedId
-                ? 'Starting…'
-                : lockedAgent
-                  ? `${runner.displayName ?? runner.name} · ${visibleSessions.length} sessions`
-                  : `${runner.online ? 'Online' : 'Offline'} · ${sessions.length} sessions`)}
-          </div>
+    <div className="agent-split">
+      <aside className="session-col">
+        <div className="session-col-head">
+          <span className={`agent-status-dot ${runner.online ? 'online' : ''}`} />
+          <span className="session-col-title">{headAgentName}</span>
         </div>
-        <div className="agent-header-spacer" />
-        {selectedId && (
-          <Button
-            size="small"
-            icon={<PlusOutlined />}
-            onClick={() => {
-              // Start a fresh session in the same agent's console. While a session
-              // is open the URL is /sessions/<id>, so fall back to its agent.
-              const a = lockedAgentId ?? selected?.agent?.id ?? agentsForRunner[0]?.id;
-              navigate(a ? `/agents/${encodeId(a)}` : `/runners/${encodeId(runner.id)}`);
-              setText('');
-            }}
-          >
-            New session
-          </Button>
-        )}
-      </div>
-
-      {selectedId ? (
-        <div className="agent-sessions" ref={scrollRef}>
-          {selected &&
-            selected.status === 'PENDING' &&
-            (queuedForSlot ? (
-              <div className="chat-note">
-                排队中 · 运行器并发已满（{liveSlots}/{runner.maxConcurrent}），正在等待空闲槽位…
-              </div>
-            ) : (
-              <div className="chat-note">Starting session…</div>
-            ))}
-          <Transcript events={events} live={live} />
-          {streamingThink && <div className="chat-think-stream chat-streaming">💭 {streamingThink}</div>}
-          {streamingText && <div className="chat-msg chat-assistant chat-streaming">{streamingText}</div>}
-          {approvals.map((a) => (
-            <ApprovalPanel key={a.id} approval={a} onDecide={decide} />
-          ))}
-          {selected &&
-            !TERMINAL.includes(selected.status) &&
-            selected.status !== 'PENDING' &&
-            events.length === 0 &&
-            !streamingText &&
-            !streamingThink && <div className="chat-note">Waiting for the agent…</div>}
-          {selected && TERMINAL.includes(selected.status) && (
+        <div className={`session-new ${composing ? 'active' : ''}`} onClick={goNew}>
+          <PlusOutlined />
+          <span>New session</span>
+        </div>
+        <Segmented
+          block
+          size="small"
+          value={selectedId ? 'active' : view}
+          disabled={!!selectedId}
+          onChange={(v) => setView(v as 'active' | 'archived' | 'deleted')}
+          options={[
+            { label: '进行中', value: 'active' },
+            { label: '已完成', value: 'archived' },
+            { label: '回收站', value: 'deleted' },
+          ]}
+        />
+        <div className="agent-sessions session-col-list">
+          {visibleSessions.length === 0 && (
             <div className="chat-note">
-              Session {selected.status.toLowerCase()}.
-              {resumable
-                ? ' 发消息可续接这个会话。'
-                : runner.online
-                  ? ' 发消息将新开一个会话。'
-                  : ' 运行器离线，需上线后才能续接。'}
+              {view === 'active'
+                ? 'No sessions yet.'
+                : view === 'archived'
+                  ? '没有已完成的会话。'
+                  : '回收站为空。'}
             </div>
           )}
-        </div>
-      ) : (
-        <>
-          <div className="session-head">
-            <span>Sessions</span>
-            <Segmented
-              size="small"
-              value={view}
-              onChange={(v) => setView(v as 'active' | 'archived' | 'deleted')}
-              options={[
-                { label: '进行中', value: 'active' },
-                { label: '已完成', value: 'archived' },
-                { label: '回收站', value: 'deleted' },
-              ]}
-            />
-          </div>
-          <div className="agent-sessions">
-            {visibleSessions.length === 0 && (
-              <div className="chat-note">
-                {view === 'active'
-                  ? 'No sessions yet — send a message below to start one.'
-                  : view === 'archived'
-                    ? '没有已完成的会话。'
-                    : '回收站为空。'}
-              </div>
-            )}
-            {visibleSessions.map((s) => {
-              const ended = TERMINAL.includes(s.status);
-              return (
-                <div
-                  className={`session-row${view === 'active' ? '' : ' no-open'}`}
-                  key={s.id}
-                  onClick={view === 'active' ? () => navigate(`/sessions/${encodeId(s.id)}`) : undefined}
-                >
-                  <span className="session-icon">
-                    <StatusIcon session={s} />
-                  </span>
-                  <div className="session-main">
-                    <div className="session-title">{s.title}</div>
-                    <div className="session-meta">
-                      {s.numTurns ?? 0} turns · ${(s.costUsd ?? 0).toFixed(2)}
-                    </div>
+          {visibleSessions.map((s) => {
+            const ended = TERMINAL.includes(s.status);
+            return (
+              <div
+                className={`session-row${view === 'active' ? '' : ' no-open'}${s.id === selectedId ? ' active' : ''}`}
+                key={s.id}
+                onClick={view === 'active' ? () => navigate(`/sessions/${encodeId(s.id)}`) : undefined}
+              >
+                <span className="session-icon">
+                  <StatusIcon session={s} />
+                </span>
+                <div className="session-main">
+                  <div className="session-title">{s.title}</div>
+                  <div className="session-meta">
+                    {s.numTurns ?? 0} turns · ${(s.costUsd ?? 0).toFixed(2)}
                   </div>
-                  <div className="session-right">
-                    <div className="session-time">{fmtTime(s.lastTurnAt ?? s.createdAt)}</div>
-                    <div className="session-actions" onClick={(e) => e.stopPropagation()}>
-                      {view === 'active' && (
-                        <>
-                          <Tooltip title={ended ? 'Complete' : '结束会话后才能完成'}>
-                            <Button
-                              size="small"
-                              type="text"
-                              icon={<CheckCircleOutlined />}
-                              disabled={!ended}
-                              onClick={() => archiveMut.mutate(s.id)}
-                            />
-                          </Tooltip>
-                          <Tooltip title={ended ? 'Delete' : '结束会话后才能删除'}>
-                            <Button
-                              size="small"
-                              type="text"
-                              danger
-                              icon={<DeleteOutlined />}
-                              disabled={!ended}
-                              onClick={() => deleteMut.mutate(s.id)}
-                            />
-                          </Tooltip>
-                        </>
-                      )}
-                      {view === 'archived' && (
-                        <>
-                          <Tooltip title="Restore">
-                            <Button
-                              size="small"
-                              type="text"
-                              icon={<UndoOutlined />}
-                              onClick={() => restoreMut.mutate(s.id)}
-                            />
-                          </Tooltip>
-                          <Tooltip title="Delete">
-                            <Button
-                              size="small"
-                              type="text"
-                              danger
-                              icon={<DeleteOutlined />}
-                              onClick={() => deleteMut.mutate(s.id)}
-                            />
-                          </Tooltip>
-                        </>
-                      )}
-                      {view === 'deleted' && (
+                </div>
+                <div className="session-right">
+                  <div className="session-time">{fmtTime(s.lastTurnAt ?? s.createdAt)}</div>
+                  <div className="session-actions" onClick={(e) => e.stopPropagation()}>
+                    {view === 'active' && (
+                      <>
+                        <Tooltip title={ended ? 'Complete' : '结束会话后才能完成'}>
+                          <Button
+                            size="small"
+                            type="text"
+                            icon={<CheckCircleOutlined />}
+                            disabled={!ended}
+                            onClick={() => archiveMut.mutate(s.id)}
+                          />
+                        </Tooltip>
+                        <Tooltip title={ended ? 'Delete' : '结束会话后才能删除'}>
+                          <Button
+                            size="small"
+                            type="text"
+                            danger
+                            icon={<DeleteOutlined />}
+                            disabled={!ended}
+                            onClick={() => deleteMut.mutate(s.id)}
+                          />
+                        </Tooltip>
+                      </>
+                    )}
+                    {view === 'archived' && (
+                      <>
                         <Tooltip title="Restore">
                           <Button
                             size="small"
@@ -692,15 +654,94 @@ export function AgentView({ runner }: { runner: Runner }) {
                             onClick={() => restoreMut.mutate(s.id)}
                           />
                         </Tooltip>
-                      )}
-                    </div>
+                        <Tooltip title="Delete">
+                          <Button
+                            size="small"
+                            type="text"
+                            danger
+                            icon={<DeleteOutlined />}
+                            onClick={() => deleteMut.mutate(s.id)}
+                          />
+                        </Tooltip>
+                      </>
+                    )}
+                    {view === 'deleted' && (
+                      <Tooltip title="Restore">
+                        <Button
+                          size="small"
+                          type="text"
+                          icon={<UndoOutlined />}
+                          onClick={() => restoreMut.mutate(s.id)}
+                        />
+                      </Tooltip>
+                    )}
                   </div>
                 </div>
-              );
-            })}
+              </div>
+            );
+          })}
+        </div>
+      </aside>
+
+      <div className="agent-view">
+        <div className="agent-header">
+          <div className="agent-header-main">
+            <div className="agent-name">
+              {composing ? 'New session' : (selected?.title ?? (selectedId ? 'Starting…' : headAgentName))}
+            </div>
+            <div className="agent-sub">
+              {composing
+                ? `${headAgentName} · 新会话`
+                : selected
+                  ? `${selected.numTurns ?? 0} turns · $${(selected.costUsd ?? 0).toFixed(2)}`
+                  : selectedId
+                    ? 'Starting…'
+                    : ''}
+            </div>
           </div>
-        </>
-      )}
+        </div>
+
+        {selectedId ? (
+          <div className="agent-sessions" ref={scrollRef}>
+            {selected &&
+              selected.status === 'PENDING' &&
+              (queuedForSlot ? (
+                <div className="chat-note">
+                  排队中 · 运行器并发已满（{liveSlots}/{runner.maxConcurrent}），正在等待空闲槽位…
+                </div>
+              ) : (
+                <div className="chat-note">Starting session…</div>
+              ))}
+            <Transcript events={events} live={live} />
+            {streamingThink && <div className="chat-think-stream chat-streaming">💭 {streamingThink}</div>}
+            {streamingText && <div className="chat-msg chat-assistant chat-streaming">{streamingText}</div>}
+            {approvals.map((a) => (
+              <ApprovalPanel key={a.id} approval={a} onDecide={decide} />
+            ))}
+            {selected &&
+              !TERMINAL.includes(selected.status) &&
+              selected.status !== 'PENDING' &&
+              events.length === 0 &&
+              !streamingText &&
+              !streamingThink && <div className="chat-note">Waiting for the agent…</div>}
+            {selected && TERMINAL.includes(selected.status) && (
+              <div className="chat-note">
+                Session {selected.status.toLowerCase()}.
+                {resumable
+                  ? ' 发消息可续接这个会话。'
+                  : runner.online
+                    ? ' 发消息将新开一个会话。'
+                    : ' 运行器离线，需上线后才能续接。'}
+              </div>
+            )}
+          </div>
+        ) : composing ? (
+          <div className="agent-sessions agent-draft" ref={scrollRef}>
+            <div className="chat-note">给这个 Agent 发一个任务，开始一个新会话。</div>
+          </div>
+        ) : (
+          <div className="agent-sessions" />
+        )}
 
       <div className="agent-composer">
         <div className="composer-box">
@@ -742,7 +783,7 @@ export function AgentView({ runner }: { runner: Runner }) {
             onClick={onSend}
           />
         </div>
-        <Tooltip title="Agent & Effort are fixed once a session starts. Model & Mode can be changed between turns — the session resumes with the new setting on your next message.">
+        <Tooltip title="Agent & Effort are fixed once a session starts. Model & Mode can be changed between turns — the session resumes with the new setting on your next message. Auto mode needs a recent model (Sonnet 4.6 / Opus 4.6+) and your org to allow it.">
           <div className="composer-pills">
             <span className="composer-pill">
               <AppstoreOutlined className="composer-pill-icon" />
@@ -766,7 +807,11 @@ export function AgentView({ runner }: { runner: Runner }) {
                 onChange={(v) =>
                   live ? configMut.mutate({ permissionMode: MODE_TO_PERMISSION[v] }) : setMode(v)
                 }
-                options={MODE_OPTIONS.map((m) => ({ value: m, label: m }))}
+                options={MODE_OPTIONS.map((m) => ({
+                  value: m,
+                  label: m,
+                  disabled: m === 'Auto' && !autoOk,
+                }))}
                 disabled={!configEditable}
                 popupMatchSelectWidth={false}
               />
@@ -777,7 +822,17 @@ export function AgentView({ runner }: { runner: Runner }) {
                 size="small"
                 variant="borderless"
                 value={shownModel}
-                onChange={(v) => (live ? configMut.mutate({ model: v }) : setModel(v))}
+                onChange={(v) => {
+                  // Switching to a model that can't do Auto while Auto is selected
+                  // would send a mode claude rejects — snap back to Default.
+                  const drop = shownMode === 'Auto' && !supportsAuto(v);
+                  if (live) {
+                    configMut.mutate({ model: v, ...(drop ? { permissionMode: 'default' } : {}) });
+                  } else {
+                    setModel(v);
+                    if (drop) setMode('Default');
+                  }
+                }}
                 options={MODEL_OPTIONS}
                 disabled={!configEditable}
                 popupMatchSelectWidth={false}
@@ -797,6 +852,7 @@ export function AgentView({ runner }: { runner: Runner }) {
             </span>
           </div>
         </Tooltip>
+      </div>
       </div>
     </div>
   );

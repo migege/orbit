@@ -69,6 +69,7 @@ export function App() {
           <Route path="/runners" element={<Shell><TasksPage /></Shell>} />
           <Route path="/runners/:id" element={<Shell><TasksPage /></Shell>} />
           <Route path="/agents/:id" element={<Shell><TasksPage /></Shell>} />
+          <Route path="/agents/:id/new" element={<Shell><TasksPage /></Shell>} />
           <Route path="/sessions/:id" element={<Shell><TasksPage /></Shell>} />
           <Route path="/agents/:id/sessions/:sessionId" element={<LegacySessionRedirect />} />
           <Route path="/lists/:key" element={<Shell><TasksPage /></Shell>} />

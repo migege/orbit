@@ -587,11 +587,92 @@ body {
   border-color: #dee0e3;
 }
 
-/* ---- Agent detail view (selected runner) ---- */
+/* ---- Agent console: two-pane master-detail (session list | conversation) ---- */
+.agent-split {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+}
+.session-col {
+  width: 264px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid #eceef1;
+  margin-right: 20px;
+}
+.session-col-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+  height: 40px;
+  padding-left: 2px;
+}
+.session-col-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #1f2329;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.session-new {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  height: 38px;
+  margin: 2px 8px 8px 0;
+  padding: 0 8px;
+  border-radius: 8px;
+  color: #3370ff;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.session-new:hover {
+  background: #f2f3f5;
+}
+.session-new.active {
+  background: #eaf1ff;
+}
+.session-col .ant-segmented {
+  flex: none;
+  margin: 0 8px 8px 0;
+}
+.session-col-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 8px;
+}
+.session-row.active {
+  background: #eaf1ff;
+}
+.session-row.active:hover {
+  background: #e1ebff;
+}
+.agent-draft {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ---- Agent detail view (conversation pane) ---- */
 .agent-view {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   height: 100%;
+}
+@media (max-width: 1200px) {
+  .session-col {
+    width: 220px;
+    margin-right: 14px;
+  }
 }
 .agent-header {
   display: flex;
