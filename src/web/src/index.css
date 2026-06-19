@@ -149,6 +149,31 @@ body {
 .tp-item.active .tp-count {
   color: #3370ff;
 }
+/* Task-list status dot. Grey + static by default; turns blue and breathes while
+   the list has a task executing right now (runningTasks > 0). */
+.tp-list-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #c0c4cc;
+  flex: none;
+  margin-right: 8px;
+}
+.tp-list-dot.running {
+  background: #3370ff;
+  animation: tp-list-dot-pulse 1.4s ease-in-out infinite;
+}
+@keyframes tp-list-dot-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(51, 112, 255, 0.5);
+    opacity: 1;
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(51, 112, 255, 0);
+    opacity: 0.6;
+  }
+}
 /* Per-runner "more actions" trigger: hidden until the row is hovered or its
    menu is open, where it swaps in for the ⌘N shortcut hint. */
 .tp-kebab {
