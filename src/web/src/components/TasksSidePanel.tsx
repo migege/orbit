@@ -184,21 +184,15 @@ export function TasksSidePanel() {
     [navigate],
   );
 
-  // ⌘/Ctrl + 1‒9 opens the matching agent in the list. Skip while a text field is
-  // focused so it doesn't fight the composer; preventDefault stops the browser's
-  // own tab-switch on the same chord.
+  // ⌘/Ctrl + 1‒9 opens the matching agent in the list. The modifier chord never
+  // produces text input, so it fires even while a text field is focused;
+  // preventDefault stops the browser's own tab-switch on the same chord.
   useEffect(() => {
     const list = agentList;
     const onKey = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;
       const n = Number(e.key);
       if (!Number.isInteger(n) || n < 1 || n > 9 || n > list.length) return;
-      const el = document.activeElement;
-      if (
-        el instanceof HTMLElement &&
-        (el.isContentEditable || el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')
-      )
-        return;
       e.preventDefault();
       openAgent(list[n - 1]);
     };
