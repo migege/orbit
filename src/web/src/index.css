@@ -362,6 +362,78 @@ body {
   display: flex;
 }
 
+/* ---- Skills page (skills/commands a runner reported, grouped per machine) ---- */
+.skills-empty {
+  margin-top: 24px;
+  color: #8f959e;
+  font-size: 14px;
+}
+.skills-empty code {
+  background: #f2f3f5;
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 12px;
+}
+.skills-list {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.skills-runner {
+  border: 1px solid #eceef1;
+  border-radius: 10px;
+  background: #fff;
+  padding: 14px;
+}
+.skills-runner-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.skills-runner-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: #1f2329;
+}
+.skills-runner-status {
+  font-size: 12px;
+  color: #8f959e;
+}
+.skills-group {
+  margin-top: 12px;
+}
+.skills-group-title {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #8f959e;
+  margin-bottom: 6px;
+}
+.skill-item {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 5px 0;
+}
+.skill-name {
+  flex: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  color: #3370ff;
+}
+.skill-desc {
+  font-size: 13px;
+  color: #646a73;
+  min-width: 0;
+}
+.skills-runner-empty {
+  margin-top: 10px;
+  font-size: 13px;
+  color: #8f959e;
+}
+
 /* ---- Runner detail / settings page ---- */
 .rd-head {
   margin-bottom: 8px;

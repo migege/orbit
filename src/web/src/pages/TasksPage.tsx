@@ -32,6 +32,7 @@ import { TasksSidePanel } from '../components/TasksSidePanel';
 import { TaskDetailPanel } from '../components/TaskDetailPanel';
 import { RunnersPage } from './RunnersPage';
 import { RunnerDetailPage } from './RunnerDetailPage';
+import { SkillsPage } from './SkillsPage';
 
 const FILTERS = [
   { label: 'All', value: 'ALL' },
@@ -50,11 +51,6 @@ const matchesFilter = (status: string, f: string): boolean => {
 
 const cap = (s: string): string =>
   s.charAt(0) + s.slice(1).toLowerCase().replace('_', ' ');
-
-// Top-nav sections share this view; only the heading differs (default: Active).
-const SECTION_TITLES: Record<string, string> = {
-  '/skills': 'Skills',
-};
 
 function StatusCircle({ status }: { status: string }) {
   let node: React.ReactNode;
@@ -94,6 +90,7 @@ export function TasksPage() {
   // The "Add a runner" guide is its own route; show it whenever we're on /runners/register.
   const showRegister = loc.pathname === '/runners/register';
   const showRunners = loc.pathname === '/runners';
+  const showSkills = loc.pathname === '/skills';
   // /runners/<base62> opens that runner's detail/settings page. (/runners/register
   // also matches the :id pattern, so guard against it.)
   const runnerDetailMatch = useMatch('/runners/:id');
@@ -120,9 +117,7 @@ export function TasksPage() {
   // changes (different list/section, or a different status filter) to avoid running
   // tasks the user can no longer see.
   useEffect(() => setSelectedIds(new Set()), [listId, loc.pathname, filter]);
-  const pageTitle = isListView
-    ? (listQ.data?.title ?? '')
-    : (SECTION_TITLES[loc.pathname] ?? 'Active');
+  const pageTitle = isListView ? (listQ.data?.title ?? '') : 'Active';
 
   // The console is keyed by runner: /agents/<agent> names the agent (its runner is
   // derived below), or /sessions/<id> from which we resolve the runner behind it.
@@ -262,7 +257,8 @@ export function TasksPage() {
 
   // The task list is one of several views this page hosts; the others (agent console,
   // runners, register guide) render in its place. Arrow keys must only drive the list.
-  const showTaskList = !showRegister && !showRunners && !runnerDetailId && !inAgentView;
+  const showTaskList =
+    !showRegister && !showRunners && !showSkills && !runnerDetailId && !inAgentView;
 
   // Up/Down arrows step through the task rows, opening each like tabs — the same
   // selection a click drives. Skipped while typing in an input/textarea (so the detail
@@ -357,6 +353,8 @@ export function TasksPage() {
           <RunnerRegisterGuide onClose={() => navigate('/tasks')} />
         ) : showRunners ? (
           <RunnersPage />
+        ) : showSkills ? (
+          <SkillsPage />
         ) : runnerDetailId ? (
           <RunnerDetailPage runnerId={runnerDetailId} />
         ) : inAgentView ? (
