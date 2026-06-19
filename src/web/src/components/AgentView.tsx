@@ -624,6 +624,44 @@ export function AgentView({ runner }: { runner: Runner }) {
   const loadingSession = !!selectedId && !selected;
   const canSend =
     !!text.trim() && !send.isPending && runner.online && !loadingSession && (live ? idle : true);
+
+  // ── `/` command & skill autocomplete ──────────────────────────────────────
+  // The runner reports its on-disk slash commands/skills via heartbeat (runner.commands
+  // / runner.skills). Show them as a hint menu while the composer holds a single
+  // `/token` with no space yet, like the Claude Code TUI; picking one inserts
+  // `/<name> ` (the trailing space drops the regex match, so the menu auto-hides).
+  const taRef = useRef<any>(null);
+  const [slashIndex, setSlashIndex] = useState(0);
+  const [slashDismissed, setSlashDismissed] = useState<string | null>(null);
+  const slashToken = /^\/(\S*)$/.exec(text)?.[1] ?? null;
+  const slashItems = useMemo(
+    () => [
+      ...(runner.commands ?? []).map((c) => ({ name: c.name, description: c.description, type: 'command' as const })),
+      ...(runner.skills ?? []).map((s) => ({ name: s.name, description: s.description, type: 'skill' as const })),
+    ],
+    [runner.commands, runner.skills],
+  );
+  const slashMatches = useMemo(() => {
+    if (slashToken === null) return [];
+    const q = slashToken.toLowerCase();
+    return slashItems
+      .filter((it) => it.name.toLowerCase().includes(q))
+      .sort((a, b) => {
+        const pa = a.name.toLowerCase().startsWith(q) ? 0 : 1;
+        const pb = b.name.toLowerCase().startsWith(q) ? 0 : 1;
+        return pa - pb || a.name.localeCompare(b.name);
+      })
+      .slice(0, 50);
+  }, [slashItems, slashToken]);
+  useEffect(() => setSlashIndex(0), [slashToken]);
+  const showSlash =
+    slashToken !== null && slashToken !== slashDismissed && runner.online && slashMatches.length > 0;
+  const slashIdx = slashMatches.length ? Math.min(slashIndex, slashMatches.length - 1) : 0;
+  const pickSlash = (name: string): void => {
+    setText(`/${name} `);
+    setSlashDismissed(null);
+    setTimeout(() => taRef.current?.focus(), 0);
+  };
   // A LIVE session's pills show its stored choice (and Model/Mode are editable while
   // it's idle — see configEditable); otherwise they're editable and reflect local state.
   const shownModel: string = live ? (selected.model ?? 'claude-sonnet-4-6') : model;
@@ -829,7 +867,30 @@ export function AgentView({ runner }: { runner: Runner }) {
 
       <div className="agent-composer">
         <div className="composer-box">
+          {showSlash && (
+            <div className="composer-slash-menu" role="listbox">
+              {slashMatches.map((it, i) => (
+                <div
+                  key={`${it.type}:${it.name}`}
+                  role="option"
+                  aria-selected={i === slashIdx}
+                  className={`composer-slash-item${i === slashIdx ? ' is-active' : ''}`}
+                  // mousedown (not click) + preventDefault keeps focus in the textarea.
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    pickSlash(it.name);
+                  }}
+                  onMouseEnter={() => setSlashIndex(i)}
+                >
+                  <span className="composer-slash-name">/{it.name}</span>
+                  <span className="composer-slash-type">{it.type === 'skill' ? 'skill' : 'cmd'}</span>
+                  {it.description && <span className="composer-slash-desc">{it.description}</span>}
+                </div>
+              ))}
+            </div>
+          )}
           <Input.TextArea
+            ref={taRef}
             variant="borderless"
             autoSize={{ minRows: 1, maxRows: 6 }}
             placeholder={
@@ -838,8 +899,31 @@ export function AgentView({ runner }: { runner: Runner }) {
             value={text}
             disabled={!runner.online}
             onChange={(e) => setText(e.target.value)}
-            onPressEnter={(e) => {
-              if (!e.shiftKey) {
+            // One keydown handler: drive the menu while open, else Enter=send / Shift+Enter=newline.
+            onKeyDown={(e) => {
+              if (showSlash && !e.nativeEvent.isComposing) {
+                if (e.key === 'ArrowDown') {
+                  e.preventDefault();
+                  setSlashIndex((i) => (i + 1) % slashMatches.length);
+                  return;
+                }
+                if (e.key === 'ArrowUp') {
+                  e.preventDefault();
+                  setSlashIndex((i) => (i - 1 + slashMatches.length) % slashMatches.length);
+                  return;
+                }
+                if (e.key === 'Enter' || e.key === 'Tab') {
+                  e.preventDefault();
+                  pickSlash(slashMatches[slashIdx].name);
+                  return;
+                }
+                if (e.key === 'Escape') {
+                  e.preventDefault();
+                  setSlashDismissed(slashToken);
+                  return;
+                }
+              }
+              if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 onSend();
               }
