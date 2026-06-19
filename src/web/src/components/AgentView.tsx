@@ -34,6 +34,7 @@ import {
   endSession,
   interruptSession,
   listApprovals,
+  listQueuedTurns,
   restoreSession,
   resumeSession,
   sendTurn,
@@ -363,6 +364,12 @@ export function AgentView({ runner }: { runner: Runner }) {
     // a refresh/deep-link shows any request already awaiting a decision.
     listApprovals(selectedId)
       .then(setApprovals)
+      .catch(() => undefined);
+    // Same for queued messages: a still-PENDING turn emits no event until the runner
+    // picks it up, so switching away and back (or a refresh/deep-link) would lose the
+    // visible queue — restore it from the DB, the source of truth.
+    listQueuedTurns(selectedId)
+      .then(setQueued)
       .catch(() => undefined);
     let es: EventSource | null = null;
     let retry: ReturnType<typeof setTimeout> | undefined;
