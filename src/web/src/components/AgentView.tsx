@@ -11,6 +11,7 @@ import {
   LoadingOutlined,
   MessageOutlined,
   MinusCircleOutlined,
+  MoreOutlined,
   PauseCircleOutlined,
   PlusOutlined,
   RobotOutlined,
@@ -18,7 +19,7 @@ import {
   UndoOutlined,
 } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { App as AntApp, Button, Input, Segmented, Select, Tooltip } from 'antd';
+import { App as AntApp, Button, Dropdown, Input, type MenuProps, Segmented, Select, Tooltip } from 'antd';
 import { type MouseEvent as ReactMouseEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { useMatch, useNavigate } from 'react-router-dom';
 import { decodeId, encodeId } from '../lib/idCodec';
@@ -175,6 +176,7 @@ export function AgentView({ runner }: { runner: Runner }) {
   const [effort, setEffort] = useState('');
   // Which slice of the session list to show: active, archived, or trash.
   const [view, setView] = useState<'active' | 'archived' | 'deleted'>('active');
+  const [menuOpenId, setMenuOpenId] = useState<string | null>(null); // session row whose action menu is open
   const [agentId, setAgentId] = useState<string | undefined>(undefined);
   const [events, setEvents] = useState<RunEvent[]>([]);
   const [approvals, setApprovals] = useState<ApprovalInfo[]>([]); // pending tool-permission requests
@@ -679,9 +681,47 @@ export function AgentView({ runner }: { runner: Runner }) {
           )}
           {visibleSessions.map((s) => {
             const ended = TERMINAL.includes(s.status);
+            const restoreItem = {
+              key: 'restore',
+              icon: <UndoOutlined />,
+              label: 'Restore',
+              onClick: ({ domEvent }: { domEvent: { stopPropagation: () => void } }) => {
+                domEvent.stopPropagation();
+                restoreMut.mutate(s.id);
+              },
+            };
+            const deleteItem = (disabled: boolean) => ({
+              key: 'delete',
+              icon: <DeleteOutlined />,
+              label: disabled ? 'Delete（需先结束会话）' : 'Delete',
+              danger: true,
+              disabled,
+              onClick: ({ domEvent }: { domEvent: { stopPropagation: () => void } }) => {
+                domEvent.stopPropagation();
+                deleteMut.mutate(s.id);
+              },
+            });
+            const menuItems: MenuProps['items'] =
+              view === 'active'
+                ? [
+                    {
+                      key: 'complete',
+                      icon: <CheckCircleOutlined />,
+                      label: ended ? 'Complete' : 'Complete & end session',
+                      onClick: ({ domEvent }) => {
+                        domEvent.stopPropagation();
+                        archiveMut.mutate(s.id);
+                      },
+                    },
+                    { type: 'divider' },
+                    deleteItem(!ended),
+                  ]
+                : view === 'archived'
+                  ? [restoreItem, { type: 'divider' }, deleteItem(false)]
+                  : [restoreItem];
             return (
               <div
-                className={`session-row${view === 'active' ? '' : ' no-open'}${s.id === selectedId ? ' active' : ''}`}
+                className={`session-row${view === 'active' ? '' : ' no-open'}${s.id === selectedId ? ' active' : ''}${menuOpenId === s.id ? ' menu-open' : ''}`}
                 key={s.id}
                 onClick={view === 'active' ? () => navigate(`/sessions/${encodeId(s.id)}`) : undefined}
               >
@@ -697,59 +737,21 @@ export function AgentView({ runner }: { runner: Runner }) {
                 <div className="session-right">
                   <div className="session-time">{fmtTime(s.lastTurnAt ?? s.createdAt)}</div>
                   <div className="session-actions" onClick={(e) => e.stopPropagation()}>
-                    {view === 'active' && (
-                      <>
-                        <Tooltip title={ended ? 'Complete' : 'Complete & end session'}>
-                          <Button
-                            size="small"
-                            type="text"
-                            icon={<CheckCircleOutlined />}
-                            onClick={() => archiveMut.mutate(s.id)}
-                          />
-                        </Tooltip>
-                        <Tooltip title={ended ? 'Delete' : '结束会话后才能删除'}>
-                          <Button
-                            size="small"
-                            type="text"
-                            danger
-                            icon={<DeleteOutlined />}
-                            disabled={!ended}
-                            onClick={() => deleteMut.mutate(s.id)}
-                          />
-                        </Tooltip>
-                      </>
-                    )}
-                    {view === 'archived' && (
-                      <>
-                        <Tooltip title="Restore">
-                          <Button
-                            size="small"
-                            type="text"
-                            icon={<UndoOutlined />}
-                            onClick={() => restoreMut.mutate(s.id)}
-                          />
-                        </Tooltip>
-                        <Tooltip title="Delete">
-                          <Button
-                            size="small"
-                            type="text"
-                            danger
-                            icon={<DeleteOutlined />}
-                            onClick={() => deleteMut.mutate(s.id)}
-                          />
-                        </Tooltip>
-                      </>
-                    )}
-                    {view === 'deleted' && (
-                      <Tooltip title="Restore">
-                        <Button
-                          size="small"
-                          type="text"
-                          icon={<UndoOutlined />}
-                          onClick={() => restoreMut.mutate(s.id)}
-                        />
-                      </Tooltip>
-                    )}
+                    <Dropdown
+                      trigger={['click']}
+                      placement="bottomRight"
+                      open={menuOpenId === s.id}
+                      onOpenChange={(o) => setMenuOpenId(o ? s.id : null)}
+                      menu={{ items: menuItems }}
+                    >
+                      <span
+                        className="session-kebab"
+                        title="More actions"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <MoreOutlined />
+                      </span>
+                    </Dropdown>
                   </div>
                 </div>
               </div>
