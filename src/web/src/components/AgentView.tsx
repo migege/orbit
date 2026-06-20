@@ -1137,7 +1137,6 @@ export function AgentView({ runner }: { runner: Runner }) {
     : !runner.online
       ? 'Runner 离线，暂不可修改'
       : '回合进行中；可在回合之间修改，下次消息生效';
-  const agentHint = live ? '会话开始后不可更改' : '已锁定到该 Agent';
   // Switching session leaves whatever history recall was in progress; reset the cursor
   // so the next Up starts fresh from the (per-session) history.
   useEffect(() => {
@@ -1662,12 +1661,10 @@ export function AgentView({ runner }: { runner: Runner }) {
           </Tooltip>
           <span className="composer-pill-spacer" />
           {agentReadOnly && shownAgentName && (
-            <Tooltip title={agentHint}>
-              <span className="composer-pill composer-pill-static">
-                <AppstoreOutlined className="composer-pill-icon" />
-                <span className="composer-pill-static-label">{shownAgentName}</span>
-              </span>
-            </Tooltip>
+            <span className="composer-pill composer-pill-static">
+              <AppstoreOutlined className="composer-pill-icon" />
+              <span className="composer-pill-static-label">{shownAgentName}</span>
+            </span>
           )}
           <Tooltip title={configHint}>
             <span className="composer-pill">
