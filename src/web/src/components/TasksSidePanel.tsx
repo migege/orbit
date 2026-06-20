@@ -32,7 +32,7 @@ import { decodeId, encodeId } from '../lib/idCodec';
 // Tasks view for now — only the heading differs). "Runners" opens the runners
 // page.
 const TOP = [
-  { key: 'active', icon: <UserOutlined />, label: 'Active', count: 385 },
+  { key: 'active', icon: <UserOutlined />, label: 'Active' },
   { key: 'skills', icon: <ThunderboltOutlined />, label: 'Skills' },
   { key: 'runners', icon: <DesktopOutlined />, label: 'Runners' },
 ];
@@ -225,6 +225,17 @@ export function TasksSidePanel() {
   });
   const onlineRunnerIds = new Set((runners.data ?? []).filter((r) => r.online).map((r) => r.id));
 
+  // Real task counts for the top "Active" item and the "未分组" (no-list) bucket. Reuses
+  // the same ['tasks'] cache the main view populates, so it adds no extra network request.
+  const tasks = useQuery({
+    queryKey: ['tasks'],
+    queryFn: () => api<any[]>('/tasks'),
+    refetchInterval: (q) =>
+      (q.state.data ?? []).some((t: any) => t.running || t.queued) ? 5_000 : 15_000,
+  });
+  const activeCount = tasks.data?.length ?? 0;
+  const unlistedCount = (tasks.data ?? []).filter((t: any) => !t.listId).length;
+
   // Open an agent's console — the same destination the runner detail page uses.
   // Config-only agents (no runner) have no console to open.
   const openAgent = useCallback(
@@ -315,17 +326,21 @@ export function TasksSidePanel() {
 
       <div className="tp-scroll">
         <div className="tp-section">
-          {TOP.map((t) => (
-            <div
-              key={t.key}
-              className={`tp-item ${sel === t.key ? 'active' : ''}`}
-              onClick={() => navigate(`/${t.key}`)}
-            >
-              <span className="tp-ico">{t.icon}</span>
-              <span className="tp-label">{t.label}</span>
-              {t.count != null && <span className="tp-count">{t.count}</span>}
-            </div>
-          ))}
+          {TOP.map((t) => {
+            // "Active" lists every task, so show its real total; the others carry no count.
+            const count = t.key === 'active' ? activeCount : null;
+            return (
+              <div
+                key={t.key}
+                className={`tp-item ${sel === t.key ? 'active' : ''}`}
+                onClick={() => navigate(`/${t.key}`)}
+              >
+                <span className="tp-ico">{t.icon}</span>
+                <span className="tp-label">{t.label}</span>
+                {count != null && <span className="tp-count">{count}</span>}
+              </div>
+            );
+          })}
         </div>
 
         <div className="tp-divider" />
@@ -367,7 +382,23 @@ export function TasksSidePanel() {
             <span className="tp-group-name">Task List</span>
             <CaretDownOutlined className={`tp-caret ${listOpen ? '' : 'collapsed'}`} />
           </div>
-          {listOpen && <>{activeLists.map(renderListRow)}</>}
+          {listOpen && (
+            <>
+              <div
+                className={`tp-item inset ${sel === 'none' ? 'active' : ''}`}
+                onClick={() => {
+                  setSel('none');
+                  navigate('/lists/none');
+                }}
+                title="不属于任何清单的任务（含 agent 创建、清单删除后解绑的任务）"
+              >
+                <span className="tp-list-dot" />
+                <span className="tp-label">未分组</span>
+                {unlistedCount > 0 && <span className="tp-count">{unlistedCount}</span>}
+              </div>
+              {activeLists.map(renderListRow)}
+            </>
+          )}
         </div>
 
         <div className="tp-group">

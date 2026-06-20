@@ -127,6 +127,12 @@ export function TaskDetailPanel({
   const agentsQ = useQuery({ queryKey: ['agents'], queryFn: () => api<AgentRow[]>('/agents') });
   const agentList = useMemo(() => agentsQ.data ?? [], [agentsQ.data]);
 
+  // Owner's task lists, to move this task into a list (or detach it to 未分组).
+  const taskListsQ = useQuery({
+    queryKey: ['task-lists'],
+    queryFn: () => api<{ id: string; title: string }[]>('/task-lists'),
+  });
+
   // Esc closes the panel.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -158,6 +164,19 @@ export function TaskDetailPanel({
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['task', taskId] });
       qc.invalidateQueries({ queryKey: ['tasks'] });
+    },
+    onError: (e: Error) => message.error(e.message),
+  });
+
+  // Move the task into a list (string) or detach it to 未分组 (null). Refresh the panel,
+  // the list rows, and the sidebar's per-list / 未分组 counts.
+  const updateList = useMutation({
+    mutationFn: (listId: string | null) =>
+      api(`/tasks/${taskId}`, { method: 'PATCH', body: { listId } }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['task', taskId] });
+      qc.invalidateQueries({ queryKey: ['tasks'] });
+      qc.invalidateQueries({ queryKey: ['task-lists'] });
     },
     onError: (e: Error) => message.error(e.message),
   });
@@ -414,6 +433,23 @@ export function TaskDetailPanel({
                 popupMatchSelectWidth={false}
                 options={agentList.map((a) => ({ value: a.id, label: a.name }))}
                 onChange={(val) => updateAssignee.mutate(val ?? null)}
+              />
+            </div>
+            <div className="tdp-field">
+              <span className="tdp-field-label">清单</span>
+              <Select
+                className="tdp-assignee-select"
+                variant="borderless"
+                value={q.data?.listId ?? undefined}
+                placeholder="未分组"
+                allowClear
+                showSearch
+                optionFilterProp="label"
+                loading={taskListsQ.isLoading || updateList.isPending}
+                disabled={updateList.isPending}
+                popupMatchSelectWidth={false}
+                options={(taskListsQ.data ?? []).map((l) => ({ value: l.id, label: l.title }))}
+                onChange={(val) => updateList.mutate(val ?? null)}
               />
             </div>
             <div className="tdp-field">
