@@ -921,7 +921,7 @@ export function AgentView({ runner }: { runner: Runner }) {
   // claude --resume with the new flag. Revert + surface the error on failure. Keyed on
   // effectiveView to match the (view-scoped) sessions query that renders the list.
   const configMut = useMutation({
-    mutationFn: (cfg: { model?: string; permissionMode?: string }) =>
+    mutationFn: (cfg: { model?: string; permissionMode?: string; effort?: string }) =>
       updateSessionConfig(selected!.id, cfg),
     onMutate: async (cfg) => {
       await qc.cancelQueries({ queryKey: ['sessions', runner.id, effectiveView] });
@@ -1089,10 +1089,10 @@ export function AgentView({ runner }: { runner: Runner }) {
   // Auto is offered only on models that support it (see supportsAuto); the option
   // is greyed out otherwise so an unsupported model can't pick a mode claude rejects.
   const autoOk = supportsAuto(shownModel);
-  // Model & Mode can be changed mid-session, but only between turns: the change
-  // re-spawns claude, which would abort a turn in flight (and needs the runner online
-  // to act on it). When not live they're freely editable (pre-session config).
-  // Effort & Agent stay fixed once live.
+  // Model, Mode & Effort can be changed mid-session, but only between turns: the
+  // change re-spawns claude, which would abort a turn in flight (and needs the runner
+  // online to act on it). When not live they're freely editable (pre-session config).
+  // Agent stays fixed once live.
   const configEditable = live ? idle && runner.online : true;
   // A live session's agent is fixed; otherwise reflect the local pick.
   const shownAgentId: string | undefined = live ? (selected.agent?.id ?? undefined) : agentId;
@@ -1591,7 +1591,7 @@ export function AgentView({ runner }: { runner: Runner }) {
             onClick={onSend}
           />
         </div>
-        <Tooltip title="Agent & Effort are fixed once a session starts. Model & Mode can be changed between turns — the session resumes with the new setting on your next message. Auto mode needs a recent model (Sonnet 4.6 / Opus 4.6+) and your org to allow it.">
+        <Tooltip title="Agent is fixed once a session starts. Model, Mode & Effort can be changed between turns — the session resumes with the new setting on your next message. Auto mode needs a recent model (Sonnet 4.6 / Opus 4.6+) and your org to allow it.">
           <div className="composer-pills">
             {/* The agent is only a Select when it can actually be picked (new, unlocked
                 session); once read-only it shows as the static composer-ctx line above. */}
@@ -1657,9 +1657,9 @@ export function AgentView({ runner }: { runner: Runner }) {
                 size="small"
                 variant="borderless"
                 value={shownEffort}
-                onChange={setEffort}
+                onChange={(v) => (live ? configMut.mutate({ effort: v }) : setEffort(v))}
                 options={EFFORT_OPTIONS}
-                disabled={live}
+                disabled={!configEditable}
                 popupMatchSelectWidth={false}
               />
             </span>
