@@ -112,6 +112,12 @@ Group=%s
 ExecStart=%s run
 Restart=always
 RestartSec=5
+# Send SIGTERM to the runner only (not the claude children), so on stop/restart the
+# runner can drain — finish in-flight turns and detach — before claude is torn down.
+# TimeoutStopSec must exceed the runner's drain budget (shutdownDrainTimeout) so we
+# exit on our own; systemd SIGKILLs any stragglers in the cgroup after it.
+KillMode=mixed
+TimeoutStopSec=180
 Environment=HOME=%s
 Environment=ORBIT_HOME=%s
 Environment=PATH=%s
