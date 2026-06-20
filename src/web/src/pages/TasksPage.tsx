@@ -88,23 +88,39 @@ const compareBy = (a: any, b: any, field: string): number => {
 const cap = (s: string): string =>
   s.charAt(0) + s.slice(1).toLowerCase().replace('_', ' ');
 
-// `running` is the live ground truth (a RUNNING session exists), distinct from the
-// agent-maintained `status` label which can lag. The spinning indicator means
-// "actually running now", so it's gated on `running`: an IN_PROGRESS task with only a
-// queued (PENDING) session, or whose session already ended (failed/cancelled without
-// the agent finalizing it), shows a static dot — not a perpetual spinner.
-function StatusCircle({ status, running }: { status: string; running?: boolean }) {
+// One status glyph per row: the agent-maintained lifecycle (`status`) overlaid with the
+// live session state, so the row carries a single indicator instead of a status circle
+// plus a separate activity dot. `running`/`queued` are the live ground truth (a RUNNING
+// or PENDING session exists), distinct from the `status` label which can lag.
+//   - running → blue spinner, regardless of the lifecycle label: "executing now" is the
+//     most urgent signal and outranks everything.
+//   - queued (a PENDING session, nothing running yet) → the lifecycle glyph with a gentle
+//     fade, reading as "waiting to run".
+//   - neither → the plain lifecycle glyph (an IN_PROGRESS task whose session already ended
+//     without the agent finalizing it falls here, showing a static dot — not a spinner).
+function StatusCircle({
+  status,
+  running,
+  queued,
+}: {
+  status: string;
+  running?: boolean;
+  queued?: boolean;
+}) {
+  if (running) {
+    return (
+      <Tooltip title="运行中">
+        <LoadingOutlined spin style={{ color: '#3370ff', fontSize: 15 }} />
+      </Tooltip>
+    );
+  }
   let node: React.ReactNode;
   switch (status) {
     case 'DONE':
       node = <CheckCircleFilled style={{ color: '#2ea121', fontSize: 16 }} />;
       break;
     case 'IN_PROGRESS':
-      node = running ? (
-        <LoadingOutlined spin style={{ color: '#3370ff', fontSize: 15 }} />
-      ) : (
-        <span className="status-circle filled blue" />
-      );
+      node = <span className="status-circle filled blue" />;
       break;
     case 'OPEN':
       node = <span className="status-circle hollow blue" />;
@@ -114,6 +130,13 @@ function StatusCircle({ status, running }: { status: string; running?: boolean }
       break;
     default:
       node = <span className="status-circle hollow" />;
+  }
+  if (queued) {
+    return (
+      <Tooltip title="排队中">
+        <span className="status-glyph-queued">{node}</span>
+      </Tooltip>
+    );
   }
   return <Tooltip title={cap(status)}>{node}</Tooltip>;
 }
@@ -371,17 +394,9 @@ export function TasksPage() {
           <Checkbox checked={selectedIds.has(r.id)} onChange={() => toggleOne(r.id)} />
         </div>
         <div className="task-title-cell">
-          <StatusCircle status={r.status} running={r.running} />
+          <StatusCircle status={r.status} running={r.running} queued={r.queued} />
           <span className="task-title">{r.title}</span>
-          {r.running ? (
-            <Tooltip title="运行中">
-              <span className="task-running-dot" />
-            </Tooltip>
-          ) : r.queued ? (
-            <Tooltip title="排队中">
-              <span className="task-queued-dot" />
-            </Tooltip>
-          ) : r.blocked ? (
+          {r.blocked ? (
             <Tooltip
               title={r.dependencyState === 'BLOCKED_FAILED' ? '前置任务已取消，需处理' : '等待前置任务完成'}
             >
