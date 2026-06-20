@@ -31,7 +31,16 @@ export interface RunEvent {
   seq: number;
   type: string;
   payload: any;
+  turnId?: string | null;
   ts?: string;
+}
+
+/** A locally-known image attachment for a user turn, keyed by turnId. The bytes are the
+ *  browser's own object URL from the just-sent upload — the runner echoes only the text,
+ *  so the composer hands these in to show the sent image inside the user's bubble. */
+export interface TurnImage {
+  url: string;
+  mime: string;
 }
 
 // ── grouped transcript tree ────────────────────────────────────────────────
@@ -49,13 +58,18 @@ type ToolNode = {
   result?: { content: any; isError?: boolean };
   children: Node[];
 };
-type TextNode = { kind: 'user' | 'assistant' | 'thinking'; seq: number; text: string };
+type TextNode = {
+  kind: 'user' | 'assistant' | 'thinking';
+  seq: number;
+  text: string;
+  images?: TurnImage[];
+};
 type ResultNode = { kind: 'result'; seq: number; content: any; isError?: boolean };
 type MarkerNode = { kind: 'divider' | 'interrupt'; seq: number };
 type ErrorNode = { kind: 'error'; seq: number; message: string };
 type Node = ToolNode | TextNode | ResultNode | MarkerNode | ErrorNode;
 
-function buildNodes(events: RunEvent[]): Node[] {
+function buildNodes(events: RunEvent[], turnImages?: Record<string, TurnImage[]>): Node[] {
   const roots: Node[] = [];
   const byId = new Map<string, ToolNode>();
   // Legacy transcripts (pre-id) carry no tool_use id / tool_result toolUseId, so a
@@ -76,9 +90,21 @@ function buildNodes(events: RunEvent[]): Node[] {
     const p = ev.payload ?? {};
     const parent: string | undefined = p.parentToolUseId;
     switch (ev.type) {
-      case 'user':
-        if (p.text) into(parent).push({ kind: 'user', seq: ev.seq, text: String(p.text) });
+      case 'user': {
+        // The runner echoes only the text; images the composer sent with this turn are
+        // joined in here by turnId. An image-only turn has empty text, so still render a
+        // bubble when there are images for it.
+        const imgs = ev.turnId ? turnImages?.[ev.turnId] : undefined;
+        if (p.text || (imgs && imgs.length)) {
+          into(parent).push({
+            kind: 'user',
+            seq: ev.seq,
+            text: p.text ? String(p.text) : '',
+            images: imgs,
+          });
+        }
         break;
+      }
       case 'assistant':
         if (p.text) into(parent).push({ kind: 'assistant', seq: ev.seq, text: String(p.text) });
         break;
@@ -135,8 +161,16 @@ function buildNodes(events: RunEvent[]): Node[] {
 // polls all live in sibling state on AgentView and don't touch `events`, so the
 // whole transcript subtree is skipped on those re-renders — it only rebuilds when
 // an actual event is appended.
-export const Transcript = memo(function Transcript({ events, live }: { events: RunEvent[]; live?: boolean }) {
-  const nodes = useMemo(() => buildNodes(events), [events]);
+export const Transcript = memo(function Transcript({
+  events,
+  live,
+  turnImages,
+}: {
+  events: RunEvent[];
+  live?: boolean;
+  turnImages?: Record<string, TurnImage[]>;
+}) {
+  const nodes = useMemo(() => buildNodes(events, turnImages), [events, turnImages]);
   return (
     <>
       {nodes.map((n) => (
@@ -150,8 +184,20 @@ function NodeView({ node, live }: { node: Node; live?: boolean }) {
   switch (node.kind) {
     case 'user':
       // User input is kept verbatim (pre-wrap), not Markdown-parsed, so a literal
-      // '#' or '*' the user typed isn't reinterpreted.
-      return <div className="chat-msg chat-user" data-seq={node.seq}>{node.text}</div>;
+      // '#' or '*' the user typed isn't reinterpreted. Any images sent with the turn
+      // render above the text (an image-only turn has empty text).
+      return (
+        <div className="chat-msg chat-user" data-seq={node.seq}>
+          {node.images && node.images.length > 0 && (
+            <div className="chat-images">
+              {node.images.map((im, i) => (
+                <img key={i} className="chat-image" src={im.url} alt="" />
+              ))}
+            </div>
+          )}
+          {node.text}
+        </div>
+      );
     case 'assistant':
       return <AssistantBubble text={node.text} />;
     case 'thinking':

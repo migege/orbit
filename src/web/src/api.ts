@@ -72,12 +72,37 @@ const uuid = (): string => {
 
 /** Send the next user message to a live interactive session. While a turn is running
  *  the message is queued (delivered when the current turn finishes); the returned
- *  turnId identifies it, e.g. to withdraw it with cancelQueuedTurn. */
-export const sendTurn = (sessionId: string, content: string) =>
+ *  turnId identifies it, e.g. to withdraw it with cancelQueuedTurn. `attachmentIds` are
+ *  ids of images already uploaded via uploadAttachment, sent alongside the text. */
+export const sendTurn = (sessionId: string, content: string, attachmentIds?: string[]) =>
   api<{ turnId: string; seq: number }>(`/sessions/${sessionId}/turns`, {
     method: 'POST',
-    body: { clientTurnId: uuid(), content },
+    body: { clientTurnId: uuid(), content, ...(attachmentIds?.length ? { attachmentIds } : {}) },
   });
+
+/** Upload one image to the control plane (multipart/form-data — the shared `api` helper
+ *  only does JSON). Scoped to `sessionId` so the server can later link it to a turn of
+ *  that session (POST /turns and resume only accept attachment ids scoped to their
+ *  session). Returns the new attachment id; reference it via sendTurn/resumeSession. */
+export const uploadAttachment = async (file: File, sessionId: string): Promise<{ id: string }> => {
+  const form = new FormData();
+  form.append('file', file);
+  const res = await fetch(`/api/attachments?sessionId=${encodeURIComponent(sessionId)}`, {
+    method: 'POST',
+    // No content-type header: the browser sets the multipart boundary itself.
+    headers: getToken() ? { authorization: `Bearer ${getToken()}` } : {},
+    body: form,
+  });
+  if (res.status === 401) {
+    clearToken();
+    if (location.pathname !== '/login') location.href = '/login';
+  }
+  if (!res.ok) {
+    const msg = (await res.json().catch(() => ({ message: res.statusText }))) as { message?: string };
+    throw new Error(msg.message || res.statusText);
+  }
+  return (await res.json()) as { id: string };
+};
 
 /** Withdraw a still-queued message (only works before the runner picks it up). */
 export const cancelQueuedTurn = (sessionId: string, turnId: string) =>
@@ -96,10 +121,11 @@ export const resumeSession = (
   sessionId: string,
   content: string,
   config?: { model?: string; permissionMode?: string; effort?: string },
+  attachmentIds?: string[],
 ) =>
-  api(`/sessions/${sessionId}/resume`, {
+  api<{ turnId: string; seq: number }>(`/sessions/${sessionId}/resume`, {
     method: 'POST',
-    body: { clientTurnId: uuid(), content, ...config },
+    body: { clientTurnId: uuid(), content, ...config, ...(attachmentIds?.length ? { attachmentIds } : {}) },
   });
 
 export interface ApprovalInfo {

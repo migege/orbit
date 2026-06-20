@@ -5,6 +5,7 @@ import {
   CheckCircleOutlined,
   ClockCircleOutlined,
   CloseCircleFilled,
+  CloseOutlined,
   ControlOutlined,
   DeleteOutlined,
   DisconnectOutlined,
@@ -13,13 +14,14 @@ import {
   MinusCircleOutlined,
   MoreOutlined,
   PauseCircleOutlined,
+  PictureOutlined,
   PlusOutlined,
   RobotOutlined,
   ThunderboltOutlined,
   UndoOutlined,
 } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { App as AntApp, Button, Dropdown, Input, type MenuProps, Segmented, Select, Tooltip } from 'antd';
+import { App as AntApp, Button, Dropdown, Input, type MenuProps, Segmented, Select, Tooltip, Upload } from 'antd';
 import { type MouseEvent as ReactMouseEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMatch, useNavigate } from 'react-router-dom';
 import { decodeId, encodeId } from '../lib/idCodec';
@@ -41,8 +43,9 @@ import {
   sendTurn,
   sessionEventsUrl,
   updateSessionConfig,
+  uploadAttachment,
 } from '../api';
-import { StreamingMessage, Transcript } from './Transcript';
+import { StreamingMessage, Transcript, type TurnImage } from './Transcript';
 import { ApprovalPanel } from './ApprovalPanel';
 import type { Runner } from './TasksSidePanel';
 
@@ -61,6 +64,22 @@ interface QueuedTurn {
   turnId: string;
   content: string;
 }
+
+// An image staged in the composer: uploaded to the control plane (POST /api/attachments)
+// the moment it's picked/pasted, then sent by id with the turn. `previewUrl` is a local
+// object URL for the thumbnail; `id` is set once the upload resolves.
+interface ComposerImage {
+  uid: string;
+  file: File;
+  previewUrl: string;
+  status: 'uploading' | 'done';
+  id?: string;
+}
+
+// Image upload limits — kept in sync with the server (attachments.media.ts) so a bad
+// pick is rejected before the round-trip rather than surfacing a 400/413.
+const ALLOWED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
 const TERMINAL = ['SUCCEEDED', 'FAILED', 'CANCELLED'];
 // Session statuses that occupy one of the runner's maxConcurrent slots.
@@ -247,6 +266,11 @@ export function AgentView({ runner }: { runner: Runner }) {
   const [streamingThink, setStreamingThink] = useState(''); // live thinking from thinking_delta
   const [idle, setIdle] = useState(false); // session is AWAITING_INPUT (a new turn is accepted)
   const [queued, setQueued] = useState<QueuedTurn[]>([]); // messages sent while a turn was running
+  const [images, setImages] = useState<ComposerImage[]>([]); // images staged in the composer
+  // Images already sent, keyed by their turnId. The runner echoes only the turn's text,
+  // so these local previews are joined back into the user bubble (and the queued bubble)
+  // to show the sent image in the transcript. Object URLs are revoked on session switch.
+  const [turnImages, setTurnImages] = useState<Record<string, TurnImage[]>>({});
   const seen = useRef<Set<number>>(new Set());
   // Per-session transcript cache (mount-scoped): switching seeds events from here for
   // an instant paint and resumes the SSE just past the cached seq, instead of replaying
@@ -472,6 +496,16 @@ export function AgentView({ runner }: { runner: Runner }) {
     setQueued([]);
     setIdle(false);
     setStuck(null);
+    // Staged uploads are scoped to the previous session (can't be linked to another), and
+    // the sent-image previews are this session's object URLs — drop and revoke both.
+    setImages((prev) => {
+      prev.forEach((im) => URL.revokeObjectURL(im.previewUrl));
+      return [];
+    });
+    setTurnImages((prev) => {
+      Object.values(prev).forEach((refs) => refs.forEach((r) => URL.revokeObjectURL(r.url)));
+      return {};
+    });
     atBottomRef.current = true; // a freshly opened/switched session starts pinned to the latest
     lastTopRef.current = 0;
     if (!selectedId) {
@@ -660,28 +694,35 @@ export function AgentView({ runner }: { runner: Runner }) {
 
   const send = useMutation({
     mutationFn: async (
-      content: string,
-    ): Promise<{ id: string; queuedItem?: QueuedTurn; created?: boolean }> => {
+      vars: { content: string; images: ComposerImage[] },
+    ): Promise<{ id: string; turnId?: string; queuedItem?: QueuedTurn; created?: boolean }> => {
+      const { content, images: imgs } = vars;
+      // Only fully-uploaded images carry an id to reference; onSend blocks while any is
+      // still uploading, so this is the complete set.
+      const attachmentIds = imgs.map((im) => im.id).filter((x): x is string => !!x);
       // Continue a live session; revive an ended-but-resumable one (same row, claude
       // --resumes its context); otherwise (no selection, or unresumable) start a
-      // fresh session so the composer never dead-locks.
+      // fresh session so the composer never dead-locks. Images attach only to the first
+      // two — a brand-new session's create endpoint takes no attachments (canAttach gates
+      // the picker to live/resumable sessions, so imgs is empty on this path).
       if (selected && live) {
-        const res = await sendTurn(selected.id, content);
+        const res = await sendTurn(selected.id, content, attachmentIds);
         // A turn already running ⇒ this message is queued (delivered once that turn
         // finishes); surface it as a pending bubble the user can withdraw. When idle
         // it's delivered right away, so it'll arrive via its own `user` event instead.
         const queuedItem = idle ? undefined : { turnId: res.turnId, content };
-        return { id: selected.id, queuedItem };
+        return { id: selected.id, turnId: res.turnId, queuedItem };
       }
       if (selected && resumable) {
         // The pills were seeded from this session's stored config, so an untouched
         // send keeps it and an edited Mode/Model/Effort is re-applied on resume.
-        await resumeSession(selected.id, content, {
-          model,
-          permissionMode: MODE_TO_PERMISSION[mode],
-          effort: effort || undefined,
-        });
-        return { id: selected.id };
+        const res = await resumeSession(
+          selected.id,
+          content,
+          { model, permissionMode: MODE_TO_PERMISSION[mode], effort: effort || undefined },
+          attachmentIds,
+        );
+        return { id: selected.id, turnId: res.turnId };
       }
       const created = await createInteractiveSession({
         prompt: content,
@@ -693,8 +734,8 @@ export function AgentView({ runner }: { runner: Runner }) {
       });
       return { id: created.id, created: true };
     },
-    onSuccess: ({ id, queuedItem, created }, content) => {
-      pushHistory(id, content); // record under the resolved session id, new sessions included
+    onSuccess: ({ id, turnId, queuedItem, created }, vars) => {
+      pushHistory(id, vars.content); // record under the resolved session id, new sessions included
       // For a freshly created session, prime its detail cache so the sidebar resolves
       // its agent row synchronously. Otherwise activeAgentId (TasksSidePanel) falls
       // back to keepPreviousData — the previously open session's agent — and the
@@ -708,6 +749,14 @@ export function AgentView({ runner }: { runner: Runner }) {
         });
       navigate(`/sessions/${encodeId(id)}`);
       setText('');
+      // Hand the sent previews to the transcript, keyed by turnId, so the image shows in
+      // the user bubble (the runner echoes only text). The object URLs move here as-is —
+      // setImages([]) below drops the chips without revoking them.
+      if (turnId && vars.images.length) {
+        const refs: TurnImage[] = vars.images.map((im) => ({ url: im.previewUrl, mime: im.file.type }));
+        setTurnImages((m) => ({ ...m, [turnId]: refs }));
+      }
+      setImages([]);
       setView('active'); // a new/continued session lives in the active list
       if (queuedItem) setQueued((q) => [...q, queuedItem]);
       else setIdle(false); // a turn is now starting
@@ -842,11 +891,58 @@ export function AgentView({ runner }: { runner: Runner }) {
     document.addEventListener('mouseup', onUp);
   };
 
+  // Image attachments ride on an existing session only: the upload is scoped to a
+  // sessionId and only POST /turns + resume accept attachment ids (a brand-new session's
+  // create has no id to scope to and no attachment field). So offer the picker for a live
+  // or resumable session with the runner online; otherwise it's disabled.
+  const canAttach = runner.online && !!selected && (live || resumable);
+  const imageUid = useRef(0);
+  // Validate, then upload an image as a staged chip. Uploaded eagerly (not on send) so the
+  // turn carries only the id and a slow upload doesn't block typing.
+  const addImage = useCallback(
+    async (file: File): Promise<void> => {
+      if (!selected || !(live || resumable)) return;
+      if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
+        message.error(`不支持的图片类型：${file.type || file.name}`);
+        return;
+      }
+      if (file.size > MAX_IMAGE_BYTES) {
+        message.error('图片超过 5MB 上限');
+        return;
+      }
+      const uid = `img-${imageUid.current++}`;
+      const previewUrl = URL.createObjectURL(file);
+      setImages((prev) => [...prev, { uid, file, previewUrl, status: 'uploading' }]);
+      try {
+        const { id } = await uploadAttachment(file, selected.id);
+        setImages((prev) => prev.map((im) => (im.uid === uid ? { ...im, status: 'done', id } : im)));
+      } catch (e) {
+        // Drop the failed chip and free its preview; the toast explains why.
+        setImages((prev) => prev.filter((im) => im.uid !== uid));
+        URL.revokeObjectURL(previewUrl);
+        message.error((e as Error).message);
+      }
+    },
+    [selected, live, resumable, message],
+  );
+  const removeImage = (uid: string): void => {
+    setImages((prev) => {
+      const target = prev.find((im) => im.uid === uid);
+      if (target) URL.revokeObjectURL(target.previewUrl);
+      return prev.filter((im) => im.uid !== uid);
+    });
+  };
+  // A send waits for every staged upload to finish (so all ids are known), and goes out
+  // with whatever images are ready plus the text. Either text or an image is enough.
+  const uploading = images.some((im) => im.status === 'uploading');
+  const readyImages = images.filter((im) => im.status === 'done' && im.id);
+
   const onSend = (): void => {
     const c = text.trim();
-    if (!c || send.isPending) return;
+    if (send.isPending || uploading) return;
+    if (!c && readyImages.length === 0) return;
     setHistIdx(-1);
-    send.mutate(c);
+    send.mutate({ content: c, images: readyImages });
   };
   // Open the new-session draft for this agent. A /sessions/<id> URL carries no
   // agent, so resolve it from the open session (scopeAgentId), then the first agent.
@@ -862,8 +958,9 @@ export function AgentView({ runner }: { runner: Runner }) {
   // it, AWAITING_INPUT runs it now) — but not while PENDING (still waiting for a slot,
   // no claude process yet). A non-live (ended) session revives or starts fresh.
   const canSend =
-    !!text.trim() &&
+    (!!text.trim() || readyImages.length > 0) &&
     !send.isPending &&
+    !uploading &&
     runner.online &&
     !loadingSession &&
     (live ? SLOT_HELD.includes(selected.status) : true);
@@ -1118,7 +1215,7 @@ export function AgentView({ runner }: { runner: Runner }) {
               ) : (
                 <div className="chat-note">Starting session…</div>
               ))}
-            <Transcript events={events} live={live} />
+            <Transcript events={events} live={live} turnImages={turnImages} />
             {streamingThink && <div className="chat-think-stream chat-streaming">💭 {streamingThink}</div>}
             {streamingText && <StreamingMessage text={streamingText} />}
             {approvals.map((a, i) => (
@@ -1128,7 +1225,14 @@ export function AgentView({ runner }: { runner: Runner }) {
             ))}
             {queued.map((q) => (
               <div className="chat-msg chat-user chat-queued" key={q.turnId}>
-                <span className="chat-queued-text">{q.content}</span>
+                {turnImages[q.turnId]?.length > 0 && (
+                  <div className="chat-images">
+                    {turnImages[q.turnId].map((im, i) => (
+                      <img key={i} className="chat-image" src={im.url} alt="" />
+                    ))}
+                  </div>
+                )}
+                {q.content && <span className="chat-queued-text">{q.content}</span>}
                 <span className="chat-queued-meta">
                   <span className="chat-queued-tag">排队中</span>
                   <a onClick={() => cancelQueued(q.turnId)}>撤回</a>
@@ -1161,6 +1265,24 @@ export function AgentView({ runner }: { runner: Runner }) {
         )}
 
       <div className="agent-composer">
+        {images.length > 0 && (
+          <div className="composer-attachments">
+            {images.map((im) => (
+              <span key={im.uid} className="composer-pill composer-attach">
+                <img className="composer-attach-thumb" src={im.previewUrl} alt="" />
+                {im.status === 'uploading' && <LoadingOutlined className="composer-attach-spin" />}
+                <button
+                  type="button"
+                  className="composer-attach-remove"
+                  onClick={() => removeImage(im.uid)}
+                  aria-label="移除图片"
+                >
+                  <CloseOutlined />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
         <div className="composer-box">
           {showSlash && (
             <div className="composer-slash-menu" role="listbox">
@@ -1197,6 +1319,19 @@ export function AgentView({ runner }: { runner: Runner }) {
             onChange={(e) => {
               setText(e.target.value);
               if (histIdx !== -1) setHistIdx(-1);
+            }}
+            // Paste an image straight from the clipboard (e.g. a screenshot). Only swallow
+            // the paste when it actually carries image files, so pasting text is untouched.
+            onPaste={(e) => {
+              if (!canAttach) return;
+              const files = Array.from(e.clipboardData?.items ?? [])
+                .filter((it) => it.kind === 'file' && it.type.startsWith('image/'))
+                .map((it) => it.getAsFile())
+                .filter((f): f is File => !!f);
+              if (files.length) {
+                e.preventDefault();
+                files.forEach(addImage);
+              }
             }}
             // One keydown handler: drive the menu while open, else Up/Down recall
             // history (when it doesn't fight cursor movement), Enter=send / Shift+Enter=newline.
@@ -1279,6 +1414,28 @@ export function AgentView({ runner }: { runner: Runner }) {
               }
             }}
           />
+          <Tooltip title={canAttach ? '添加图片' : '仅可向已开始的会话发送图片'}>
+            {/* beforeUpload returns false: we upload via uploadAttachment ourselves and
+                keep antd's own list/request out of it. */}
+            <Upload
+              accept="image/png,image/jpeg,image/webp,image/gif"
+              multiple
+              showUploadList={false}
+              disabled={!canAttach}
+              beforeUpload={(file) => {
+                void addImage(file);
+                return false;
+              }}
+            >
+              <Button
+                size="small"
+                type="text"
+                icon={<PictureOutlined />}
+                disabled={!canAttach}
+                aria-label="添加图片"
+              />
+            </Upload>
+          </Tooltip>
           {selected && live && (
             <>
               <Tooltip title="Stop the current turn">

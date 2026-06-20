@@ -1252,6 +1252,60 @@ body {
   font-size: 13px;
 }
 
+/* Staged image attachments — a row of thumbnail chips above the composer box. Each chip
+   reuses the .composer-pill shape (rounded, bordered) sized to a small thumbnail. */
+.composer-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.composer-attach {
+  position: relative;
+  padding-left: 0;
+  overflow: hidden;
+  width: 48px;
+  height: 48px;
+}
+.composer-attach-thumb {
+  width: 48px;
+  height: 48px;
+  object-fit: cover;
+  border-radius: inherit;
+  display: block;
+}
+/* Dim + center a spinner over a thumbnail still uploading. */
+.composer-attach-spin {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 16px;
+  background: rgba(0, 0, 0, 0.35);
+}
+.composer-attach-remove {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 9px;
+  cursor: pointer;
+}
+.composer-attach-remove:hover {
+  background: rgba(0, 0, 0, 0.8);
+}
+
 /* ---- Interactive session chat (Route B) ---- */
 .chat-note {
   color: #8f959e;
@@ -1275,6 +1329,23 @@ body {
      plain block would stretch the bubble background across 80% and trail blank space
      after a short message. fit-content shrinks to the text; margin-left:auto right-aligns. */
   width: fit-content;
+}
+/* Images sent with a user turn — a wrapping row of thumbnails above the bubble's text
+   (shared by the live user bubble and the queued bubble). */
+.chat-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.chat-images:not(:last-child) {
+  margin-bottom: 6px;
+}
+.chat-image {
+  max-width: 220px;
+  max-height: 220px;
+  border-radius: 8px;
+  object-fit: contain;
+  display: block;
 }
 /* Sticky "your prompt" bar: sits flush under the header (outside the scroll area, so no
    jitter) and surfaces the in-view turn's question once a long answer pushes it off the
