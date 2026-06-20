@@ -561,13 +561,22 @@ function ToolResult({
   markdown?: boolean;
 }) {
   const text = resultText(content);
-  // A successful tool with no textual output renders nothing; but an error with no
-  // output must still surface — otherwise a failed tool looks like it never ran.
-  if (!text && !isError) return null;
+  const images = resultImages(content);
+  // A successful tool with no output renders nothing; but an error with no output must
+  // still surface — otherwise a failed tool looks like it never ran.
+  if (!text && images.length === 0 && !isError) return null;
   return (
     <div className={`chat-result${isError ? ' is-error' : ''}${compact ? ' compact' : ''}`}>
+      {images.length > 0 && (
+        <div className="chat-images">
+          {images.map((src, i) => (
+            <img key={i} className="chat-image" src={src} alt="" />
+          ))}
+        </div>
+      )}
       {!text ? (
-        <div className="chat-result-empty">✖ error</div>
+        // Image-only success shows just the image above; only a no-output error needs text here.
+        isError && <div className="chat-result-empty">✖ error</div>
       ) : markdown && !isError ? (
         <MD>{text}</MD>
       ) : (
@@ -834,10 +843,24 @@ function resultText(content: any): string {
       .map((b: any) => {
         if (typeof b === 'string') return b;
         if (b && b.type === 'text') return b.text ?? '';
-        if (b && b.type === 'image') return '[image]';
+        if (b && b.type === 'image') return ''; // rendered inline by resultImages()
         return safeJson(b);
       })
+      .filter((s) => s !== '')
       .join('\n');
   }
   return safeJson(content);
+}
+
+// Inline images carried by a tool_result's content blocks — e.g. Read on a .png, or an
+// MCP tool returning a screenshot. The base64 data is passed through verbatim from the
+// runner, so render it as a data URL. A plain-text result yields [].
+function resultImages(content: any): string[] {
+  if (!Array.isArray(content)) return [];
+  const urls: string[] = [];
+  for (const b of content) {
+    const s = b && b.type === 'image' ? b.source : null;
+    if (s && s.data && s.media_type) urls.push(`data:${s.media_type};base64,${s.data}`);
+  }
+  return urls;
 }
