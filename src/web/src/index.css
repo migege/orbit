@@ -628,6 +628,15 @@ body {
   color: #1f2329;
   margin-bottom: 6px;
 }
+/* Agent env-var editor: KEY input | value input | delete button per row. */
+.rd-env-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.rd-env-row > .ant-input:first-child {
+  flex: 0 0 38%;
+}
 
 /* shared column grid: check | status | title | assignee */
 .orbit-tasklist {
@@ -1496,6 +1505,10 @@ body {
   flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 8px;
+  /* Indent the thumbnail row so its left edge lines up with the composer text,
+     not the panel edge: 1px box border + 12px box padding-left + 11px antd
+     textarea inset = 24px. */
+  padding-left: 24px;
 }
 .composer-attach {
   position: relative;
