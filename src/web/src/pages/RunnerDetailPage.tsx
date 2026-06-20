@@ -252,6 +252,7 @@ export function RunnerDetailPage() {
 
   return (
     <>
+      <div className="rd-page">
       <div className="rd-head">
         <span className="rd-back" onClick={() => navigate('/runners')}>
           <ArrowLeftOutlined /> Runners
@@ -360,6 +361,7 @@ export function RunnerDetailPage() {
           </div>
         )}
       </section>
+      </div>
 
       <Modal
         title="Rename runner"
