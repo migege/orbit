@@ -150,7 +150,8 @@ body {
   color: #3370ff;
 }
 /* Task-list status dot. Grey + static by default; turns blue and breathes while
-   the list has a task executing right now (runningTasks > 0). */
+   the list has a task executing right now (runningTasks > 0); turns green and
+   static once the whole list is finished (every task DONE). */
 .tp-list-dot {
   width: 7px;
   height: 7px;
@@ -162,6 +163,17 @@ body {
 .tp-list-dot.running {
   background: #3370ff;
   animation: tp-list-dot-pulse 1.4s ease-in-out infinite;
+}
+.tp-list-dot.done {
+  background: #2ea121;
+}
+/* A finished list reads as checked-off: its title is muted (kept clickable, no
+   strikethrough). The active highlight still wins when such a list is selected. */
+.tp-label.done {
+  color: #8f959e;
+}
+.tp-item.active .tp-label.done {
+  color: #3370ff;
 }
 @keyframes tp-list-dot-pulse {
   0%,

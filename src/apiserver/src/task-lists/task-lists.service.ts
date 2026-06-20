@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { CreatorType, RunStatus } from '@prisma/client';
+import { CreatorType, RunStatus, TaskStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateTaskListDto, UpdateTaskListDto } from './dto';
 
@@ -24,16 +24,33 @@ export class TaskListsService {
     // a task with a busy (PENDING/RUNNING) session. Same liveness notion the task
     // detail panel uses for its 执行中 state — IN_PROGRESS is just a label, not a live
     // run. One grouped query keeps this O(1) regardless of list count.
+    const listIds = lists.map((l) => l.id);
     const grouped = await this.prisma.task.groupBy({
       by: ['listId'],
       where: {
-        listId: { in: lists.map((l) => l.id) },
+        listId: { in: listIds },
         sessions: { some: { status: { in: [RunStatus.PENDING, RunStatus.RUNNING] } } },
       },
       _count: { _all: true },
     });
     const running = new Map(grouped.map((g) => [g.listId, g._count._all]));
-    return lists.map((l) => ({ ...l, runningTasks: running.get(l.id) ?? 0 }));
+    // `completed` = the whole list is finished: it has at least one task and every
+    // task is DONE. Counted with the same grouped shape (one query, O(1) in list
+    // count); compared against the list's total task count below.
+    const doneGrouped = await this.prisma.task.groupBy({
+      by: ['listId'],
+      where: { listId: { in: listIds }, status: TaskStatus.DONE },
+      _count: { _all: true },
+    });
+    const done = new Map(doneGrouped.map((g) => [g.listId, g._count._all]));
+    return lists.map((l) => {
+      const total = l._count?.tasks ?? 0;
+      return {
+        ...l,
+        runningTasks: running.get(l.id) ?? 0,
+        completed: total > 0 && (done.get(l.id) ?? 0) === total,
+      };
+    });
   }
 
   async get(ownerId: string, id: string) {

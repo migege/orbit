@@ -84,6 +84,9 @@ interface TaskList {
   // How many of the list's tasks are executing right now (have a PENDING/RUNNING
   // session). >0 turns the list's dot into a pulsing blue "running" indicator.
   runningTasks?: number;
+  // True once the list is finished: it has tasks and every one is DONE. Turns the
+  // dot green and mutes the title.
+  completed?: boolean;
 }
 
 function logout() {
@@ -326,6 +329,9 @@ export function TasksSidePanel() {
               {(taskLists.data ?? []).map((l) => {
                 const key = encodeId(l.id);
                 const running = (l.runningTasks ?? 0) > 0;
+                // A running task means work is still in flight, so it outranks the
+                // completed state even if every other task is already DONE.
+                const completed = !running && !!l.completed;
                 return (
                   <div
                     key={l.id}
@@ -336,10 +342,16 @@ export function TasksSidePanel() {
                     }}
                   >
                     <span
-                      className={`tp-list-dot ${running ? 'running' : ''}`}
-                      title={running ? `${l.runningTasks} 个任务执行中` : undefined}
+                      className={`tp-list-dot ${running ? 'running' : completed ? 'done' : ''}`}
+                      title={
+                        running
+                          ? `${l.runningTasks} 个任务执行中`
+                          : completed
+                            ? '全部任务已完成'
+                            : undefined
+                      }
                     />
-                    <span className="tp-label">{l.title}</span>
+                    <span className={`tp-label ${completed ? 'done' : ''}`}>{l.title}</span>
                   </div>
                 );
               })}
