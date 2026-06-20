@@ -33,8 +33,8 @@ import { decodeId, encodeId } from '../lib/idCodec';
 // page.
 const TOP = [
   { key: 'active', icon: <UserOutlined />, label: 'Active' },
-  { key: 'skills', icon: <ThunderboltOutlined />, label: 'Skills' },
   { key: 'runners', icon: <DesktopOutlined />, label: 'Runners' },
+  { key: 'skills', icon: <ThunderboltOutlined />, label: 'Skills' },
 ];
 
 // The left sidebar is user-resizable; the chosen width persists across refreshes.

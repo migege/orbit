@@ -1420,21 +1420,19 @@ body {
   color: #8f959e;
   font-size: 13px;
 }
-/* Read-only agent identity, shown above the box when the agent can't be switched
-   (live or locked session). Muted so it reads as context, not an editable control. */
-.composer-ctx {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 8px;
-  padding-left: 2px;
-  color: #8f959e;
-  font-size: 13px;
+/* Read-only agent identity, rendered as a static pill in the controls row (left of Model)
+   when the agent can't be switched. No chevron and no hover so it reads as fixed context. */
+.composer-pill-static {
+  cursor: default;
 }
-.composer-ctx-icon {
-  font-size: 13px;
+.composer-pill-static:hover {
+  border-color: #dee0e3;
+  background: #f7f8fa;
 }
-.composer-ctx-name {
+.composer-pill-static-label {
+  padding: 0 8px 0 2px;
+  line-height: 24px;
+  font-size: 13px;
   font-weight: 500;
   color: #4e5969;
 }
@@ -1458,12 +1456,26 @@ body {
   width: 48px;
   height: 48px;
 }
+/* Ant Design's Image wraps the <img> in a .ant-image div; make it fill the chip
+   so the thumbnail (and its click-to-zoom hover mask) covers the full 48x48. */
+.composer-attach .ant-image {
+  width: 48px;
+  height: 48px;
+  display: block;
+}
 .composer-attach-thumb {
   width: 48px;
   height: 48px;
   object-fit: cover;
   border-radius: inherit;
   display: block;
+  cursor: zoom-in;
+}
+.composer-attach .ant-image-mask {
+  border-radius: inherit;
+}
+.composer-attach-eye {
+  font-size: 14px;
 }
 /* Dim + center a spinner over a thumbnail still uploading. */
 .composer-attach-spin {

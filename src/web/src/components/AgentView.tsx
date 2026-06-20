@@ -10,6 +10,7 @@ import {
   ControlOutlined,
   DeleteOutlined,
   DisconnectOutlined,
+  EyeOutlined,
   LoadingOutlined,
   MessageOutlined,
   MinusCircleOutlined,
@@ -22,7 +23,7 @@ import {
   UndoOutlined,
 } from '@ant-design/icons';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { App as AntApp, Button, Dropdown, Input, type MenuProps, Segmented, Select, Tooltip, Upload } from 'antd';
+import { App as AntApp, Button, Dropdown, Image, Input, type MenuProps, Segmented, Select, Tooltip, Upload } from 'antd';
 import { type MouseEvent as ReactMouseEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMatch, useNavigate } from 'react-router-dom';
 import { decodeId, encodeId } from '../lib/idCodec';
@@ -1097,8 +1098,8 @@ export function AgentView({ runner }: { runner: Runner }) {
   // A live session's agent is fixed; otherwise reflect the local pick.
   const shownAgentId: string | undefined = live ? (selected.agent?.id ?? undefined) : agentId;
   // The agent can't be switched once the session is live, nor when the view is locked to
-  // one agent. In those cases it's read-only info, so we surface it as a static line above
-  // the box (see composer-ctx) instead of a fake-editable pill; otherwise it stays a Select.
+  // one agent. In those cases it's read-only info, so we surface it as a static pill in the
+  // controls row (see composer-pill-static) instead of a Select; otherwise it stays a Select.
   const agentReadOnly = live || !!lockedAgentId;
   const shownAgentName =
     agentsForRunner.find((a) => a.id === shownAgentId)?.name ??
@@ -1370,17 +1371,16 @@ export function AgentView({ runner }: { runner: Runner }) {
         </div>
 
       <div className="agent-composer">
-        {agentReadOnly && shownAgentName && (
-          <div className="composer-ctx">
-            <AppstoreOutlined className="composer-ctx-icon" />
-            <span className="composer-ctx-name">{shownAgentName}</span>
-          </div>
-        )}
         {images.length > 0 && (
           <div className="composer-attachments">
             {images.map((im) => (
               <span key={im.uid} className="composer-pill composer-attach">
-                <img className="composer-attach-thumb" src={im.previewUrl} alt="" />
+                <Image
+                  className="composer-attach-thumb"
+                  src={im.previewUrl}
+                  alt=""
+                  preview={{ mask: <EyeOutlined className="composer-attach-eye" /> }}
+                />
                 {im.status === 'uploading' && <LoadingOutlined className="composer-attach-spin" />}
                 <button
                   type="button"
@@ -1594,7 +1594,7 @@ export function AgentView({ runner }: { runner: Runner }) {
         <Tooltip title="Agent is fixed once a session starts. Model, Mode & Effort can be changed between turns — the session resumes with the new setting on your next message. Auto mode needs a recent model (Sonnet 4.6 / Opus 4.6+) and your org to allow it.">
           <div className="composer-pills">
             {/* The agent is only a Select when it can actually be picked (new, unlocked
-                session); once read-only it shows as the static composer-ctx line above. */}
+                session); once read-only it shows as a static pill left of Model below. */}
             {!agentReadOnly && (
               <span className="composer-pill">
                 <AppstoreOutlined className="composer-pill-icon" />
@@ -1629,6 +1629,12 @@ export function AgentView({ runner }: { runner: Runner }) {
               />
             </span>
             <span className="composer-pill-spacer" />
+            {agentReadOnly && shownAgentName && (
+              <span className="composer-pill composer-pill-static">
+                <AppstoreOutlined className="composer-pill-icon" />
+                <span className="composer-pill-static-label">{shownAgentName}</span>
+              </span>
+            )}
             <span className="composer-pill">
               <RobotOutlined className="composer-pill-icon" />
               <Select
