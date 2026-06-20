@@ -138,23 +138,46 @@ export class SessionsService {
     const sessions = await this.prisma.session.findMany({
       where: { ownerId, assignedRunnerId: filters.runnerId || undefined, ...visibility },
       orderBy: [{ lastTurnAt: { sort: 'desc', nulls: 'last' } }, { createdAt: 'desc' }],
-      include: {
+      // Only the columns the list UI actually renders. Notably this drops `prompt`
+      // (the full first-turn seed) and the other large text columns the list never
+      // shows — those dominate the payload and grow it linearly with session count.
+      select: {
+        id: true,
+        status: true,
+        title: true,
+        createdAt: true,
+        lastTurnAt: true,
+        startedAt: true,
+        numTurns: true,
+        costUsd: true,
+        error: true,
+        source: true,
+        model: true,
+        permissionMode: true,
+        effort: true,
+        lastAssistantText: true,
         agent: { select: { id: true, name: true, model: true } },
         assignedRunner: { select: { id: true, name: true } },
       },
     });
+    // The list only renders a single ellipsised preview line, but the stored reply can
+    // be several KB; truncate so the denormalized preview doesn't bloat the payload.
+    const trimmed = sessions.map((s) => ({
+      ...s,
+      lastAssistantText: s.lastAssistantText?.slice(0, SessionsService.PREVIEW_LEN) ?? null,
+    }));
     // A turn blocked on a permission prompt keeps the session RUNNING, so the
     // list can't tell "running" from "waiting for approval" without this count.
     // Only RUNNING sessions can hold a live approval; skip the query otherwise.
-    const running = sessions.filter((s) => s.status === RunStatus.RUNNING).map((s) => s.id);
-    if (running.length === 0) return sessions.map((s) => ({ ...s, pendingApprovals: 0 }));
+    const running = trimmed.filter((s) => s.status === RunStatus.RUNNING).map((s) => s.id);
+    if (running.length === 0) return trimmed.map((s) => ({ ...s, pendingApprovals: 0 }));
     const counts = await this.prisma.approval.groupBy({
       by: ['sessionId'],
       where: { sessionId: { in: running }, status: 'PENDING' },
       _count: { _all: true },
     });
     const byId = new Map(counts.map((c) => [c.sessionId, c._count._all]));
-    return sessions.map((s) => ({ ...s, pendingApprovals: byId.get(s.id) ?? 0 }));
+    return trimmed.map((s) => ({ ...s, pendingApprovals: byId.get(s.id) ?? 0 }));
   }
 
   async get(ownerId: string, id: string) {
@@ -168,6 +191,10 @@ export class SessionsService {
     if (!session) throw new NotFoundException('session not found');
     return session;
   }
+
+  // The session list shows the last reply as a single ellipsised line, so it only
+  // needs a short prefix of the (potentially multi-KB) denormalized preview text.
+  private static readonly PREVIEW_LEN = 200;
 
   private static readonly LIVE: RunStatus[] = [
     RunStatus.RUNNING,
