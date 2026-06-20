@@ -1106,25 +1106,11 @@ export function AgentView({ runner }: { runner: Runner }) {
               },
             };
             const menuItems: MenuProps['items'] =
-              view === 'active'
-                ? [
-                    {
-                      key: 'complete',
-                      icon: <CheckCircleOutlined />,
-                      label: ended ? 'Complete' : 'Complete & end session',
-                      onClick: ({ domEvent }) => {
-                        domEvent.stopPropagation();
-                        archiveMut.mutate(s.id);
-                      },
-                    },
-                    { type: 'divider' },
-                    deleteItem,
-                  ]
-                : view === 'archived'
-                  ? [restoreItem, { type: 'divider' }, deleteItem]
-                  : view === 'system'
-                    ? [deleteItem]
-                    : [restoreItem];
+              view === 'archived'
+                ? [restoreItem, { type: 'divider' }, deleteItem]
+                : view === 'system'
+                  ? [deleteItem]
+                  : [restoreItem];
             // System sessions are openable like active ones; archived/trash rows aren't.
             const openable = view === 'active' || view === 'system';
             return (
@@ -1145,21 +1131,35 @@ export function AgentView({ runner }: { runner: Runner }) {
                 </div>
                 <div className="session-right">
                   <div className="session-actions" onClick={(e) => e.stopPropagation()}>
-                    <Dropdown
-                      trigger={['click']}
-                      placement="bottomRight"
-                      open={menuOpenId === s.id}
-                      onOpenChange={(o) => setMenuOpenId(o ? s.id : null)}
-                      menu={{ items: menuItems }}
-                    >
-                      <span
-                        className="session-kebab"
-                        title="More actions"
-                        onClick={(e) => e.stopPropagation()}
+                    {view === 'active' ? (
+                      <Tooltip title={ended ? 'Complete' : 'Complete & end session'} placement="top">
+                        <span
+                          className="session-kebab"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            archiveMut.mutate(s.id);
+                          }}
+                        >
+                          <CheckCircleOutlined />
+                        </span>
+                      </Tooltip>
+                    ) : (
+                      <Dropdown
+                        trigger={['click']}
+                        placement="bottomRight"
+                        open={menuOpenId === s.id}
+                        onOpenChange={(o) => setMenuOpenId(o ? s.id : null)}
+                        menu={{ items: menuItems }}
                       >
-                        <MoreOutlined />
-                      </span>
-                    </Dropdown>
+                        <span
+                          className="session-kebab"
+                          title="More actions"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <MoreOutlined />
+                        </span>
+                      </Dropdown>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1191,6 +1191,22 @@ export function AgentView({ runner }: { runner: Runner }) {
                     : ''}
             </div>
           </div>
+          {selected && !composing && (
+            <>
+              <div className="agent-header-spacer" />
+              <Tooltip
+                title={TERMINAL.includes(selected.status) ? 'Delete' : 'Delete & end session'}
+                placement="bottomLeft"
+              >
+                <Button
+                  type="text"
+                  danger
+                  icon={<DeleteOutlined />}
+                  onClick={() => deleteMut.mutate(selected.id)}
+                />
+              </Tooltip>
+            </>
+          )}
         </div>
 
         {stuck && (
