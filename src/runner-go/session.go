@@ -37,7 +37,7 @@ type sessionMeta struct {
 	Title       string `json:"title"`
 }
 
-func runInteractiveSession(t *Transport, job *ClaimedSession, ctx context.Context, execDir string) {
+func runInteractiveSession(t *Transport, job *ClaimedSession, ctx context.Context, shutdownCtx context.Context, execDir string) {
 	scratch := filepath.Join(runsDir(), job.SessionID)
 	_ = os.MkdirAll(scratch, 0o755)
 
@@ -119,10 +119,10 @@ func runInteractiveSession(t *Transport, job *ClaimedSession, ctx context.Contex
 	firstSpawn := !job.Reclaimed && !job.Resume
 	respawns := 0
 	for {
-		if ctx.Err() != nil {
+		if ctx.Err() != nil || shutdownCtx.Err() != nil {
 			break
 		}
-		st, ended, reload := runSessionProcess(ctx, t, job, execDir, scratch, emit, setTurn, firstSpawn)
+		st, ended, reload := runSessionProcess(ctx, shutdownCtx, t, job, execDir, scratch, emit, setTurn, firstSpawn)
 		firstSpawn = false
 		if ended {
 			status = st
@@ -154,6 +154,15 @@ func runInteractiveSession(t *Transport, job *ClaimedSession, ctx context.Contex
 	close(stopFlush)
 	flushWg.Wait()
 	flush()
+
+	// Graceful drain: the runner is shutting down and this wasn't a real cancel/end (a
+	// UI cancel sets ctx.Err; an end/crash sets stSucceeded/stFailed). Leave the session
+	// AWAITING_INPUT — skip complete — so the next runner reclaims and --resumes it. Its
+	// in-flight turn, if any, already finished and acked during the drain.
+	if shutdownCtx.Err() != nil && ctx.Err() == nil && status == stCancelled {
+		logln(fmt.Sprintf("⏸ interactive run %s — detached for shutdown (resumable)", job.SessionID))
+		return
+	}
 
 	if err := t.complete(job.SessionID, CompleteRequest{Status: status}); err != nil {
 		logln("complete failed for", job.SessionID+":", err)
@@ -189,7 +198,7 @@ func withBuiltinTaskToolsDisallowed(configured []string) []string {
 // Returns (status, ended, reload). ended=false means the caller should re-spawn:
 // reload=true for a requested model/permission-mode change (re-spawn with the new
 // flags now on job.Agent), reload=false for an unexpected crash.
-func runSessionProcess(ctx context.Context, t *Transport, job *ClaimedSession, execDir, scratchDir string, emit emitFn, setTurn func(string), firstSpawn bool) (string, bool, bool) {
+func runSessionProcess(ctx context.Context, shutdownCtx context.Context, t *Transport, job *ClaimedSession, execDir, scratchDir string, emit emitFn, setTurn func(string), firstSpawn bool) (string, bool, bool) {
 	// Reset turn attribution for this (possibly re-spawned) process: events before
 	// the first turn is (re-)fed — claude's system/init — are session-level (null).
 	setTurn("")
@@ -258,6 +267,11 @@ func runSessionProcess(ctx context.Context, t *Transport, job *ClaimedSession, e
 
 	procCtx, procCancel := context.WithCancel(ctx)
 	defer procCancel()
+	// pollCtx gates only the inbox poller. On runner shutdown we cancel it to stop
+	// pulling new turns WITHOUT tearing down claude, so an in-flight turn can finish and
+	// ack before we detach. It derives from procCtx, so procCancel also stops the poller.
+	pollCtx, pollCancel := context.WithCancel(procCtx)
+	defer pollCancel()
 	cmd := exec.CommandContext(procCtx, "claude", args...)
 	cmd.Dir = execDir
 	// Inject session context so the built-in `orbit mcp` server (a child of claude)
@@ -308,10 +322,10 @@ func runSessionProcess(ctx context.Context, t *Transport, job *ClaimedSession, e
 	pollDone := make(chan struct{})
 	go func() {
 		defer close(pollDone)
-		for procCtx.Err() == nil {
-			resp, err := t.inbox(procCtx, job.SessionID)
+		for pollCtx.Err() == nil {
+			resp, err := t.inbox(pollCtx, job.SessionID)
 			if err != nil {
-				if procCtx.Err() != nil {
+				if pollCtx.Err() != nil {
 					return
 				}
 				logln("inbox poll failed for", job.SessionID+":", err)
@@ -320,6 +334,9 @@ func runSessionProcess(ctx context.Context, t *Transport, job *ClaimedSession, e
 			}
 			if resp == nil {
 				continue // long-poll timeout, re-poll
+			}
+			if pollCtx.Err() != nil {
+				return // drain raced a pulled turn: drop it (the next runner re-delivers)
 			}
 			switch resp.Kind {
 			case "message":
@@ -422,6 +439,34 @@ func runSessionProcess(ctx context.Context, t *Transport, job *ClaimedSession, e
 		}
 	}()
 
+	// Drain watcher: on runner shutdown, stop pulling new turns and let any in-flight
+	// turn finish + ack (pending drains as the stdout reader acks each `result`), then
+	// tear claude down. The caller detaches without finalizing, so the next runner
+	// reclaims + --resumes. Idle sessions (pending empty) detach at once.
+	go func() {
+		select {
+		case <-procCtx.Done():
+			return
+		case <-shutdownCtx.Done():
+		}
+		pollCancel()
+		tk := time.NewTicker(150 * time.Millisecond)
+		defer tk.Stop()
+		deadline := time.After(shutdownDrainTimeout)
+		for len(pending) > 0 {
+			select {
+			case <-tk.C:
+			case <-procCtx.Done():
+				return
+			case <-deadline:
+				logln("drain timeout for", job.SessionID+"; tearing down mid-turn")
+				procCancel()
+				return
+			}
+		}
+		procCancel()
+	}()
+
 	// Stdout reader (this goroutine): normalize messages; on each per-turn `result`
 	// ack the oldest fed message turn via /turn-complete.
 	sc := bufio.NewScanner(stdout)
@@ -488,6 +533,9 @@ func runSessionProcess(ctx context.Context, t *Transport, job *ClaimedSession, e
 	case <-endedCh:
 		return stSucceeded, true, false // user ended the session
 	default:
-		return stFailed, false, false // unexpected exit -> respawn with --resume
 	}
+	if shutdownCtx.Err() != nil {
+		return stCancelled, true, false // graceful drain -> caller detaches without finalizing
+	}
+	return stFailed, false, false // unexpected exit -> respawn with --resume
 }
