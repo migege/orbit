@@ -1999,6 +1999,22 @@ body {
 .approval-btn.chat:hover {
   background: #f0f5ff;
 }
+.approval-btn.approve-always {
+  background: #eef4ff;
+  color: #2860e0;
+  border-color: #b9ceff;
+}
+.approval-btn.approve-always:hover {
+  background: #e0ecff;
+}
+.approval-rule {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: #d8e6ff;
+  color: #1d4ed8;
+}
 .approval-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;

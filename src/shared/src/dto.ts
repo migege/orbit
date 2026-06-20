@@ -191,12 +191,24 @@ export interface ApprovalCreateRequest {
  *  The runner feeds this to claude as the tool's `updatedInput.answers`. */
 export type QuestionAnswers = Record<string, string[]>;
 
+/** A claude permission rule to add for the rest of the session, so future "same kind"
+ *  calls are auto-allowed by claude's own engine without re-prompting. `toolName` is the
+ *  gated tool (e.g. "Bash", "Edit"); `ruleContent` narrows it (Bash uses a command
+ *  prefix like "git commit:*") — omit it to allow every call to that tool. The runner
+ *  wraps this into claude's updatedPermissions (addRules / allow / session). */
+export interface PermissionRule {
+  toolName: string;
+  ruleContent?: string;
+}
+
 /** Browser → control plane: a human's allow/deny on a pending approval. For an
- *  AskUserQuestion an `allow` carries the picked `answers`. */
+ *  AskUserQuestion an `allow` carries the picked `answers`. An `allow` may also carry
+ *  `rememberRule` to auto-allow the same kind of call for the rest of the session. */
 export interface ApprovalDecisionRequest {
   behavior: 'allow' | 'deny';
   message?: string;
   answers?: QuestionAnswers;
+  rememberRule?: PermissionRule;
 }
 
 /** Control plane → runner: the resolved decision (returned by the approval
@@ -207,6 +219,7 @@ export interface ApprovalDecisionResponse {
   behavior?: 'allow' | 'deny';
   message?: string;
   answers?: QuestionAnswers;
+  rememberRule?: PermissionRule;
 }
 
 // 'reload' carries no user text: it tells the runner the session's model /

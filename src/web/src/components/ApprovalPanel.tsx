@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { ApprovalInfo } from '../api';
+import type { ApprovalInfo, PermissionRule } from '../api';
 
 // claude routes plan-mode "exit?" through the same permission tool as any other gated
 // call; ExitPlanMode is the one worth a rich render (its input carries the plan).
@@ -15,11 +15,49 @@ function planText(input: unknown): string {
   return '';
 }
 
+// The leading command word(s) to auto-allow as "same kind" — claude's engine then
+// matches future calls against `Bash(<prefix>:*)`. Skip FOO=bar env assignments, take
+// the program word, and add one following sub-command word when it looks like one (not
+// a flag/path/operator), so `git commit -m x` → "git commit" and `ls -la` → "ls".
+function bashPrefix(input: unknown): string | null {
+  const cmd =
+    input && typeof input === 'object' ? (input as { command?: unknown }).command : undefined;
+  if (typeof cmd !== 'string' || !cmd.trim()) return null;
+  const toks = cmd.trim().split(/\s+/);
+  let i = 0;
+  while (i < toks.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(toks[i])) i++;
+  const prog = toks[i];
+  if (!prog || !/^[A-Za-z./_-][\w./-]*$/.test(prog)) return null; // not a clean program word
+  const next = toks[i + 1];
+  return next && /^[A-Za-z][\w-]*$/.test(next) ? `${prog} ${next}` : prog;
+}
+
+// Derive the session-scoped rule for "allow + remember same kind", or null when it
+// doesn't apply: questions/plans aren't repeatable, and a Bash command with no clean
+// prefix can't be generalized. Non-Bash tools get a tool-wide rule (no ruleContent).
+function rememberRuleFor(a: ApprovalInfo): PermissionRule | null {
+  if (a.toolName === 'AskUserQuestion' || isPlan(a)) return null;
+  if (a.toolName === 'Bash') {
+    const p = bashPrefix(a.input);
+    return p ? { toolName: 'Bash', ruleContent: `${p}:*` } : null;
+  }
+  return { toolName: a.toolName };
+}
+
+// The human-readable scope shown on the "remember" button.
+function rememberLabel(rule: PermissionRule): string {
+  if (rule.toolName === 'Bash' && rule.ruleContent) {
+    return rule.ruleContent.replace(/:\*$/, ''); // "git commit:*" → "git commit"
+  }
+  return rule.toolName;
+}
+
 type OnDecide = (
   id: string,
   behavior: 'allow' | 'deny',
   answers?: Record<string, string[]>,
   message?: string,
+  rememberRule?: PermissionRule,
 ) => void;
 
 // The hotkey accepts metaKey || ctrlKey on every platform; only the hint label is
@@ -68,6 +106,9 @@ export function ApprovalPanel({
     return <QuestionForm approval={approval} onDecide={onDecide} active={active} />;
   }
   const plan = isPlan(approval) ? planText(approval.input) : '';
+  // "Allow + remember same kind" for the rest of the session (claude's engine matches
+  // future calls). Null for questions/plans and Bash commands with no clean prefix.
+  const rule = rememberRuleFor(approval);
   return (
     <div className="approval-card">
       <div className="approval-head">
@@ -87,6 +128,15 @@ export function ApprovalPanel({
           {isPlan(approval) ? '批准并实施' : '批准'}
           {active && <span className="approval-btn-kbd">{SHORTCUT_HINT}</span>}
         </button>
+        {rule && (
+          <button
+            className="approval-btn approve-always"
+            title="本次会话内自动批准同类调用，不再询问"
+            onClick={() => onDecide(approval.id, 'allow', undefined, undefined, rule)}
+          >
+            批准，并自动允许后续 <code className="approval-rule">{rememberLabel(rule)}</code>
+          </button>
+        )}
         <button className="approval-btn deny" onClick={() => onDecide(approval.id, 'deny')}>
           {isPlan(approval) ? '继续规划' : '拒绝'}
         </button>

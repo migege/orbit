@@ -265,9 +265,11 @@ func (s *mcpServer) permissionPrompt(args map[string]interface{}) map[string]int
 			// AskUserQuestion's "answer" rides back as updatedInput.answers (question
 			// text -> picked labels); claude reads it and formats the tool result.
 			if getString(args, "tool_name") == "AskUserQuestion" {
-				return toolResult(allowJSON(askQuestionInput(args["input"], dec.Answers)), false)
+				return toolResult(allowJSON(askQuestionInput(args["input"], dec.Answers), nil), false)
 			}
-			return toolResult(allowJSON(args["input"]), false)
+			// "Allow + remember same kind": add a session-scoped permission rule so
+			// claude's own engine auto-allows future matching calls without re-prompting.
+			return toolResult(allowJSON(args["input"], rememberPermissions(dec.RememberRule)), false)
 		case "DENIED":
 			msg := dec.Message
 			if msg == "" {
@@ -299,11 +301,34 @@ func askQuestionInput(input interface{}, answers map[string][]string) map[string
 	return out
 }
 
-func allowJSON(input interface{}) string {
+// rememberPermissions turns a "remember same kind" rule into claude's updatedPermissions
+// payload: add the rule for this session only (claude's engine matches future calls).
+// Returns nil when there's no rule, so allowJSON omits the field (the common case).
+func rememberPermissions(rule *PermissionRule) []interface{} {
+	if rule == nil || rule.ToolName == "" {
+		return nil
+	}
+	r := map[string]interface{}{"toolName": rule.ToolName}
+	if rule.RuleContent != "" {
+		r["ruleContent"] = rule.RuleContent
+	}
+	return []interface{}{map[string]interface{}{
+		"type":        "addRules",
+		"rules":       []interface{}{r},
+		"behavior":    "allow",
+		"destination": "session",
+	}}
+}
+
+func allowJSON(input interface{}, updatedPermissions []interface{}) string {
 	if input == nil {
 		input = map[string]interface{}{}
 	}
-	b, err := json.Marshal(map[string]interface{}{"behavior": "allow", "updatedInput": input})
+	out := map[string]interface{}{"behavior": "allow", "updatedInput": input}
+	if len(updatedPermissions) > 0 {
+		out["updatedPermissions"] = updatedPermissions
+	}
+	b, err := json.Marshal(out)
 	if err != nil {
 		return `{"behavior":"allow","updatedInput":{}}`
 	}
