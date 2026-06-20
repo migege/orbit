@@ -1,4 +1,4 @@
-import { Prisma, RunStatus, TaskStatus } from '@prisma/client';
+import { CreatorType, Prisma, RunStatus, TaskStatus } from '@prisma/client';
 
 // Sessions that could still be working a task: live (RUNNING/AWAITING_INPUT/
 // INTERRUPTED) or queued for a runner slot (PENDING). Mirrors the reaper's LIVE
@@ -37,5 +37,39 @@ export async function reclaimStalledTask(
   await tx.task.updateMany({
     where: { id: taskId, status: 'IN_PROGRESS' },
     data: { status: resetTo },
+  });
+}
+
+/**
+ * Record a run failure as a comment on the task, so the failure and its reason surface
+ * on the task's own timeline instead of being buried in the session transcript (a run
+ * that died on a Claude API/content-filter error otherwise just parks silently). The
+ * comment is attributed to the task's assignee agent — the agent meant to run it —
+ * falling back to the task's creator when there is no assignee.
+ *
+ * Call from the same transaction that finalizes a task-bound session as FAILED, gated on
+ * that finalization actually happening (so one failure -> one comment). Independent of
+ * the task's own status, so it also covers a run that died before its agent ever moved
+ * the task to IN_PROGRESS.
+ */
+export async function postRunFailureComment(
+  tx: Prisma.TransactionClient,
+  taskId: string,
+  reason: string,
+): Promise<void> {
+  const task = await tx.task.findUnique({
+    where: { id: taskId },
+    select: { assigneeId: true, creatorType: true, creatorId: true },
+  });
+  if (!task) return;
+  await tx.taskComment.create({
+    data: {
+      taskId,
+      authorType: task.assigneeId ? CreatorType.AGENT : task.creatorType,
+      authorId: task.assigneeId ?? task.creatorId,
+      body:
+        `**执行失败（系统自动记录）**\n\n本任务的一次执行会话因运行错误中止，未完成。\n\n` +
+        `失败原因：\n${reason}\n\n可重新运行本任务重试。`,
+    },
   });
 }

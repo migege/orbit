@@ -3,7 +3,7 @@ import { RunStatus, TaskStatus } from '@prisma/client';
 import { RunEventType, isApiErrorText } from '@orbit/shared';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
-import { reclaimStalledTask } from '../tasks/reclaim-stalled-task';
+import { postRunFailureComment, reclaimStalledTask } from '../tasks/reclaim-stalled-task';
 import { RealtimeService } from './realtime.service';
 
 const REAP_INTERVAL_MS = 30_000;
@@ -110,6 +110,7 @@ export class ReaperService implements OnModuleInit, OnModuleDestroy {
               s.taskId,
               'run failed (API error)',
               TaskStatus.FAILED,
+              text,
             );
             continue;
           }
@@ -144,6 +145,9 @@ export class ReaperService implements OnModuleInit, OnModuleDestroy {
     taskId: string | null,
     reason: string,
     resetTaskTo: TaskStatus = TaskStatus.OPEN,
+    // Detail recorded on the task comment for a genuine failure (resetTaskTo=FAILED);
+    // defaults to `reason`. Lets the API-error backstop surface the actual error text.
+    failureDetail?: string,
   ): Promise<void> {
     const ok = await this.prisma.$transaction(async (tx) => {
       const res = await tx.session.updateMany({
@@ -164,6 +168,11 @@ export class ReaperService implements OnModuleInit, OnModuleDestroy {
       });
       // Reclaim a now-stalled IN_PROGRESS task so it stops showing as running.
       if (taskId) await reclaimStalledTask(tx, taskId, resetTaskTo);
+      // For a genuine failure, record it on the task timeline (independent of whether
+      // the task was IN_PROGRESS, so a run that never reached IN_PROGRESS is covered).
+      if (taskId && resetTaskTo === TaskStatus.FAILED) {
+        await postRunFailureComment(tx, taskId, failureDetail ?? reason);
+      }
       return true;
     });
     if (!ok) return;

@@ -45,7 +45,7 @@ import { generateToken, generateUserCode, sha256 } from '../common/crypto.util';
 import { PrismaService } from '../prisma/prisma.service';
 import { QueueService } from '../queue/queue.service';
 import { RealtimeService } from '../realtime/realtime.service';
-import { reclaimStalledTask } from '../tasks/reclaim-stalled-task';
+import { postRunFailureComment, reclaimStalledTask } from '../tasks/reclaim-stalled-task';
 import { CurrentRunner } from './current-runner.decorator';
 import { RunnerAuthGuard } from './runner-auth.guard';
 
@@ -570,6 +570,7 @@ export class RunnerApiController {
           data: { status: 'ANSWERED', answeredAt: new Date() },
         });
         await reclaimStalledTask(tx, session.taskId!, TaskStatus.FAILED);
+        await postRunFailureComment(tx, session.taskId!, dto.result || 'run failed');
       }
       return true;
     });
@@ -697,6 +698,10 @@ export class RunnerApiController {
           session.taskId,
           effectiveStatus === RunStatus.FAILED ? TaskStatus.FAILED : TaskStatus.OPEN,
         );
+        // Genuine failure (not a user cancel): leave a note on the task explaining it.
+        if (effectiveStatus === RunStatus.FAILED) {
+          await postRunFailureComment(tx, session.taskId, dto.error || dto.result || 'run failed');
+        }
       }
       return true;
     });
