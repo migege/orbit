@@ -1,8 +1,9 @@
 import {
   AppstoreOutlined,
+  ArrowDownOutlined,
   ArrowUpOutlined,
   CheckCircleFilled,
-  CheckCircleOutlined,
+  CheckOutlined,
   ClockCircleOutlined,
   CloseCircleFilled,
   CloseOutlined,
@@ -45,7 +46,7 @@ import {
   updateSessionConfig,
   uploadAttachment,
 } from '../api';
-import { StreamingMessage, Transcript, type TurnImage } from './Transcript';
+import { ChatImage, StreamingMessage, Transcript, type TurnImage } from './Transcript';
 import { ApprovalPanel } from './ApprovalPanel';
 import type { Runner } from './TasksSidePanel';
 
@@ -284,6 +285,9 @@ export function AgentView({ runner }: { runner: Runner }) {
   // Smart auto-scroll: only keep pinned to the bottom when the user is already there, so
   // reading history (or jumping to the sticky prompt) isn't yanked back by streaming updates.
   const atBottomRef = useRef(true);
+  // Render mirror of atBottomRef: drives the floating "jump to bottom" button, which shows
+  // only while the user has scrolled up off the live tail. (The ref alone can't re-render.)
+  const [atBottom, setAtBottom] = useState(true);
   // Last observed scrollTop, so the scroll handler can tell a genuine user scroll-up from a
   // programmatic re-pin or a late scroll event fired after streaming grew the container.
   const lastTopRef = useRef(0);
@@ -304,6 +308,7 @@ export function AgentView({ runner }: { runner: Runner }) {
     if (el.scrollHeight - top - el.clientHeight < 80) atBottomRef.current = true;
     else if (top < lastTopRef.current - 1) atBottomRef.current = false;
     lastTopRef.current = top;
+    setAtBottom(atBottomRef.current); // React bails out when unchanged, so no per-scroll re-render
     const topY = el.getBoundingClientRect().top;
     const bubbles = Array.from(
       el.querySelectorAll<HTMLElement>('.chat-user:not(.chat-queued)'),
@@ -314,6 +319,10 @@ export function AgentView({ runner }: { runner: Runner }) {
       else break;
     }
     setStuck(cur ? { seq: cur.getAttribute('data-seq'), text: cur.textContent || '' } : null);
+  }, []);
+  // Snap back to the live tail; the scroll events it fires re-pin atBottomRef via measure().
+  const scrollToBottom = useCallback(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
   }, []);
   // Width of the left session column; drag the divider to resize, persisted to
   // localStorage so the choice survives a reload.
@@ -508,6 +517,7 @@ export function AgentView({ runner }: { runner: Runner }) {
     });
     atBottomRef.current = true; // a freshly opened/switched session starts pinned to the latest
     lastTopRef.current = 0;
+    setAtBottom(true); // hide the jump-to-bottom button until the new session reports otherwise
     if (!selectedId) {
       setEvents([]);
       seen.current = new Set();
@@ -850,6 +860,21 @@ export function AgentView({ runner }: { runner: Runner }) {
     },
     onError: (e: Error) => message.error(e.message),
   });
+  // ⌘/Ctrl+D completes the open session — the keyboard twin of the ✓ on its row. Fires
+  // even while the composer is focused; preventDefault swallows the browser's bookmark
+  // shortcut. Only on the active tab (where Complete applies); for a live session this
+  // also ends it, same as the button. The archive toast offers undo.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key.toLowerCase() !== 'd' || e.shiftKey || e.altKey) return;
+      if (!(e.metaKey || e.ctrlKey)) return;
+      if (view !== 'active' || !selected) return;
+      e.preventDefault();
+      archiveMut.mutate(selected.id);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [view, selected, archiveMut]);
   const deleteMut = useMutation({
     mutationFn: (id: string) => deleteSession(id),
     onSuccess: (_d, id) => {
@@ -1154,13 +1179,13 @@ export function AgentView({ runner }: { runner: Runner }) {
                     {view === 'active' ? (
                       <Tooltip title={ended ? 'Complete' : 'Complete & end session'} placement="top">
                         <span
-                          className="session-kebab"
+                          className="session-kebab session-complete"
                           onClick={(e) => {
                             e.stopPropagation();
                             archiveMut.mutate(s.id);
                           }}
                         >
-                          <CheckCircleOutlined />
+                          <CheckOutlined />
                         </span>
                       </Tooltip>
                     ) : (
@@ -1246,6 +1271,7 @@ export function AgentView({ runner }: { runner: Runner }) {
           </button>
         )}
 
+        <div className="agent-scroll-wrap">
         {selectedId ? (
           <div className="agent-sessions" ref={scrollRef}>
             {selected &&
@@ -1270,7 +1296,7 @@ export function AgentView({ runner }: { runner: Runner }) {
                 {turnImages[q.turnId]?.length > 0 && (
                   <div className="chat-images">
                     {turnImages[q.turnId].map((im, i) => (
-                      <img key={i} className="chat-image" src={im.url} alt="" />
+                      <ChatImage key={i} src={im.url} />
                     ))}
                   </div>
                 )}
@@ -1305,6 +1331,12 @@ export function AgentView({ runner }: { runner: Runner }) {
         ) : (
           <div className="agent-sessions" />
         )}
+        {selectedId && !atBottom && (
+          <button className="scroll-to-bottom" aria-label="滚动到底部" onClick={scrollToBottom}>
+            <ArrowDownOutlined />
+          </button>
+        )}
+        </div>
 
       <div className="agent-composer">
         {agentReadOnly && shownAgentName && (
