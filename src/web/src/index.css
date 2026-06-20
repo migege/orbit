@@ -2625,6 +2625,18 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.tdp-session-agent {
+  font-size: 11px;
+  color: #646a73;
+  background: #f0f1f2;
+  padding: 1px 7px;
+  border-radius: 10px;
+  flex: none;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .tdp-session-status {
   font-size: 11px;
   color: #8f959e;

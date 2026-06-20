@@ -220,7 +220,14 @@ export class TasksService {
         assignee: { select: { id: true, name: true, model: true } },
         // author is polymorphic (no FK), so names are resolved separately below.
         comments: { orderBy: { createdAt: 'asc' } },
-        sessions: { select: { id: true, title: true, status: true } },
+        sessions: {
+          select: {
+            id: true,
+            title: true,
+            status: true,
+            agent: { select: { name: true } },
+          },
+        },
         creatorSession: { select: { id: true, title: true, status: true } },
         // Prerequisites this task waits on, and the tasks blocked until this one is DONE.
         dependsOn: {

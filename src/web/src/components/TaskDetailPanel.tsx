@@ -578,6 +578,7 @@ export function TaskDetailPanel({
                 <Link key={s.id} to={`/sessions/${encodeId(s.id)}`} className="tdp-session">
                   <span className={`tdp-dot ${s.status}`} />
                   <span className="tdp-session-title">{s.title || '未命名会话'}</span>
+                  {s.agent?.name && <span className="tdp-session-agent">{s.agent.name}</span>}
                   <span className="tdp-session-status">{s.status}</span>
                 </Link>
               ))
