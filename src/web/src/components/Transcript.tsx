@@ -6,6 +6,7 @@ import {
   CodeOutlined,
   DownOutlined,
   EditOutlined,
+  EyeOutlined,
   FileAddOutlined,
   FileTextOutlined,
   FolderOpenOutlined,
@@ -18,6 +19,7 @@ import {
   SearchOutlined,
   ToolOutlined,
 } from '@ant-design/icons';
+import { Image } from 'antd';
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { isApiErrorText } from '@orbit/shared';
@@ -210,7 +212,7 @@ function NodeView({ node, live }: { node: Node; live?: boolean }) {
           {node.images && node.images.length > 0 ? (
             <div className="chat-images">
               {node.images.map((im, i) => (
-                <img key={i} className="chat-image" src={im.url} alt="" />
+                <ChatImage key={i} src={im.url} />
               ))}
             </div>
           ) : (
@@ -267,7 +269,28 @@ function AttachmentImage({ id }: { id: string }) {
     };
   }, [id]);
   if (!url) return <span className="chat-image chat-image-loading" />;
-  return <img className="chat-image" src={url} alt="" />;
+  return <ChatImage src={url} />;
+}
+
+// A user-sent image: click to open AntD's full-screen preview (zoom/rotate, ESC to close).
+// The displayed src is already the full-resolution image (just CSS-constrained to 220px),
+// so the lightbox shows it at native size with no extra fetch. The hover mask is the
+// click affordance — without it a bare <img> gives no hint it's interactive.
+export function ChatImage({ src }: { src: string }) {
+  return (
+    <Image
+      className="chat-image"
+      src={src}
+      alt="用户发送的图片"
+      preview={{
+        mask: (
+          <span className="chat-image-mask">
+            <EyeOutlined /> 预览
+          </span>
+        ),
+      }}
+    />
+  );
 }
 
 // ── Markdown ────────────────────────────────────────────────────────────────
@@ -561,13 +584,22 @@ function ToolResult({
   markdown?: boolean;
 }) {
   const text = resultText(content);
-  // A successful tool with no textual output renders nothing; but an error with no
-  // output must still surface — otherwise a failed tool looks like it never ran.
-  if (!text && !isError) return null;
+  const images = resultImages(content);
+  // A successful tool with no output renders nothing; but an error with no output must
+  // still surface — otherwise a failed tool looks like it never ran.
+  if (!text && images.length === 0 && !isError) return null;
   return (
     <div className={`chat-result${isError ? ' is-error' : ''}${compact ? ' compact' : ''}`}>
+      {images.length > 0 && (
+        <div className="chat-images">
+          {images.map((src, i) => (
+            <ChatImage key={i} src={src} />
+          ))}
+        </div>
+      )}
       {!text ? (
-        <div className="chat-result-empty">✖ error</div>
+        // Image-only success shows just the image above; only a no-output error needs text here.
+        isError && <div className="chat-result-empty">✖ error</div>
       ) : markdown && !isError ? (
         <MD>{text}</MD>
       ) : (
@@ -834,10 +866,24 @@ function resultText(content: any): string {
       .map((b: any) => {
         if (typeof b === 'string') return b;
         if (b && b.type === 'text') return b.text ?? '';
-        if (b && b.type === 'image') return '[image]';
+        if (b && b.type === 'image') return ''; // rendered inline by resultImages()
         return safeJson(b);
       })
+      .filter((s) => s !== '')
       .join('\n');
   }
   return safeJson(content);
+}
+
+// Inline images carried by a tool_result's content blocks — e.g. Read on a .png, or an
+// MCP tool returning a screenshot. The base64 data is passed through verbatim from the
+// runner, so render it as a data URL. A plain-text result yields [].
+function resultImages(content: any): string[] {
+  if (!Array.isArray(content)) return [];
+  const urls: string[] = [];
+  for (const b of content) {
+    const s = b && b.type === 'image' ? b.source : null;
+    if (s && s.data && s.media_type) urls.push(`data:${s.media_type};base64,${s.data}`);
+  }
+  return urls;
 }
