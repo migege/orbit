@@ -535,9 +535,12 @@ body {
   font-size: 13px;
   color: #8f959e;
 }
+.rd-page {
+  max-width: 920px;
+  margin: 0 auto;
+}
 .rd-section {
   margin-top: 28px;
-  max-width: 860px;
 }
 .rd-section-title {
   font-size: 15px;
@@ -877,15 +880,17 @@ body {
   display: flex;
   height: 100%;
   min-height: 0;
-  /* Page gutter for the two-pane console. The app-view region is full-bleed; the
-     console carries its own gutter so content doesn't hug the window edges. */
-  padding: 24px 32px;
+  /* Horizontal page gutter only. The vertical gutter lives on each pane below, so the
+     divider (a flex child) can stretch the full panel height instead of being inset by
+     a wrapper that also holds it — matching the full-bleed .app-nav border. */
+  padding: 0 32px;
 }
 .session-col {
   flex: none;
   display: flex;
   flex-direction: column;
   min-height: 0;
+  padding: 24px 0;
 }
 /* Draggable divider between the session list and the conversation. The visible
    1px line matches the old column border; ::before widens the grab area. */
@@ -977,6 +982,7 @@ body {
   display: flex;
   flex-direction: column;
   height: 100%;
+  padding: 24px 0;
 }
 .agent-header {
   display: flex;
@@ -1109,8 +1115,13 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* Last assistant reply, flattened to one line. Sits between the title (identity) and
-   the meta (time/turns/cost) — darker than meta so it reads as content, not metadata. */
+.session-time {
+  flex: none;
+  font-size: 12.5px;
+  color: #a8adb5;
+}
+/* Last assistant reply, flattened to one line. Sits below the title row — darker
+   than the time so it reads as content, not metadata. */
 .session-preview {
   font-size: 13px;
   color: #4e5969;

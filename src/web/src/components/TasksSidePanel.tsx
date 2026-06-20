@@ -27,7 +27,7 @@ import { useLocation, useMatch, useNavigate } from 'react-router-dom';
 import type { SlashCommandInfo } from '@orbit/shared';
 import { api, clearToken } from '../api';
 import { decodeId, encodeId } from '../lib/idCodec';
-import { sessionQuery } from '../lib/queries';
+import { sessionQuery, sessionsQuery } from '../lib/queries';
 
 // Feishu-style top navigation. Each entry routes to "/<key>" (they all share the
 // Tasks view for now — only the heading differs). "Runners" opens the runners
@@ -224,16 +224,29 @@ export function TasksSidePanel() {
   });
   const onlineRunnerIds = new Set((runners.data ?? []).filter((r) => r.online).map((r) => r.id));
 
-  // Real task counts for the top "Active" item and the "未分组" (no-list) bucket. Reuses
-  // the same ['tasks'] cache the main view populates, so it adds no extra network request.
+  // Task count for the "未分组" (no-list) bucket. Reuses the ['tasks'] cache the main
+  // view populates, so it adds no extra network request.
   const tasks = useQuery({
     queryKey: ['tasks'],
     queryFn: () => api<any[]>('/tasks'),
     refetchInterval: (q) =>
       (q.state.data ?? []).some((t: any) => t.running || t.queued) ? 5_000 : 15_000,
   });
-  const activeCount = tasks.data?.length ?? 0;
   const unlistedCount = (tasks.data ?? []).filter((t: any) => !t.listId).length;
+
+  // The "Active" badge must match what ActiveSessionsView lists — live sessions only:
+  // RUNNING or PENDING, excluding system sessions (NOT the total task count). Shares the
+  // ['sessions', null, 'active'] cache that view fills, so it adds no extra request.
+  const activeSessions = useQuery({
+    ...sessionsQuery({ view: 'active' }),
+    refetchInterval: (q) =>
+      (q.state.data ?? []).some((s: any) => s.status === 'RUNNING' || s.status === 'PENDING')
+        ? 5_000
+        : 15_000,
+  });
+  const activeCount = (activeSessions.data ?? []).filter(
+    (s: any) => s.source !== 'system' && (s.status === 'RUNNING' || s.status === 'PENDING'),
+  ).length;
 
   // Open an agent's console — the same destination the runner detail page uses.
   // Config-only agents (no runner) have no console to open.
