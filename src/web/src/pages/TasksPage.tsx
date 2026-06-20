@@ -2,6 +2,7 @@ import {
   CheckCircleFilled,
   DeleteOutlined,
   LoadingOutlined,
+  LockOutlined,
   PlayCircleOutlined,
   PlusOutlined,
   SortAscendingOutlined,
@@ -181,8 +182,11 @@ export function TasksPage() {
 
   // /lists/<base62> renders a single user list instead of all tasks: fetch that list
   // and render its tasks (GET /task-lists/:id includes them). decodeId -> the UUID.
+  // "/lists/none" is the virtual "未分组" view — tasks with no list. It isn't a real
+  // list id, so skip decoding and keep listId null; the all-tasks data is filtered below.
   const listMatch = useMatch('/lists/:key');
-  const listId = listMatch ? decodeId(listMatch.params.key) : null;
+  const isUnlisted = listMatch?.params.key === 'none';
+  const listId = listMatch && !isUnlisted ? decodeId(listMatch.params.key) : null;
   const listQ = useQuery({
     queryKey: ['task-list', listId],
     queryFn: () => api<{ id: string; title: string; tasks: any[] }>(`/task-lists/${listId}`),
@@ -197,7 +201,7 @@ export function TasksPage() {
   // changes (different list/section, or a different status filter) to avoid running
   // tasks the user can no longer see.
   useEffect(() => setSelectedIds(new Set()), [listId, loc.pathname, filter]);
-  const pageTitle = isListView ? (listQ.data?.title ?? '') : 'Active';
+  const pageTitle = isListView ? (listQ.data?.title ?? '') : isUnlisted ? '未分组' : 'Active';
 
   // The console is keyed by runner: /agents/<agent> names the agent (its runner is
   // derived below), or /sessions/<id> from which we resolve the runner behind it.
@@ -275,8 +279,11 @@ export function TasksPage() {
   });
 
   const taskRows = useMemo(
-    () => (tasks.data ?? []).filter((t: any) => matchesFilter(t.status, filter)),
-    [tasks.data, filter],
+    () =>
+      (tasks.data ?? [])
+        .filter((t: any) => (isUnlisted ? !t.listId : true))
+        .filter((t: any) => matchesFilter(t.status, filter)),
+    [tasks.data, filter, isUnlisted],
   );
 
   const listRows = useMemo(
@@ -389,6 +396,18 @@ export function TasksPage() {
         <div className="task-title-cell">
           <StatusCircle status={r.status} running={r.running} queued={r.queued} />
           <span className="task-title">{r.title}</span>
+          {r.blocked ? (
+            <Tooltip
+              title={r.dependencyState === 'BLOCKED_FAILED' ? '前置任务已取消，需处理' : '等待前置任务完成'}
+            >
+              <LockOutlined
+                style={{
+                  fontSize: 12,
+                  color: r.dependencyState === 'BLOCKED_FAILED' ? '#d4380d' : '#8c8c8c',
+                }}
+              />
+            </Tooltip>
+          ) : null}
         </div>
         <div className="task-creator">
           {assigneeName ? (
@@ -513,7 +532,11 @@ export function TasksPage() {
           </div>
 
           {(() => {
-            const empty = isListView ? 'No tasks in this list yet.' : 'No tasks yet.';
+            const empty = isListView
+              ? 'No tasks in this list yet.'
+              : isUnlisted
+                ? '暂无未分组任务。'
+                : 'No tasks yet.';
             return (
               <>
                 {rows.length === 0 ? (

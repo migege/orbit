@@ -12,6 +12,12 @@ import (
 
 const heartbeatInterval = 30 * time.Second
 
+// On shutdown the runner stops claiming, signals each session to drain, and waits up
+// to this long for in-flight turns to finish + ack before exiting. Idle sessions detach
+// immediately; only a mid-turn session consumes any of this budget. Keep systemd's
+// TimeoutStopSec comfortably above it (see service.go) so we exit before any SIGKILL.
+const shutdownDrainTimeout = 120 * time.Second
+
 func runLoop(cfg *RunnerConfig) {
 	t := NewTransport(cfg.ServerURL, cfg.RunnerToken)
 
@@ -81,6 +87,10 @@ func runLoop(cfg *RunnerConfig) {
 				if idle < 0 {
 					idle = 0
 				}
+				if loopCtx.Err() != nil {
+					idle = 0 // draining: keep heartbeating (so the reaper spares our sessions)
+					// but advertise no capacity so the server routes no new work here
+				}
 				assetMu.Lock()
 				cmds, skills := hbCommands, hbSkills
 				assetMu.Unlock()
@@ -112,7 +122,9 @@ func runLoop(cfg *RunnerConfig) {
 		active[job.SessionID] = cancel
 		mu.Unlock()
 		go func(j *ClaimedSession, dir string) {
-			runInteractiveSession(t, j, jobCtx, dir)
+			// loopCtx doubles as the shutdown signal: cancelled on SIGTERM/SIGINT, it tells
+			// the session to drain (finish its turn, then detach) rather than be killed.
+			runInteractiveSession(t, j, jobCtx, loopCtx, dir)
 			mu.Lock()
 			delete(active, j.SessionID)
 			mu.Unlock()
@@ -166,8 +178,13 @@ func runLoop(cfg *RunnerConfig) {
 		startSession(job)
 	}
 
-	close(hbStop)
-	logln("runner stopping; waiting for active jobs...")
+	logln("runner stopping; draining active sessions...")
+	// Keep the heartbeat goroutine alive through the drain: the server's reaper force-fails
+	// any live session whose runner has been silent >90s, so going quiet while we finish an
+	// in-flight turn would get the very session we're trying to preserve marked FAILED.
+	// Give sessions a little longer than their own drain budget to detach cleanly; past
+	// that we exit anyway (process teardown / systemd SIGKILL reaps any stragglers).
+	drainDeadline := time.Now().Add(shutdownDrainTimeout + 30*time.Second)
 	for {
 		mu.Lock()
 		n := len(active)
@@ -175,8 +192,13 @@ func runLoop(cfg *RunnerConfig) {
 		if n == 0 {
 			break
 		}
+		if time.Now().After(drainDeadline) {
+			logln(fmt.Sprintf("drain deadline reached; %d session(s) still active, exiting", n))
+			break
+		}
 		time.Sleep(200 * time.Millisecond)
 	}
+	close(hbStop)
 }
 
 func logln(args ...interface{}) {
