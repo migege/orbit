@@ -850,6 +850,21 @@ export function AgentView({ runner }: { runner: Runner }) {
     },
     onError: (e: Error) => message.error(e.message),
   });
+  // ⌘/Ctrl+D completes the open session — the keyboard twin of the ✓ on its row. Fires
+  // even while the composer is focused; preventDefault swallows the browser's bookmark
+  // shortcut. Only on the active tab (where Complete applies); for a live session this
+  // also ends it, same as the button. The archive toast offers undo.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key.toLowerCase() !== 'd' || e.shiftKey || e.altKey) return;
+      if (!(e.metaKey || e.ctrlKey)) return;
+      if (view !== 'active' || !selected) return;
+      e.preventDefault();
+      archiveMut.mutate(selected.id);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [view, selected, archiveMut]);
   const deleteMut = useMutation({
     mutationFn: (id: string) => deleteSession(id),
     onSuccess: (_d, id) => {
