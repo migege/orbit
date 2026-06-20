@@ -459,9 +459,12 @@ export function TasksPage() {
   };
 
   return (
-    <div className="tasks-layout">
+    <div className="app-shell">
       <TasksSidePanel />
-      <main className="tasks-main">
+      <main className="app-main">
+        {/* Most views are document-style (page gutter + own scroll); the agent
+            console and the runner install guide fill the region edge-to-edge. */}
+        <div className={`app-view${inAgentView || showRegister ? '' : ' app-view--doc'}`}>
         {showRegister ? (
           <RunnerRegisterGuide onClose={() => navigate('/tasks')} />
         ) : showRunners ? (
@@ -594,6 +597,7 @@ export function TasksPage() {
       )}
           </>
         )}
+        </div>
       </main>
 
       {selectedTaskId && (
