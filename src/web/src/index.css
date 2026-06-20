@@ -961,10 +961,43 @@ body {
   flex: none;
   margin: 20px 0 4px;
 }
+/* Wraps the scroll area so the floating "jump to bottom" button can anchor to its
+   bottom edge (= just above the composer) without overlapping the input. */
+.agent-scroll-wrap {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
 .agent-sessions {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+}
+/* ChatGPT-style snap-to-latest button; only mounted while scrolled up off the tail. */
+.scroll-to-bottom {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 1px solid #e5e6eb;
+  background: #fff;
+  color: #1f2329;
+  font-size: 15px;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  transition: background 0.15s, box-shadow 0.15s;
+}
+.scroll-to-bottom:hover {
+  background: #f7f8fa;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.16);
 }
 .session-row {
   position: relative;
