@@ -43,6 +43,7 @@ import { generateToken, generateUserCode, sha256 } from '../common/crypto.util';
 import { PrismaService } from '../prisma/prisma.service';
 import { QueueService } from '../queue/queue.service';
 import { RealtimeService } from '../realtime/realtime.service';
+import { reclaimStalledTask } from '../tasks/reclaim-stalled-task';
 import { CurrentRunner } from './current-runner.decorator';
 import { RunnerAuthGuard } from './runner-auth.guard';
 
@@ -628,6 +629,12 @@ export class RunnerApiController {
         where: { sessionId, status: { not: 'ANSWERED' } },
         data: { status: 'ANSWERED', answeredAt: new Date() },
       });
+      // Abnormal end (FAILED/CANCELLED): if the agent never got to finalize its
+      // task, reclaim a now-stalled IN_PROGRESS task so it stops looking like it's
+      // still running. SUCCEEDED is left alone — the agent owns DONE.
+      if (session.taskId && effectiveStatus !== RunStatus.SUCCEEDED) {
+        await reclaimStalledTask(tx, session.taskId);
+      }
       return true;
     });
     if (!finalized) return { ok: true };

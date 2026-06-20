@@ -87,14 +87,23 @@ const compareBy = (a: any, b: any, field: string): number => {
 const cap = (s: string): string =>
   s.charAt(0) + s.slice(1).toLowerCase().replace('_', ' ');
 
-function StatusCircle({ status }: { status: string }) {
+// `running` is the live ground truth (a PENDING/RUNNING session exists), distinct from
+// the agent-maintained `status` label which can lag. The spinning indicator means
+// "actually running now", so it's gated on `running`: an IN_PROGRESS task whose session
+// already ended (failed/cancelled without the agent finalizing it) shows a static dot,
+// not a perpetual spinner.
+function StatusCircle({ status, running }: { status: string; running?: boolean }) {
   let node: React.ReactNode;
   switch (status) {
     case 'DONE':
       node = <CheckCircleFilled style={{ color: '#2ea121', fontSize: 16 }} />;
       break;
     case 'IN_PROGRESS':
-      node = <LoadingOutlined spin style={{ color: '#3370ff', fontSize: 15 }} />;
+      node = running ? (
+        <LoadingOutlined spin style={{ color: '#3370ff', fontSize: 15 }} />
+      ) : (
+        <span className="status-circle filled blue" />
+      );
       break;
     case 'OPEN':
       node = <span className="status-circle hollow blue" />;
@@ -354,7 +363,7 @@ export function TasksPage() {
           <Checkbox checked={selectedIds.has(r.id)} onChange={() => toggleOne(r.id)} />
         </div>
         <div className="task-title-cell">
-          <StatusCircle status={r.status} />
+          <StatusCircle status={r.status} running={r.running} />
           <span className="task-title">{r.title}</span>
           {r.running && (
             <Tooltip title="运行中">

@@ -696,6 +696,12 @@ body {
 .status-circle.hollow.muted {
   border-color: #dee0e3;
 }
+/* IN_PROGRESS label but no live session: static blue dot (vs. the spinner used while
+   actually running). Distinct from OPEN's hollow ring. */
+.status-circle.filled.blue {
+  border: 1.5px solid #3370ff;
+  background: radial-gradient(circle at center, #3370ff 0 42%, transparent 44%);
+}
 
 /* ---- Agent console: two-pane master-detail (session list | conversation) ---- */
 .agent-split {
