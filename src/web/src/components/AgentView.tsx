@@ -1138,7 +1138,6 @@ export function AgentView({ runner }: { runner: Runner }) {
     : live && !idle
       ? '回合进行中；将在本回合结束后生效'
       : '';
-  const agentHint = live ? '会话开始后不可更改' : '已锁定到该 Agent';
   // Switching session leaves whatever history recall was in progress; reset the cursor
   // so the next Up starts fresh from the (per-session) history.
   useEffect(() => {
@@ -1247,14 +1246,13 @@ export function AgentView({ runner }: { runner: Runner }) {
                   <StatusIcon session={s} />
                 </span>
                 <div className="session-main">
-                  <div className="session-title">{s.title}</div>
+                  <div className="session-title-row">
+                    <div className="session-title">{s.title}</div>
+                    <span className="session-time">{fmtTime(s.lastTurnAt ?? s.createdAt)}</span>
+                  </div>
                   {s.lastAssistantText ? (
                     <div className="session-preview">{plainPreview(s.lastAssistantText)}</div>
                   ) : null}
-                  <div className="session-meta">
-                    {fmtTime(s.lastTurnAt ?? s.createdAt)} · {s.numTurns ?? 0} turns
-                    <span className="session-cost"> · ${(s.costUsd ?? 0).toFixed(2)}</span>
-                  </div>
                 </div>
                 <div className="session-right">
                   <div className="session-actions" onClick={(e) => e.stopPropagation()}>
@@ -1663,12 +1661,10 @@ export function AgentView({ runner }: { runner: Runner }) {
           </Tooltip>
           <span className="composer-pill-spacer" />
           {agentReadOnly && shownAgentName && (
-            <Tooltip title={agentHint}>
-              <span className="composer-pill composer-pill-static">
-                <AppstoreOutlined className="composer-pill-icon" />
-                <span className="composer-pill-static-label">{shownAgentName}</span>
-              </span>
-            </Tooltip>
+            <span className="composer-pill composer-pill-static">
+              <AppstoreOutlined className="composer-pill-icon" />
+              <span className="composer-pill-static-label">{shownAgentName}</span>
+            </span>
           )}
           <Tooltip title={configHint}>
             <span className="composer-pill">
