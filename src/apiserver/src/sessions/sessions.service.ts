@@ -169,6 +169,8 @@ export class SessionsService {
       agentModel: string | null;
       runnerId: string | null;
       runnerName: string | null;
+      taskId: string | null;
+      taskTitle: string | null;
     };
     const rows = await this.prisma.$queryRaw<Row[]>(Prisma.sql`
       SELECT
@@ -188,10 +190,13 @@ export class SessionsService {
         a.name  AS "agentName",
         a.model AS "agentModel",
         r.id    AS "runnerId",
-        r.name  AS "runnerName"
+        r.name  AS "runnerName",
+        s.task_id AS "taskId",
+        t.title   AS "taskTitle"
       FROM session s
       LEFT JOIN agent a  ON a.id = s.agent_id
       LEFT JOIN runner r ON r.id = s.assigned_runner_id
+      LEFT JOIN task t   ON t.id = s.task_id
       WHERE s.owner_id = ${ownerId}::uuid
         ${runnerFilter}
         AND (${visibility})
@@ -216,6 +221,8 @@ export class SessionsService {
       lastAssistantText: r.lastAssistantText,
       agent: r.agentId ? { id: r.agentId, name: r.agentName, model: r.agentModel } : null,
       assignedRunner: r.runnerId ? { id: r.runnerId, name: r.runnerName } : null,
+      taskId: r.taskId,
+      taskTitle: r.taskTitle,
     }));
     // A turn blocked on a permission prompt keeps the session RUNNING, so the
     // list can't tell "running" from "waiting for approval" without this count.

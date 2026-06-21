@@ -168,8 +168,12 @@ export function TaskListView() {
       (q.state.data?.tasks ?? []).some((t: any) => t.running || t.queued) ? 5_000 : 15_000,
   });
   const isListView = !!listId;
-  // Switching lists/sections closes any open detail panel.
-  useEffect(() => setSelectedTaskId(null), [listId, loc.pathname]);
+  // A /tasks/:id deep link (e.g. a session header's "回到任务") opens that task's detail
+  // panel; decodeId -> the UUID TaskDetailPanel fetches by.
+  const taskMatch = useMatch('/tasks/:id');
+  const deepTaskId = taskMatch ? decodeId(taskMatch.params.id) : null;
+  // Switching lists/sections closes any open panel; a deep link opens its task instead.
+  useEffect(() => setSelectedTaskId(deepTaskId), [listId, loc.pathname, deepTaskId]);
   // The selection is scoped to what's currently visible; reset it whenever that set
   // changes (different list/section, or a different status filter) to avoid running
   // tasks the user can no longer see.

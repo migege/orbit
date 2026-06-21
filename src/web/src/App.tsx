@@ -10,7 +10,6 @@ import { LoginPage } from './pages/LoginPage';
 import { RunnerDetailPage } from './pages/RunnerDetailPage';
 import { RunnersPage } from './pages/RunnersPage';
 import { SkillsPage } from './pages/SkillsPage';
-import { TaskDetailPage } from './pages/TaskDetailPage';
 import { TaskListView } from './pages/TaskListView';
 
 // Backward-compat: old links nested a session under its runner with raw UUIDs
@@ -54,6 +53,7 @@ export function App() {
           <Route element={<AppShell />}>
             <Route index element={<TaskListView />} />
             <Route path="tasks" element={<TaskListView />} />
+            <Route path="tasks/:id" element={<TaskListView />} />
             <Route path="lists/:key" element={<TaskListView />} />
             <Route
               path="active"
@@ -103,7 +103,6 @@ export function App() {
             </Route>
           </Route>
           <Route path="/agents/:id/sessions/:sessionId" element={<LegacySessionRedirect />} />
-          <Route path="/tasks/:id" element={<TaskDetailPage />} />
         </>
       )}
     </Routes>

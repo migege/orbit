@@ -1,5 +1,6 @@
 import {
   ArrowDownOutlined,
+  ArrowLeftOutlined,
   ArrowUpOutlined,
   BorderOutlined,
   CheckCircleFilled,
@@ -195,6 +196,52 @@ const plainPreview = (md: string): string =>
     .replace(/[*_~]/g, '') // emphasis marks
     .replace(/\s+/g, ' ')
     .trim();
+
+// Chinese relative time for the header subline: 刚刚 / N 分钟前 / N 小时前, falling back
+// to an absolute month/day stamp beyond a day (same thresholds as fmtTime).
+const fmtTimeCn = (d?: string | null): string => {
+  if (!d) return '';
+  const t = new Date(d).getTime();
+  const diff = Date.now() - t;
+  const min = 60_000;
+  const hour = 60 * min;
+  const day = 24 * hour;
+  if (diff >= 0 && diff < min) return '刚刚';
+  if (diff >= 0 && diff < hour) return `${Math.floor(diff / min)} 分钟前`;
+  if (diff >= 0 && diff < day) return `${Math.floor(diff / hour)} 小时前`;
+  return new Date(t).toLocaleString([], {
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+};
+
+// Chinese state label for the session header — mirrors StatusIcon's branching so the
+// glyph (in the list) and the word (in the header) always agree. The archived
+// "Completed" override is list-only, so it's omitted here.
+function statusLabel(session: any): string {
+  const status: string = session.status;
+  if (status === 'RUNNING') return (session.pendingApprovals ?? 0) > 0 ? '等待审批' : '运行中';
+  if (status === 'AWAITING_INPUT') return '等待你回复';
+  if (status === 'SUCCEEDED') return '已完成';
+  if (status === 'FAILED') {
+    const err: string = typeof session.error === 'string' ? session.error : '';
+    return err.toLowerCase().includes('offline') ? '已断开' : '失败';
+  }
+  if (status === 'PARKED' || status === 'CANCELLED' || status === 'INTERRUPTED') {
+    const reason: string = session.endReason ?? '';
+    const terminal =
+      reason === 'orphaned' ||
+      reason === 'deleted' ||
+      reason === 'completed' ||
+      (status === 'INTERRUPTED' && reason === '');
+    if (!terminal) return '休眠';
+    return reason === 'orphaned' ? '已结束' : status === 'INTERRUPTED' ? '已中断' : '已取消';
+  }
+  return '排队中'; // PENDING
+}
 
 // One glyph per session state. Colour carries the meaning: blue = working,
 // amber = needs a human decision, green = done, red = real failure, grey =
@@ -1221,6 +1268,21 @@ export function AgentView({ runner }: { runner: Runner }) {
   // has no agent in the URL, so fall back to the open session's agent, then runner.
   const headAgentName =
     lockedAgent?.name ?? selected?.agent?.name ?? runner.displayName ?? runner.name;
+  // Header subtitle: the two things the composer below doesn't already show — current
+  // state and when it was last active. (turns/cost dropped; model/agent live in the
+  // composer pills.)
+  const headTime = selected
+    ? fmtTimeCn(selected.lastTurnAt ?? selected.startedAt ?? selected.createdAt)
+    : '';
+  const headSub = composing
+    ? `${headAgentName} · 新会话`
+    : selected
+      ? headTime
+        ? `${statusLabel(selected)} · ${headTime}`
+        : statusLabel(selected)
+      : selectedId
+        ? 'Starting…'
+        : '';
 
   return (
     <div className="agent-split">
@@ -1377,33 +1439,42 @@ export function AgentView({ runner }: { runner: Runner }) {
       <div className="agent-view">
         <div className="agent-header">
           <div className="agent-header-main">
+            {selected?.taskId && !composing && (
+              <button
+                type="button"
+                className="agent-header-task"
+                title={`回到任务 · ${selected.taskTitle ?? ''}`}
+                onClick={() => navigate(`/tasks/${encodeId(selected.taskId)}`)}
+              >
+                <ArrowLeftOutlined />
+                <span className="agent-header-task-name">{selected.taskTitle ?? '回到任务'}</span>
+              </button>
+            )}
             <div className="agent-name">
               {composing ? 'New session' : (selected?.title ?? (selectedId ? 'Starting…' : headAgentName))}
             </div>
-            <div className="agent-sub">
-              {composing
-                ? `${headAgentName} · 新会话`
-                : selected
-                  ? `${selected.numTurns ?? 0} turns · $${(selected.costUsd ?? 0).toFixed(2)}`
-                  : selectedId
-                    ? 'Starting…'
-                    : ''}
-            </div>
+            <div className="agent-sub">{headSub}</div>
           </div>
           {selected && !composing && (
             <>
               <div className="agent-header-spacer" />
-              <Tooltip
-                title={TERMINAL.includes(selected.status) ? 'Delete' : 'Delete & end session'}
-                placement="bottomLeft"
+              <Dropdown
+                trigger={['click']}
+                placement="bottomRight"
+                menu={{
+                  items: [
+                    {
+                      key: 'delete',
+                      icon: <DeleteOutlined />,
+                      danger: true,
+                      label: TERMINAL.includes(selected.status) ? 'Delete' : 'Delete & end session',
+                      onClick: () => deleteMut.mutate(selected.id),
+                    },
+                  ],
+                }}
               >
-                <Button
-                  type="text"
-                  danger
-                  icon={<DeleteOutlined />}
-                  onClick={() => deleteMut.mutate(selected.id)}
-                />
-              </Tooltip>
+                <Button type="text" icon={<MoreOutlined />} title="More actions" />
+              </Dropdown>
             </>
           )}
         </div>
