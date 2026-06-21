@@ -16,9 +16,9 @@ import { sessionsQuery } from '../lib/queries';
 //   正在运行   — Claude is working, nothing to click (RUNNING, no card)
 //   排队中     — waiting for a runner slot (PENDING)
 const GROUPS = [
-  { key: 'attention', label: '需要你回复' },
-  { key: 'running', label: '正在运行' },
-  { key: 'queued', label: '排队中' },
+  { key: 'attention', label: 'Needs you' },
+  { key: 'running', label: 'Running' },
+  { key: 'queued', label: 'Queued' },
 ];
 // Only RUNNING (working / blocked on a card) and PENDING (queued) ever show here.
 const VISIBLE = ['RUNNING', 'PENDING'];
@@ -28,17 +28,17 @@ const hasCard = (s: any): boolean => (s.pendingApprovals ?? 0) > 0;
 const groupOf = (s: any): string =>
   hasCard(s) ? 'attention' : s.status === 'RUNNING' ? 'running' : 'queued';
 
-// Compact Chinese relative time: 刚刚 / N 分钟 / N 小时 / N 天.
+// Compact relative time: just now / Nm / Nh / Nd.
 const fmtAgo = (d?: string | null): string => {
   if (!d) return '';
   const diff = Date.now() - new Date(d).getTime();
   const min = 60_000;
   const hour = 60 * min;
   const day = 24 * hour;
-  if (diff < min) return '刚刚';
-  if (diff < hour) return `${Math.floor(diff / min)} 分钟`;
-  if (diff < day) return `${Math.floor(diff / hour)} 小时`;
-  return `${Math.floor(diff / day)} 天`;
+  if (diff < min) return 'just now';
+  if (diff < hour) return `${Math.floor(diff / min)}m`;
+  if (diff < day) return `${Math.floor(diff / hour)}h`;
+  return `${Math.floor(diff / day)}d`;
 };
 
 // Most-recent activity drives both the time label and the in-group ordering.
@@ -49,9 +49,9 @@ const timeOf = (s: any): string => s.lastTurnAt ?? s.startedAt ?? s.createdAt;
 // waiting for a slot.
 function timeLabel(s: any): string {
   const ago = fmtAgo(timeOf(s));
-  if (hasCard(s)) return ago ? `等待 ${ago}` : '';
-  if (s.status === 'RUNNING') return ago ? `已跑 ${ago}` : '';
-  return '等待算力'; // PENDING
+  if (hasCard(s)) return ago ? `Waiting ${ago}` : '';
+  if (s.status === 'RUNNING') return ago ? `Running ${ago}` : '';
+  return 'Waiting for a slot'; // PENDING
 }
 
 function StatusBadge({ session }: { session: any }) {
@@ -59,20 +59,20 @@ function StatusBadge({ session }: { session: any }) {
     return (
       <span className="status-pill awaiting">
         <span className="status-dot" />
-        等待回复
+        Awaiting reply
       </span>
     );
   if (session.status === 'RUNNING')
     return (
       <span className="status-pill running">
         <LoadingOutlined spin />
-        运行中
+        Running
       </span>
     );
   return (
     <span className="status-pill queued">
       <span className="status-dot" />
-      排队中
+      Queued
     </span>
   );
 }
@@ -99,9 +99,9 @@ export function ActiveSessionsView() {
           <StatusBadge session={s} />
         </div>
         <div className="task-title-cell">
-          <span className="task-title">{s.title || '(无标题会话)'}</span>
+          <span className="task-title">{s.title || '(untitled session)'}</span>
           {s.pendingApprovals > 0 ? (
-            <span className="session-approval-badge">{s.pendingApprovals} 待审批</span>
+            <span className="session-approval-badge">{s.pendingApprovals} pending</span>
           ) : null}
         </div>
         <div className="task-cell session-meta">{meta}</div>
@@ -118,7 +118,7 @@ export function ActiveSessionsView() {
         </div>
       ) : active.length === 0 ? (
         <div style={{ padding: '32px 16px', color: 'var(--text-3)', fontSize: 13 }}>
-          当前没有正在运行的会话。
+          No live sessions right now.
         </div>
       ) : (
         <div className="orbit-sessionlist">

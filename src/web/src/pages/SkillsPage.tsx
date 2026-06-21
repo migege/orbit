@@ -34,7 +34,7 @@ function SkillRow({ item }: { item: SlashCommandInfo }) {
               className="skill-desc-toggle"
               onClick={() => setExpanded((v) => !v)}
             >
-              {expanded ? '收起' : '展开'}
+              {expanded ? 'Collapse' : 'Expand'}
             </button>
           )}
         </span>
@@ -102,12 +102,12 @@ export function SkillsPage() {
           <input
             className="skills-search"
             type="text"
-            placeholder="搜索技能 / 命令…"
+            placeholder="Search skills / commands…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
           {cards.length === 0 ? (
-            <div className="skills-no-match">没有匹配「{query}」的技能或命令。</div>
+            <div className="skills-no-match">No skills or commands match "{query}".</div>
           ) : (
             <div className="skills-list">
               {cards.map(({ runner: r, skills, commands }) => {

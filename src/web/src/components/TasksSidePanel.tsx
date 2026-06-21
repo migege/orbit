@@ -325,9 +325,9 @@ export function TasksSidePanel() {
           className={`tp-list-dot ${running ? 'running' : completed ? 'done' : ''}`}
           title={
             running
-              ? `${l.runningTasks} 个任务执行中`
+              ? `${l.runningTasks} task(s) running`
               : completed
-                ? '全部任务已完成'
+                ? 'All tasks done'
                 : undefined
           }
         />
@@ -411,10 +411,10 @@ export function TasksSidePanel() {
                   setSel('none');
                   navigate('/lists/none');
                 }}
-                title="不属于任何清单的任务（含 agent 创建、清单删除后解绑的任务）"
+                title="Tasks not in any list (includes agent-created tasks and ones detached when a list was deleted)"
               >
                 <span className="tp-list-dot" />
-                <span className="tp-label">未分组</span>
+                <span className="tp-label">No list</span>
                 {unlistedCount > 0 && <span className="tp-count">{unlistedCount}</span>}
               </div>
               {activeLists.map(renderListRow)}

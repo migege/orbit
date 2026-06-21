@@ -36,10 +36,10 @@ const matchesFilter = (status: string, f: string): boolean => {
 };
 
 const SORTS = [
-  { label: '创建时间', value: 'created' },
-  { label: '状态', value: 'status' },
-  { label: '标题', value: 'title' },
-  { label: '执行人', value: 'assignee' },
+  { label: 'Created', value: 'created' },
+  { label: 'Status', value: 'status' },
+  { label: 'Title', value: 'title' },
+  { label: 'Assignee', value: 'assignee' },
 ];
 
 // Rank for the "状态" sort: 运行中 (executing now) ranks first, then 排队中 (waiting), then by
@@ -76,11 +76,11 @@ const compareBy = (a: any, b: any, field: string): number => {
 // so it reads without relying on color alone: done = green dot, 进行中 = blue square,
 // 待办 = hollow ring, 失败 = red dot, 已取消 = muted ring.
 const STATUS_PILL: Record<string, { cls: string; label: string }> = {
-  DONE: { cls: 'done', label: '已完成' },
-  IN_PROGRESS: { cls: 'ongoing', label: '进行中' },
-  OPEN: { cls: 'todo', label: '待办' },
-  FAILED: { cls: 'failed', label: '失败' },
-  CANCELLED: { cls: 'cancelled', label: '已取消' },
+  DONE: { cls: 'done', label: 'Done' },
+  IN_PROGRESS: { cls: 'ongoing', label: 'In progress' },
+  OPEN: { cls: 'todo', label: 'Open' },
+  FAILED: { cls: 'failed', label: 'Failed' },
+  CANCELLED: { cls: 'cancelled', label: 'Cancelled' },
 };
 
 // One status pill per row: the agent-maintained lifecycle (`status`) overlaid with the live
@@ -102,7 +102,7 @@ function StatusPill({
     return (
       <span className="status-pill running">
         <LoadingOutlined spin />
-        运行中
+        Running
       </span>
     );
   }
@@ -110,7 +110,7 @@ function StatusPill({
     return (
       <span className="status-pill queued">
         <span className="status-dot" />
-        排队中
+        Queued
       </span>
     );
   }
@@ -174,7 +174,7 @@ export function TaskListView() {
   // changes (different list/section, or a different status filter) to avoid running
   // tasks the user can no longer see.
   useEffect(() => setSelectedIds(new Set()), [listId, loc.pathname, filter]);
-  const pageTitle = isListView ? (listQ.data?.title ?? '') : isUnlisted ? '未分组' : 'Active';
+  const pageTitle = isListView ? (listQ.data?.title ?? '') : isUnlisted ? 'No list' : 'Active';
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['tasks'] });
 
@@ -192,10 +192,10 @@ export function TaskListView() {
     onSuccess: (res) => {
       setBatchOpen(false);
       setSelectedIds(new Set());
-      const parts = [`已触发 ${res.dispatched} 个任务`];
-      if (res.failed.length) parts.push(`${res.failed.length} 个失败`);
-      if (res.skipped.length) parts.push(`${res.skipped.length} 个跳过`);
-      message[res.dispatched ? 'success' : 'warning'](parts.join('，'));
+      const parts = [`Triggered ${res.dispatched} task(s)`];
+      if (res.failed.length) parts.push(`${res.failed.length} failed`);
+      if (res.skipped.length) parts.push(`${res.skipped.length} skipped`);
+      message[res.dispatched ? 'success' : 'warning'](parts.join(', '));
       invalidate();
     },
     onError: (e: Error) => message.error(e.message),
@@ -206,7 +206,7 @@ export function TaskListView() {
     onSuccess: (res) => {
       setAssignOpen(false);
       setSelectedIds(new Set());
-      message.success(`已为 ${res.updated} 个任务设置执行人`);
+      message.success(`Set assignee on ${res.updated} task(s)`);
       invalidate();
     },
     onError: (e: Error) => message.error(e.message),
@@ -262,11 +262,11 @@ export function TaskListView() {
       </span>
     );
     return [
-      { value: 'ALL', label: seg('全部', counts.total) },
-      { value: 'ONGOING', label: seg('进行中', counts.open + counts.inProgress) },
-      { value: 'FAILED', label: seg('失败', counts.failed) },
-      { value: 'DONE', label: seg('已完成', counts.done) },
-      { value: 'CANCELLED', label: seg('已取消', counts.cancelled) },
+      { value: 'ALL', label: seg('All', counts.total) },
+      { value: 'ONGOING', label: seg('In progress', counts.open + counts.inProgress) },
+      { value: 'FAILED', label: seg('Failed', counts.failed) },
+      { value: 'DONE', label: seg('Done', counts.done) },
+      { value: 'CANCELLED', label: seg('Cancelled', counts.cancelled) },
     ];
   }, [counts]);
 
@@ -295,7 +295,7 @@ export function TaskListView() {
 
   const openBatch = () => {
     if (runnableRows.length === 0) {
-      message.warning('选中的任务都没有可执行的负责 Agent（或未绑定 runner）');
+      message.warning('None of the selected tasks have a runnable assignee (or no runner bound)');
       return;
     }
     // Batch concurrency is its own knob (it doesn't touch any runner's cap); default to
@@ -365,7 +365,7 @@ export function TaskListView() {
           <span className="task-title">{r.title}</span>
           {r.blocked ? (
             <Tooltip
-              title={r.dependencyState === 'BLOCKED_FAILED' ? '前置任务已取消，需处理' : '等待前置任务完成'}
+              title={r.dependencyState === 'BLOCKED_FAILED' ? 'Prerequisite cancelled — resolve it' : 'Waiting for prerequisites'}
             >
               <LockOutlined
                 style={{
@@ -428,12 +428,12 @@ export function TaskListView() {
                 />
               </div>
               <div className="task-progress-text">
-                已完成 <b>{counts.done}</b> / {counts.total}
-                <span className="sep">·</span>进行中 {counts.inProgress}
-                <span className="sep">·</span>待办 {counts.open}
+                Done <b>{counts.done}</b> / {counts.total}
+                <span className="sep">·</span>In progress {counts.inProgress}
+                <span className="sep">·</span>Open {counts.open}
                 {counts.failed > 0 && (
                   <>
-                    <span className="sep">·</span>失败 {counts.failed}
+                    <span className="sep">·</span>Failed {counts.failed}
                   </>
                 )}
               </div>
@@ -447,7 +447,7 @@ export function TaskListView() {
               onChange={(v) => setFilter(v as string)}
             />
             <div className="tasks-sort">
-              <span className="tasks-sort-label">排序</span>
+              <span className="tasks-sort-label">Sort</span>
               <Select
                 value={sortField}
                 onChange={setSortField}
@@ -455,7 +455,7 @@ export function TaskListView() {
                 style={{ width: 104 }}
                 popupMatchSelectWidth={false}
               />
-              <Tooltip title={sortDir === 'asc' ? '升序' : '降序'}>
+              <Tooltip title={sortDir === 'asc' ? 'Ascending' : 'Descending'}>
                 <Button
                   icon={sortDir === 'asc' ? <SortAscendingOutlined /> : <SortDescendingOutlined />}
                   onClick={() => setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))}
@@ -464,20 +464,20 @@ export function TaskListView() {
             </div>
             {selectedIds.size > 0 && (
               <div className="tasks-bulkbar">
-                <span className="tasks-bulkbar-count">已选 {selectedIds.size} 项</span>
+                <span className="tasks-bulkbar-count">{selectedIds.size} selected</span>
                 <Button
                   type="primary"
                   size="small"
                   icon={<PlayCircleOutlined />}
                   onClick={openBatch}
                 >
-                  批量运行
+                  Run
                 </Button>
                 <Button size="small" icon={<UserOutlined />} onClick={openAssign}>
-                  设置执行人
+                  Set assignee
                 </Button>
                 <Button type="text" size="small" onClick={() => setSelectedIds(new Set())}>
-                  清除
+                  Clear
                 </Button>
               </div>
             )}
@@ -502,9 +502,9 @@ export function TaskListView() {
                     disabled={rows.length === 0}
                   />
                 </div>
-                <div className="col-head">状态</div>
-                <div className="col-head">任务</div>
-                <div className="col-head">负责人</div>
+                <div className="col-head">Status</div>
+                <div className="col-head">Task</div>
+                <div className="col-head">Assignee</div>
               </div>
 
               {rows.length === 0 ? (
@@ -512,7 +512,7 @@ export function TaskListView() {
                   {isListView
                     ? 'No tasks in this list yet.'
                     : isUnlisted
-                      ? '暂无未分组任务。'
+                      ? 'No tasks without a list yet.'
                       : 'No tasks yet.'}
                 </div>
               ) : (
@@ -532,7 +532,7 @@ export function TaskListView() {
       )}
 
       <Modal
-        title="批量运行任务"
+        title="Run tasks"
         open={batchOpen}
         onCancel={() => setBatchOpen(false)}
         onOk={() =>
@@ -542,18 +542,18 @@ export function TaskListView() {
           })
         }
         confirmLoading={batchRun.isPending}
-        okText="开始运行"
+        okText="Run"
         okButtonProps={{ disabled: runnableRows.length === 0 }}
       >
         <p style={{ marginTop: 0 }}>
-          将运行选中的 <b>{runnableRows.length}</b> 个任务
+          Will run <b>{runnableRows.length}</b> selected task(s)
           {selectedRows.length > runnableRows.length
-            ? `，跳过 ${selectedRows.length - runnableRows.length} 个（未指定负责 Agent 或未绑定 runner）`
+            ? `, skipping ${selectedRows.length - runnableRows.length} (no assignee or no runner bound)`
             : ''}
-          。
+          .
         </p>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span>并发度</span>
+          <span>Concurrency</span>
           <InputNumber
             min={1}
             max={64}
@@ -561,15 +561,15 @@ export function TaskListView() {
             onChange={(v) => setConcurrency(v ?? 1)}
             style={{ width: 96 }}
           />
-          <span style={{ color: 'var(--text-3)' }}>个任务同时运行</span>
+          <span style={{ color: 'var(--text-3)' }}>tasks running at once</span>
         </div>
         <p style={{ marginTop: 10, marginBottom: 0, color: 'var(--text-3)', fontSize: 12 }}>
-          任务会一次性全部提交，本批最多同时运行该数量，其余排队、有空位时自动开始。该限制只作用于这一批任务，不会修改任何运行器自身的并发上限。
+          All tasks are submitted at once; at most this many run concurrently in this batch, the rest queue and start as slots free up. This limit applies only to this batch and never changes any runner's own concurrency cap.
         </p>
       </Modal>
 
       <Modal
-        title="批量设置执行人"
+        title="Set assignee"
         open={assignOpen}
         onCancel={() => setAssignOpen(false)}
         onOk={() =>
@@ -579,17 +579,17 @@ export function TaskListView() {
           })
         }
         confirmLoading={batchAssign.isPending}
-        okText="确定"
+        okText="OK"
       >
         <p style={{ marginTop: 0 }}>
-          为选中的 <b>{selectedRows.length}</b> 个任务设置执行人（负责 Agent）。
+          Set the assignee (responsible agent) for <b>{selectedRows.length}</b> selected task(s).
         </p>
         <Select
           allowClear
           showSearch
           optionFilterProp="label"
           style={{ width: '100%' }}
-          placeholder="选择一个 Agent，留空则清除执行人"
+          placeholder="Pick an agent, leave empty to clear the assignee"
           value={assignAgentId ?? undefined}
           onChange={(v) => setAssignAgentId(v ?? null)}
           options={(agents.data ?? []).map((a) => ({ value: a.id, label: a.name }))}

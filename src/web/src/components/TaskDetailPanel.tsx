@@ -23,15 +23,15 @@ const STATUS_META: Record<string, { label: string; tone: string }> = {
 // AWAITING_INPUT/INTERRUPTED). AWAITING_INPUT means the turn finished and the agent is
 // waiting on you, so it gets a distinct amber tone rather than a neutral grey.
 const RUN_STATUS_META: Record<string, { label: string; tone: string }> = {
-  PENDING: { label: '排队中', tone: 'muted' },
-  RUNNING: { label: '运行中', tone: 'blue' },
-  SUCCEEDED: { label: '已完成', tone: 'green' },
-  FAILED: { label: '失败', tone: 'red' },
-  CANCELLED: { label: '已取消', tone: 'muted' },
-  AWAITING_INPUT: { label: '等待回复', tone: 'amber' },
-  INTERRUPTED: { label: '已中断', tone: 'muted' },
+  PENDING: { label: 'Queued', tone: 'muted' },
+  RUNNING: { label: 'Running', tone: 'blue' },
+  SUCCEEDED: { label: 'Done', tone: 'green' },
+  FAILED: { label: 'Failed', tone: 'red' },
+  CANCELLED: { label: 'Cancelled', tone: 'muted' },
+  AWAITING_INPUT: { label: 'Awaiting reply', tone: 'amber' },
+  INTERRUPTED: { label: 'Interrupted', tone: 'muted' },
   // Ended but resumable (idle/task-done recycle or user-ended) — dormant, not cancelled.
-  PARKED: { label: '休眠', tone: 'muted' },
+  PARKED: { label: 'Parked', tone: 'muted' },
 };
 
 // The task counts as "执行中" only while one of its sessions is actually working:
@@ -167,10 +167,10 @@ export function TaskDetailPanel({
     const triggerable = picked.filter((a) => a.runnerId);
     const noRunner = picked.filter((a) => !a.runnerId);
     const parts: string[] = [];
-    if (triggerable.length) parts.push(`已通知并触发 ${triggerable.map((a) => a.name).join('、')}`);
+    if (triggerable.length) parts.push(`Notified and triggered ${triggerable.map((a) => a.name).join(', ')}`);
     if (noRunner.length)
-      parts.push(`${noRunner.map((a) => a.name).join('、')} 未绑定 runner，仅记录未触发`);
-    if (parts.length) message.info(parts.join('；'));
+      parts.push(`${noRunner.map((a) => a.name).join(', ')} not bound to a runner — recorded but not triggered`);
+    if (parts.length) message.info(parts.join('; '));
   };
 
   // Reassign (or clear, when null) the task's responsible agent. Refresh both the
@@ -203,7 +203,7 @@ export function TaskDetailPanel({
   const execute = useMutation({
     mutationFn: () => api(`/tasks/${taskId}/execute`, { method: 'POST' }),
     onSuccess: () => {
-      message.success('已触发负责 Agent 开始执行');
+      message.success('Assignee agent triggered');
       qc.invalidateQueries({ queryKey: ['task', taskId] });
       qc.invalidateQueries({ queryKey: ['tasks'] });
     },
@@ -246,7 +246,7 @@ export function TaskDetailPanel({
   const markDone = useMutation({
     mutationFn: () => api(`/tasks/${taskId}`, { method: 'PATCH', body: { status: 'DONE' } }),
     onSuccess: () => {
-      message.success('已标记完成，下游任务将被释放');
+      message.success('Marked done — downstream tasks released');
       refreshTaskViews();
     },
     onError: (e: Error) => message.error(e.message),
@@ -358,12 +358,12 @@ export function TaskDetailPanel({
   const executeDisabled = !canExecute || running || blocked;
   const executeHint = blocked
     ? dependencyState === 'BLOCKED_FAILED'
-      ? '前置任务已取消，需先处理'
-      : '等待前置任务完成'
+      ? 'Prerequisite cancelled — resolve it first'
+      : 'Waiting for prerequisites'
     : !canExecute
-      ? '请先指定负责 Agent'
+      ? 'Assign an agent first'
       : running
-        ? '任务执行中…'
+        ? 'Task running…'
         : '';
 
   return (
@@ -395,7 +395,7 @@ export function TaskDetailPanel({
                 onClick={() => execute.mutate()}
                 style={executeDisabled ? { pointerEvents: 'none' } : undefined}
               >
-                {running ? '运行中' : '开始执行'}
+                {running ? 'Running' : 'Run'}
               </Button>
             </span>
           </Tooltip>
@@ -405,7 +405,7 @@ export function TaskDetailPanel({
               loading={markDone.isPending}
               onClick={() => markDone.mutate()}
             >
-              标记完成
+              Mark done
             </Button>
           )}
           <Button type="text" icon={<CloseOutlined />} onClick={onClose} aria-label="Close" />
@@ -417,7 +417,7 @@ export function TaskDetailPanel({
           <Spin />
         </div>
       ) : q.isError ? (
-        <div className="tdp-empty">无法加载任务详情。</div>
+        <div className="tdp-empty">Failed to load task details.</div>
       ) : (
         <div className="tdp-body">
           {needsDoneConfirm && (
@@ -435,22 +435,22 @@ export function TaskDetailPanel({
               }}
             >
               <span style={{ flex: 1 }}>
-                有 {dependedOnBy.length} 个下游任务在等待，但此任务尚未标记完成。
+                {dependedOnBy.length} downstream task(s) are waiting, but this task isn't marked done yet.
               </span>
               <Button size="small" type="primary" loading={markDone.isPending} onClick={() => markDone.mutate()}>
-                标记完成
+                Mark done
               </Button>
             </div>
           )}
           <section className="tdp-section">
-            <div className="tdp-section-title">详情</div>
+            <div className="tdp-section-title">Details</div>
             <div className="tdp-field">
-              <span className="tdp-field-label">负责 Agent</span>
+              <span className="tdp-field-label">Assignee</span>
               <Select
                 className="tdp-assignee-select"
                 variant="borderless"
                 value={task?.assignee?.id ?? undefined}
-                placeholder="未指定"
+                placeholder="Unassigned"
                 allowClear
                 showSearch
                 optionFilterProp="label"
@@ -462,12 +462,12 @@ export function TaskDetailPanel({
               />
             </div>
             <div className="tdp-field">
-              <span className="tdp-field-label">清单</span>
+              <span className="tdp-field-label">List</span>
               <Select
                 className="tdp-assignee-select"
                 variant="borderless"
                 value={q.data?.listId ?? undefined}
-                placeholder="未分组"
+                placeholder="No list"
                 allowClear
                 showSearch
                 optionFilterProp="label"
@@ -479,29 +479,29 @@ export function TaskDetailPanel({
               />
             </div>
             <div className="tdp-field">
-              <span className="tdp-field-label">创建人</span>
+              <span className="tdp-field-label">Created by</span>
               <span className="tdp-field-value">{summary?.creatorName ?? '—'}</span>
             </div>
             {q.data?.creatorSession && (
               <div className="tdp-field">
-                <span className="tdp-field-label">创建来源</span>
+                <span className="tdp-field-label">Created from</span>
                 <Link
                   to={`/sessions/${encodeId(q.data.creatorSession.id)}`}
                   className="tdp-field-value tdp-field-link"
-                  title="跳转到创建此任务的会话"
+                  title="Go to the session that created this task"
                 >
-                  {q.data.creatorSession.title || '未命名会话'}
+                  {q.data.creatorSession.title || 'Untitled session'}
                 </Link>
               </div>
             )}
             <div className="tdp-field">
-              <span className="tdp-field-label">创建时间</span>
+              <span className="tdp-field-label">Created</span>
               <span className="tdp-field-value">{fmt(task?.createdAt)}</span>
             </div>
           </section>
 
           <section className="tdp-section">
-            <div className="tdp-section-title">前置依赖</div>
+            <div className="tdp-section-title">Dependencies</div>
             {blocked && (
               <div
                 style={{
@@ -518,12 +518,12 @@ export function TaskDetailPanel({
                 }}
               >
                 {dependencyState === 'BLOCKED_FAILED'
-                  ? '前置任务已取消，需先处理后才能执行'
-                  : '等待前置任务全部完成后才能执行'}
+                  ? 'A prerequisite was cancelled — resolve it before running.'
+                  : 'Waiting for all prerequisites to finish before running.'}
               </div>
             )}
             {dependsOn.length === 0 ? (
-              <div className="tdp-muted">无前置依赖</div>
+              <div className="tdp-muted">No dependencies</div>
             ) : (
               dependsOn.map((d: any) => {
                 const meta = STATUS_META[d.dependsOnTask.status] ?? { label: d.dependsOnTask.status, tone: 'muted' };
@@ -542,7 +542,7 @@ export function TaskDetailPanel({
                       icon={<CloseOutlined />}
                       loading={removeDependency.isPending}
                       onClick={() => removeDependency.mutate(d.dependsOnTask.id)}
-                      aria-label="移除依赖"
+                      aria-label="Remove dependency"
                     />
                   </div>
                 );
@@ -550,7 +550,7 @@ export function TaskDetailPanel({
             )}
             <Select
               style={{ width: '100%', marginTop: 8 }}
-              placeholder="添加前置任务…"
+              placeholder="Add a prerequisite…"
               value={null}
               showSearch
               optionFilterProp="label"
@@ -569,22 +569,22 @@ export function TaskDetailPanel({
                   loading={setAutoRun.isPending}
                   onChange={(v) => setAutoRun.mutate(v)}
                 />
-                <span>前置全部完成后自动执行</span>
+                <span>Auto-run when all prerequisites finish</span>
               </div>
             )}
           </section>
 
           {q.data?.description && (
             <section className="tdp-section">
-              <div className="tdp-section-title">描述</div>
+              <div className="tdp-section-title">Description</div>
               <div className="tdp-prose">{q.data.description}</div>
             </section>
           )}
 
           <section className="tdp-section">
-            <div className="tdp-section-title">运行 ({sessions.length})</div>
+            <div className="tdp-section-title">Runs ({sessions.length})</div>
             {sessions.length === 0 ? (
-              <div className="tdp-muted">暂无关联运行</div>
+              <div className="tdp-muted">No runs yet</div>
             ) : (
               sessions.map((s: any) => {
                 const meta = RUN_STATUS_META[s.status] ?? { label: s.status, tone: 'muted' };
@@ -599,7 +599,7 @@ export function TaskDetailPanel({
                       {/* Agent leads — it's what tells two runs of the same task apart; the
                           system-generated title just repeats the task name. */}
                       <div className="tdp-session-title">
-                        {s.agent?.name || s.title || '未命名会话'}
+                        {s.agent?.name || s.title || 'Untitled session'}
                       </div>
                       <div className="tdp-session-sub">{fmt(s.createdAt)}</div>
                     </div>
@@ -611,9 +611,9 @@ export function TaskDetailPanel({
           </section>
 
           <section className="tdp-section">
-            <div className="tdp-section-title">评论 ({comments.length})</div>
+            <div className="tdp-section-title">Comments ({comments.length})</div>
             {comments.length === 0 ? (
-              <div className="tdp-muted">还没有评论</div>
+              <div className="tdp-muted">No comments yet</div>
             ) : (
               comments.map((c: any) => (
                 <div key={c.id} className="tdp-comment">
@@ -625,7 +625,7 @@ export function TaskDetailPanel({
                   </Avatar>
                   <div className="tdp-comment-body">
                     <div className="tdp-comment-head">
-                      <span className="tdp-comment-author">{c.authorName ?? '未知'}</span>
+                      <span className="tdp-comment-author">{c.authorName ?? 'Unknown'}</span>
                       <span className="tdp-comment-time">{fmt(c.createdAt)}</span>
                     </div>
                     <div className="tdp-comment-text md">
@@ -664,7 +664,7 @@ export function TaskDetailPanel({
                   {initial(a.name)}
                 </Avatar>
                 <span className="tdp-mention-name">{a.name}</span>
-                {!a.runnerId && <span className="tdp-mention-norunner">无 runner</span>}
+                {!a.runnerId && <span className="tdp-mention-norunner">No runner</span>}
               </div>
             ))}
           </div>
@@ -677,7 +677,7 @@ export function TaskDetailPanel({
             setCaret(e.target.selectionStart ?? e.target.value.length);
           }}
           onSelect={(e) => setCaret((e.target as HTMLTextAreaElement).selectionStart ?? 0)}
-          placeholder="添加评论…  输入 @ 提及 agent  (⌘/Ctrl + Enter 发送)"
+          placeholder="Add a comment…  type @ to mention an agent  (⌘/Ctrl + Enter to send)"
           autoSize={{ minRows: 1, maxRows: 4 }}
           onKeyDown={(e) => {
             if (showMention) {
@@ -709,7 +709,7 @@ export function TaskDetailPanel({
           }}
         />
         <Button type="primary" onClick={submit} loading={addComment.isPending} disabled={!draft.trim()}>
-          发送
+          Send
         </Button>
       </div>
     </aside>
