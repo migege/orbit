@@ -641,10 +641,30 @@ export class RunnerApiController {
         if (!text) return acc;
         return !acc || e.seq > acc.seq ? { seq: e.seq, text } : acc;
       }, null);
-    if (lastAssistant) {
+    // Denormalize the "frontier" activity for the sidebar's live status line. The
+    // highest-seq durable event is the agent's latest known state: a tool_use means a
+    // tool is in flight (its tool_result hasn't landed yet) → surface its name; any
+    // other frontier (assistant text, tool_result, turn end) means no tool is running
+    // → clear it. Batches arrive in seq order, so the latest batch's frontier is the
+    // latest overall. An empty (all-streaming) batch leaves the prior value untouched.
+    let frontier: { seq: number; tool: string | null } | null = null;
+    for (const e of durable) {
+      if (frontier && e.seq <= frontier.seq) continue;
+      const tool =
+        e.type === RunEventType.TOOL_USE
+          ? String((e.payload as { name?: string } | null)?.name ?? '')
+              .trim()
+              .slice(0, 60) || null
+          : null;
+      frontier = { seq: e.seq, tool };
+    }
+    if (lastAssistant || frontier) {
       await this.prisma.session.update({
         where: { id: sessionId },
-        data: { lastAssistantText: lastAssistant.text },
+        data: {
+          ...(lastAssistant ? { lastAssistantText: lastAssistant.text } : {}),
+          ...(frontier ? { lastToolUse: frontier.tool } : {}),
+        },
       });
     }
 
@@ -683,20 +703,19 @@ export class RunnerApiController {
     }
     // If the user requested cancel/end, finalize on the server regardless of what the
     // runner reports — the graceful-end 'end' turn often wins the race over the
-    // heartbeat cancel and would otherwise land the session SUCCEEDED. A *resumable*
-    // graceful end (the reaper recycling an idle/finished session, or the user ending
-    // it — endReason set by endParked/endLive) settles to PARKED, a terminal-but-
-    // resumable state, so the list shows it as dormant rather than cancelled. A hard end
+    // heartbeat cancel and would otherwise land the session SUCCEEDED. The end reason
+    // decides the terminal state: TASK_DONE means the agent finished its task, so settle
+    // SUCCEEDED (a completed run must never read as cancelled). IDLE/ENDED (idle-recycle
+    // or a user end with work still possible) settle PARKED — terminal but resumable, so
+    // the list shows it as dormant rather than cancelled. A hard end
     // (archive=completed / delete=deleted) keeps CANCELLED.
-    const RESUMABLE_END: string[] = [
-      SessionEndReason.IDLE,
-      SessionEndReason.TASK_DONE,
-      SessionEndReason.ENDED,
-    ];
+    const PARKED_END: string[] = [SessionEndReason.IDLE, SessionEndReason.ENDED];
     const effectiveStatus: RunStatus = session.cancelRequestedAt
-      ? RESUMABLE_END.includes(session.endReason ?? '')
-        ? RunStatus.PARKED
-        : RunStatus.CANCELLED
+      ? session.endReason === SessionEndReason.TASK_DONE
+        ? RunStatus.SUCCEEDED
+        : PARKED_END.includes(session.endReason ?? '')
+          ? RunStatus.PARKED
+          : RunStatus.CANCELLED
       : (dto.status as RunStatus);
 
     // Finalize in ONE transaction. Only a LIVE session is finalized (updateMany
