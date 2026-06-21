@@ -37,6 +37,7 @@ import {
   RunnerRegisterRequest,
   RunnerRegisterResponse,
   SessionCompleteRequest,
+  SessionEndReason,
   TurnAttachment,
   TurnCompleteRequest,
 } from '@orbit/shared';
@@ -680,11 +681,22 @@ export class RunnerApiController {
     if (!TERMINAL.includes(dto.status as RunStatus)) {
       throw new BadRequestException('completion status must be terminal');
     }
-    // If the user requested cancel/end, finalize as CANCELLED regardless of what the
+    // If the user requested cancel/end, finalize on the server regardless of what the
     // runner reports — the graceful-end 'end' turn often wins the race over the
-    // heartbeat cancel and would otherwise land the session SUCCEEDED.
+    // heartbeat cancel and would otherwise land the session SUCCEEDED. A *resumable*
+    // graceful end (the reaper recycling an idle/finished session, or the user ending
+    // it — endReason set by endParked/endLive) settles to PARKED, a terminal-but-
+    // resumable state, so the list shows it as dormant rather than cancelled. A hard end
+    // (archive=completed / delete=deleted) keeps CANCELLED.
+    const RESUMABLE_END: string[] = [
+      SessionEndReason.IDLE,
+      SessionEndReason.TASK_DONE,
+      SessionEndReason.ENDED,
+    ];
     const effectiveStatus: RunStatus = session.cancelRequestedAt
-      ? RunStatus.CANCELLED
+      ? RESUMABLE_END.includes(session.endReason ?? '')
+        ? RunStatus.PARKED
+        : RunStatus.CANCELLED
       : (dto.status as RunStatus);
 
     // Finalize in ONE transaction. Only a LIVE session is finalized (updateMany
