@@ -1133,11 +1133,7 @@ export function AgentView({ runner }: { runner: Runner }) {
   // Per-control hints derived from the same state that drives enable/disable, so the help
   // can't drift from behaviour (this used to be one hard-coded paragraph on the whole row).
   // Empty string = no tooltip, which keeps idle controls free of hover noise.
-  const configHint = live && !runner.online
-    ? 'Runner 离线，暂不可修改'
-    : live && !idle
-      ? '回合进行中；将在本回合结束后生效'
-      : '';
+  const configHint = live && !runner.online ? 'Runner 离线，暂不可修改' : '';
   // Switching session leaves whatever history recall was in progress; reset the cursor
   // so the next Up starts fresh from the (per-session) history.
   useEffect(() => {
