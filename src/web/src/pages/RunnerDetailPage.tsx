@@ -331,7 +331,7 @@ export function RunnerDetailPage() {
                     navigate(`/agents/${encodeId(a.id)}`)
                   }
                 >
-                  对话
+                  Chat
                 </Button>
                 <Button
                   size="small"
