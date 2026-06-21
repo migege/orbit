@@ -1,13 +1,33 @@
-import type { ReactNode } from 'react';
-import { Outlet } from 'react-router-dom';
+import { useEffect, useState, type ReactNode } from 'react';
+import { MenuOutlined } from '@ant-design/icons';
+import { Outlet, useLocation } from 'react-router-dom';
 import { TasksSidePanel } from './TasksSidePanel';
 
 // The app shell: a persistent side nav plus a content region (the routed <Outlet/>).
-// The nav stays mounted across every route; only the region's view changes.
+// The nav stays mounted across every route; only the region's view changes. On narrow
+// viewports the nav collapses into an off-canvas drawer (CSS, below the 768px breakpoint)
+// toggled by the top bar's hamburger; the top bar and backdrop are hidden on desktop.
 export function AppShell() {
+  const loc = useLocation();
+  const [navOpen, setNavOpen] = useState(false);
+  // Any navigation (nav item, session row, deep link) closes the drawer so the chosen
+  // view isn't left sitting under the overlay.
+  useEffect(() => setNavOpen(false), [loc.pathname]);
   return (
     <div className="app-shell">
-      <TasksSidePanel />
+      <header className="app-topbar">
+        <button
+          type="button"
+          className="app-nav-toggle"
+          aria-label="Open menu"
+          onClick={() => setNavOpen(true)}
+        >
+          <MenuOutlined />
+        </button>
+        <span className="app-topbar-name">Orbit</span>
+      </header>
+      <TasksSidePanel open={navOpen} />
+      {navOpen && <div className="app-nav-backdrop" onClick={() => setNavOpen(false)} />}
       <Outlet />
     </div>
   );
