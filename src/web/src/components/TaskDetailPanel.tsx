@@ -30,6 +30,8 @@ const RUN_STATUS_META: Record<string, { label: string; tone: string }> = {
   CANCELLED: { label: '已取消', tone: 'muted' },
   AWAITING_INPUT: { label: '等待回复', tone: 'amber' },
   INTERRUPTED: { label: '已中断', tone: 'muted' },
+  // Ended but resumable (idle/task-done recycle or user-ended) — dormant, not cancelled.
+  PARKED: { label: '休眠', tone: 'muted' },
 };
 
 // The task counts as "执行中" only while one of its sessions is actually working:

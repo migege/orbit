@@ -12,6 +12,14 @@ export enum RunStatus {
   AWAITING_INPUT = 'AWAITING_INPUT',
   /** A turn was interrupted by the user; the session stays alive (Route B). */
   INTERRUPTED = 'INTERRUPTED',
+  /**
+   * Terminal but resumable: the session's claude process was gracefully torn down — the
+   * runner recycled it (idle / its task finished) or the user ended it — yet sending a
+   * message revives it (--resume keeps full context). Split out of CANCELLED so the UI
+   * reads it as dormant, not cancelled; `endReason` records which graceful end it was.
+   * Appended last to match ALTER TYPE ADD VALUE.
+   */
+  PARKED = 'PARKED',
 }
 
 /**

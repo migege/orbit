@@ -83,7 +83,7 @@ interface ComposerImage {
 const ALLOWED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
-const TERMINAL = ['SUCCEEDED', 'FAILED', 'CANCELLED'];
+const TERMINAL = ['SUCCEEDED', 'FAILED', 'CANCELLED', 'PARKED'];
 // Session statuses that occupy one of the runner's maxConcurrent slots.
 const SLOT_HELD = ['RUNNING', 'AWAITING_INPUT', 'INTERRUPTED'];
 // UI label <-> claude --permission-mode value — the full set claude 2.1.x accepts.
@@ -258,11 +258,20 @@ function StatusIcon({ session, completed }: { session: any; completed?: boolean 
       </Tooltip>
     );
   }
-  if (status === 'CANCELLED' || status === 'INTERRUPTED') {
+  if (status === 'PARKED' || status === 'CANCELLED' || status === 'INTERRUPTED') {
     const reason: string = session.endReason ?? '';
-    // A benign recycle — the runner reclaimed an idle/finished session, or the user
-    // ended it — is resumable, not a cancellation. Show it as paused, not ⊖.
-    if (reason === 'idle' || reason === 'task_done' || reason === 'ended')
+    // Default to dormant, ⊖ only for a positively-terminal end. PARKED is resumable by
+    // definition; a benign recycle (idle/task_done) or user-end is too; and a legacy
+    // CANCELLED row with an unknown (null/pre-migration) reason should fail to the
+    // neutral, resumable read — "we don't know why it ended" must not render as the
+    // accusatory "Cancelled". The hard ends keep ⊖: orphaned/deleted/completed, plus a
+    // bare INTERRUPTED (a turn cut short with no graceful-end reason recorded).
+    const terminalCancel =
+      reason === 'orphaned' ||
+      reason === 'deleted' ||
+      reason === 'completed' ||
+      (status === 'INTERRUPTED' && reason === '');
+    if (!terminalCancel)
       return (
         <Tooltip title="Dormant — send a message to resume">
           <PauseCircleOutlined style={{ color: '#8c8c8c', fontSize }} />

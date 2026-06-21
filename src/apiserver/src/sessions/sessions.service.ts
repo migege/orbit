@@ -257,6 +257,9 @@ export class SessionsService {
     RunStatus.SUCCEEDED,
     RunStatus.FAILED,
     RunStatus.CANCELLED,
+    // Ended but resumable: not live, so resume() revives it (and archive/delete/config
+    // treat it as already-ended) — same as CANCELLED, minus the "cancelled" stigma.
+    RunStatus.PARKED,
   ];
 
   // A runner heartbeats every 30s; a missed window reads as offline. Resuming needs
