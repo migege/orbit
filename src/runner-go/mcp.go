@@ -385,8 +385,8 @@ func toolDescriptors() []map[string]interface{} {
 			"inputSchema": obj(map[string]interface{}{
 				"title":       str,
 				"description": promptDesc,
-				"listId":      str,
-				"assigneeId":  str,
+				"listId":      map[string]interface{}{"type": []string{"string", "null"}},
+				"assigneeId":  map[string]interface{}{"type": []string{"string", "null"}},
 				"dueDate":     str,
 			}, "title"),
 		},

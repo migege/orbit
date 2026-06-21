@@ -6,6 +6,7 @@ import {
   IsInt,
   IsOptional,
   IsString,
+  IsUUID,
   Max,
   Min,
   MinLength,
@@ -21,9 +22,9 @@ export class CreateTaskDto {
 
   @IsOptional() @IsString() description?: string;
   // The agent assigned to execute the task. Must be owned by the caller.
-  @IsOptional() @IsString() assigneeId?: string;
+  @IsOptional() @IsUUID() assigneeId?: string;
   // The list this task belongs to. Must be owned by the caller.
-  @IsOptional() @IsString() listId?: string;
+  @IsOptional() @IsUUID() listId?: string;
   @IsOptional() @IsDateString() dueDate?: string;
   // Prerequisite task ids this new task should wait on (each must be owned by the
   // caller). The task only runs once they're all DONE.
@@ -37,9 +38,9 @@ export class UpdateTaskDto {
   @IsOptional() @IsString() description?: string;
   @IsOptional() @IsIn(TASK_STATUSES) status?: TaskStatus;
   // null clears the assignment; a string (re)assigns to that agent.
-  @IsOptional() @IsString() assigneeId?: string | null;
+  @IsOptional() @IsUUID() assigneeId?: string | null;
   // null detaches from its list; a string (re)assigns to that list.
-  @IsOptional() @IsString() listId?: string | null;
+  @IsOptional() @IsUUID() listId?: string | null;
   @IsOptional() @IsDateString() dueDate?: string | null;
   // Auto-run once all prerequisites are DONE.
   @IsOptional() @IsBoolean() autoRunWhenReady?: boolean;
