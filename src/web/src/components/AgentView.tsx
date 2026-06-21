@@ -23,7 +23,7 @@ import {
   UndoOutlined,
 } from '@ant-design/icons';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { App as AntApp, Button, Dropdown, Image, Input, type MenuProps, Segmented, Select, Tooltip, Upload } from 'antd';
+import { App as AntApp, Button, Dropdown, Image, Input, type MenuProps, Segmented, Select, Tooltip } from 'antd';
 import { type MouseEvent as ReactMouseEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMatch, useNavigate } from 'react-router-dom';
 import { decodeId, encodeId } from '../lib/idCodec';
@@ -197,38 +197,40 @@ const plainPreview = (md: string): string =>
     .replace(/\s+/g, ' ')
     .trim();
 
-// Chinese relative time for the header subline: 刚刚 / N 分钟前 / N 小时前, falling back
-// to an absolute month/day stamp beyond a day (same thresholds as fmtTime).
-const fmtTimeCn = (d?: string | null): string => {
-  if (!d) return '';
-  const t = new Date(d).getTime();
-  const diff = Date.now() - t;
-  const min = 60_000;
-  const hour = 60 * min;
-  const day = 24 * hour;
-  if (diff >= 0 && diff < min) return '刚刚';
-  if (diff >= 0 && diff < hour) return `${Math.floor(diff / min)} 分钟前`;
-  if (diff >= 0 && diff < day) return `${Math.floor(diff / hour)} 小时前`;
-  return new Date(t).toLocaleString([], {
-    month: 'numeric',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  });
+// Shorten a tool id for the live status line: mcp__orbit__task_create -> task_create;
+// plain tool names (Bash, Read, Edit) pass through unchanged.
+const fmtTool = (name: string): string => name.replace(/^mcp__[^_]+__/, '');
+
+// The line shown under a session title. For a LIVE (openable) session that's working we
+// surface its current state — the tool in flight, that it's blocked on you, or a bare
+// "Running…" — so the row never collapses to just a title with no sign of progress.
+// Otherwise it's the flattened last reply (or nothing). `tone` drives the colour:
+// blue = working, amber = needs you, grey = queued, default = reply content.
+type SessionLine = { text: string; tone: 'preview' | 'running' | 'approval' | 'queued' };
+const sessionLine = (s: any, live: boolean): SessionLine | null => {
+  if (live && s.status === 'RUNNING') {
+    if ((s.pendingApprovals ?? 0) > 0) return { text: 'Waiting for approval', tone: 'approval' };
+    if (s.lastToolUse) return { text: `Running ${fmtTool(s.lastToolUse)}…`, tone: 'running' };
+    if (s.lastAssistantText) return { text: plainPreview(s.lastAssistantText), tone: 'preview' };
+    return { text: 'Running…', tone: 'running' };
+  }
+  if (live && s.status === 'PENDING') return { text: 'Queued', tone: 'queued' };
+  if (s.lastAssistantText) return { text: plainPreview(s.lastAssistantText), tone: 'preview' };
+  return null;
 };
 
-// Chinese state label for the session header — mirrors StatusIcon's branching so the
-// glyph (in the list) and the word (in the header) always agree. The archived
-// "Completed" override is list-only, so it's omitted here.
+// State word for the session header — mirrors StatusIcon's branching (and its tooltip
+// wording) so the glyph and the header label always agree. The archived "Completed"
+// override is list-only, so it's omitted here.
 function statusLabel(session: any): string {
   const status: string = session.status;
-  if (status === 'RUNNING') return (session.pendingApprovals ?? 0) > 0 ? '等待审批' : '运行中';
-  if (status === 'AWAITING_INPUT') return '等待你回复';
-  if (status === 'SUCCEEDED') return '已完成';
+  if (status === 'RUNNING')
+    return (session.pendingApprovals ?? 0) > 0 ? 'Waiting for approval' : 'Running';
+  if (status === 'AWAITING_INPUT') return 'Waiting for your reply';
+  if (status === 'SUCCEEDED') return 'Completed';
   if (status === 'FAILED') {
     const err: string = typeof session.error === 'string' ? session.error : '';
-    return err.toLowerCase().includes('offline') ? '已断开' : '失败';
+    return err.toLowerCase().includes('offline') ? 'Disconnected' : 'Failed';
   }
   if (status === 'PARKED' || status === 'CANCELLED' || status === 'INTERRUPTED') {
     const reason: string = session.endReason ?? '';
@@ -237,12 +239,11 @@ function statusLabel(session: any): string {
       reason === 'deleted' ||
       reason === 'completed' ||
       (status === 'INTERRUPTED' && reason === '');
-    if (!terminal) return '休眠';
-    return reason === 'orphaned' ? '已结束' : status === 'INTERRUPTED' ? '已中断' : '已取消';
+    if (!terminal) return 'Dormant';
+    return reason === 'orphaned' ? 'Ended' : status === 'INTERRUPTED' ? 'Interrupted' : 'Cancelled';
   }
-  return '排队中'; // PENDING
+  return 'Queued'; // PENDING
 }
-
 // One glyph per session state. Colour carries the meaning: blue = working,
 // amber = needs a human decision, green = done, red = real failure, grey =
 // neutral terminal (dormant / cancelled / interrupted / disconnected). A runner that
@@ -352,31 +353,31 @@ function endedBanner(session: any, resumable: boolean, runnerOnline: boolean): s
   const status: string = session.status;
   const reason: string = session.endReason ?? '';
   const suffix = resumable
-    ? ' 发消息可续接这个会话。'
+    ? ' Send a message to resume this session.'
     : runnerOnline
-      ? ' 发消息将新开一个会话。'
-      : ' 运行器离线，需上线后才能续接。';
+      ? ' Sending a message starts a new session.'
+      : ' Runner offline — bring it online to resume.';
   let base: string;
-  if (status === 'SUCCEEDED') base = '会话已完成。';
+  if (status === 'SUCCEEDED') base = 'Session completed.';
   else if (status === 'FAILED') {
     // A dropped connection isn't a crash — the suffix already names the offline runner,
-    // so keep the base neutral and avoid repeating "离线".
+    // so keep the base neutral and avoid repeating "offline".
     const err: string = typeof session.error === 'string' ? session.error : '';
-    base = err.toLowerCase().includes('offline') ? '会话已中断。' : '会话运行失败。';
+    base = err.toLowerCase().includes('offline') ? 'Session interrupted.' : 'Session failed.';
   } else {
     // CANCELLED — disambiguate the overloaded status by reason.
     base =
       reason === 'idle'
-        ? '会话因长时间无活动已自动结束。'
+        ? 'Session ended automatically after a long idle period.'
         : reason === 'task_done'
-          ? '关联任务已完成，会话已自动结束。'
+          ? 'The linked task is done, so the session ended automatically.'
           : reason === 'orphaned'
-            ? '会话已结束（关联任务已完成）。'
+            ? 'Session ended (the linked task is done).'
             : reason === 'deleted'
-              ? '会话已删除。'
+              ? 'Session deleted.'
               : reason === 'completed'
-                ? '会话已完成。'
-                : '会话已结束。'; // 'ended' or a pre-migration row
+                ? 'Session completed.'
+                : 'Session ended.'; // 'ended' or a pre-migration row
   }
   return base + suffix;
 }
@@ -965,7 +966,7 @@ export function AgentView({ runner }: { runner: Runner }) {
     try {
       await cancelQueuedTurn(selectedId, turnId);
     } catch {
-      message.info('该消息已开始处理，无法撤回');
+      message.info('This message is already being processed and cannot be withdrawn');
     }
   };
   // Soft visibility actions for ended sessions. All reversible, so no confirm dialog —
@@ -990,7 +991,7 @@ export function AgentView({ runner }: { runner: Runner }) {
               restoreMut.mutate(id);
             }}
           >
-            撤销
+            Undo
           </a>
         </span>
       ),
@@ -1031,7 +1032,7 @@ export function AgentView({ runner }: { runner: Runner }) {
       leaveIfOpen(id);
       dropFromLists(id);
       qc.invalidateQueries({ queryKey: ['sessions'] });
-      showUndo(id, '已完成');
+      showUndo(id, 'Completed');
     },
     onError: (e: Error) => message.error(e.message),
   });
@@ -1056,7 +1057,7 @@ export function AgentView({ runner }: { runner: Runner }) {
       leaveIfOpen(id);
       dropFromLists(id);
       qc.invalidateQueries({ queryKey: ['sessions'] });
-      showUndo(id, '已删除');
+      showUndo(id, 'Deleted');
     },
     onError: (e: Error) => message.error(e.message),
   });
@@ -1121,11 +1122,11 @@ export function AgentView({ runner }: { runner: Runner }) {
     async (file: File): Promise<void> => {
       if (!canAttach) return;
       if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
-        message.error(`不支持的图片类型：${file.type || file.name}`);
+        message.error(`Unsupported image type: ${file.type || file.name}`);
         return;
       }
       if (file.size > MAX_IMAGE_BYTES) {
-        message.error('图片超过 5MB 上限');
+        message.error('Image exceeds the 5MB limit');
         return;
       }
       const uid = `img-${imageUid.current++}`;
@@ -1229,6 +1230,13 @@ export function AgentView({ runner }: { runner: Runner }) {
     setSlashDismissed(null);
     setTimeout(() => taRef.current?.focus(), 0);
   };
+  // Open the command/skill autocomplete from the `+` menu: drop a `/` (prefixed with a
+  // space when mid-message) so slashToken matches and the menu pops.
+  const insertSlash = (): void => {
+    setText((t) => (t === '' || /\s$/.test(t) ? `${t}/` : `${t} /`));
+    setSlashDismissed(null);
+    setTimeout(() => taRef.current?.focus(), 0);
+  };
   // A LIVE session's pills show its stored choice (editable any time the runner is
   // online — see configEditable); otherwise they're editable and reflect local state.
   const shownModel: string = live ? (selected.model ?? 'claude-sonnet-4-6') : model;
@@ -1258,7 +1266,7 @@ export function AgentView({ runner }: { runner: Runner }) {
   // Per-control hints derived from the same state that drives enable/disable, so the help
   // can't drift from behaviour (this used to be one hard-coded paragraph on the whole row).
   // Empty string = no tooltip, which keeps idle controls free of hover noise.
-  const configHint = live && !runner.online ? 'Runner 离线，暂不可修改' : '';
+  const configHint = live && !runner.online ? 'Runner offline — cannot change this now' : '';
   // Switching session leaves whatever history recall was in progress; reset the cursor
   // so the next Up starts fresh from the (per-session) history.
   useEffect(() => {
@@ -1272,10 +1280,10 @@ export function AgentView({ runner }: { runner: Runner }) {
   // state and when it was last active. (turns/cost dropped; model/agent live in the
   // composer pills.)
   const headTime = selected
-    ? fmtTimeCn(selected.lastTurnAt ?? selected.startedAt ?? selected.createdAt)
+    ? fmtTime(selected.lastTurnAt ?? selected.startedAt ?? selected.createdAt)
     : '';
   const headSub = composing
-    ? `${headAgentName} · 新会话`
+    ? `${headAgentName} · New session`
     : selected
       ? headTime
         ? `${statusLabel(selected)} · ${headTime}`
@@ -1337,10 +1345,10 @@ export function AgentView({ runner }: { runner: Runner }) {
               {view === 'active'
                 ? 'No sessions yet.'
                 : view === 'archived'
-                  ? '没有已完成的会话。'
+                  ? 'No completed sessions.'
                   : view === 'system'
-                    ? '没有系统会话。'
-                    : '回收站为空。'}
+                    ? 'No system sessions.'
+                    : 'Trash is empty.'}
             </div>
           )}
           {visibleSessions.map((s) => {
@@ -1372,6 +1380,7 @@ export function AgentView({ runner }: { runner: Runner }) {
                   : [restoreItem];
             // System sessions are openable like active ones; archived/trash rows aren't.
             const openable = view === 'active' || view === 'system';
+            const line = sessionLine(s, openable);
             return (
               <div
                 className={`session-row${openable ? '' : ' no-open'}${s.id === selectedId ? ' active' : ''}${menuOpenId === s.id ? ' menu-open' : ''}`}
@@ -1386,8 +1395,12 @@ export function AgentView({ runner }: { runner: Runner }) {
                     <div className="session-title">{s.title}</div>
                     <span className="session-time">{fmtTime(s.lastTurnAt ?? s.createdAt)}</span>
                   </div>
-                  {s.lastAssistantText ? (
-                    <div className="session-preview">{plainPreview(s.lastAssistantText)}</div>
+                  {line ? (
+                    <div
+                      className={`session-preview${line.tone === 'preview' ? '' : ` tone-${line.tone}`}`}
+                    >
+                      {line.text}
+                    </div>
                   ) : null}
                 </div>
                 <div className="session-right">
@@ -1443,11 +1456,11 @@ export function AgentView({ runner }: { runner: Runner }) {
               <button
                 type="button"
                 className="agent-header-task"
-                title={`回到任务 · ${selected.taskTitle ?? ''}`}
+                title={`Back to task · ${selected.taskTitle ?? ''}`}
                 onClick={() => navigate(`/tasks/${encodeId(selected.taskId)}`)}
               >
                 <ArrowLeftOutlined />
-                <span className="agent-header-task-name">{selected.taskTitle ?? '回到任务'}</span>
+                <span className="agent-header-task-name">{selected.taskTitle ?? 'Back to task'}</span>
               </button>
             )}
             <div className="agent-name">
@@ -1491,7 +1504,7 @@ export function AgentView({ runner }: { runner: Runner }) {
                 ?.scrollIntoView({ block: 'start', behavior: 'smooth' });
             }}
           >
-            <span className="chat-sticky-label">↑ 你的提问</span>
+            <span className="chat-sticky-label">↑ Your question</span>
             <span className="chat-sticky-text">{stuck.text}</span>
           </button>
         )}
@@ -1503,7 +1516,7 @@ export function AgentView({ runner }: { runner: Runner }) {
               selected.status === 'PENDING' &&
               (queuedForSlot ? (
                 <div className="chat-note">
-                  排队中 · 运行器并发已满（{liveSlots}/{runner.maxConcurrent}），正在等待空闲槽位…
+                  Queued · runner at capacity ({liveSlots}/{runner.maxConcurrent}), waiting for a free slot…
                 </div>
               ) : (
                 <div className="chat-note">Starting session…</div>
@@ -1527,8 +1540,8 @@ export function AgentView({ runner }: { runner: Runner }) {
                 )}
                 {q.content && <span className="chat-queued-text">{q.content}</span>}
                 <span className="chat-queued-meta">
-                  <span className="chat-queued-tag">排队中</span>
-                  <a onClick={() => cancelQueued(q.turnId)}>撤回</a>
+                  <span className="chat-queued-tag">Queued</span>
+                  <a onClick={() => cancelQueued(q.turnId)}>Cancel</a>
                 </span>
               </div>
             ))}
@@ -1544,13 +1557,13 @@ export function AgentView({ runner }: { runner: Runner }) {
           </div>
         ) : composing ? (
           <div className="agent-sessions agent-draft" ref={scrollRef}>
-            <div className="chat-note">给这个 Agent 发一个任务，开始一个新会话。</div>
+            <div className="chat-note">Send this agent a task to start a new session.</div>
           </div>
         ) : (
           <div className="agent-sessions" />
         )}
         {selectedId && !atBottom && (
-          <button className="scroll-to-bottom" aria-label="滚动到底部" onClick={scrollToBottom}>
+          <button className="scroll-to-bottom" aria-label="Scroll to bottom" onClick={scrollToBottom}>
             <ArrowDownOutlined />
           </button>
         )}
@@ -1576,7 +1589,7 @@ export function AgentView({ runner }: { runner: Runner }) {
                   type="button"
                   className="composer-attach-remove"
                   onClick={() => removeImage(im.uid)}
-                  aria-label="移除图片"
+                  aria-label="Remove image"
                 >
                   <CloseOutlined />
                 </button>
@@ -1607,34 +1620,62 @@ export function AgentView({ runner }: { runner: Runner }) {
               ))}
             </div>
           )}
-          <Tooltip title={canAttach ? '添加图片' : '仅可向已开始的会话发送图片'}>
-            {/* beforeUpload returns false: we upload via uploadAttachment ourselves and
-                keep antd's own list/request out of it. */}
-            <Upload
-              accept="image/png,image/jpeg,image/webp,image/gif"
-              multiple
-              showUploadList={false}
-              disabled={!canAttach}
-              beforeUpload={(file) => {
-                void addImage(file);
-                return false;
-              }}
-            >
-              <Button
-                size="small"
-                type="text"
-                icon={<PlusOutlined />}
-                disabled={!canAttach}
-                aria-label="添加图片"
-              />
-            </Upload>
-          </Tooltip>
+          {/* Hidden picker the `添加图片` menu item triggers; we upload via addImage
+              ourselves and reset value so re-picking the same file fires onChange again. */}
+          <input
+            ref={imageInputRef}
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/gif"
+            multiple
+            hidden
+            onChange={(e) => {
+              Array.from(e.target.files ?? []).forEach((f) => void addImage(f));
+              e.target.value = '';
+            }}
+          />
+          <Dropdown
+            trigger={['click']}
+            placement="topLeft"
+            disabled={!runner.online}
+            menu={{
+              items: [
+                {
+                  key: 'image',
+                  icon: <PictureOutlined />,
+                  label: canAttach ? 'Attach image' : 'Attach image (needs a started session)',
+                  disabled: !canAttach,
+                  onClick: () => imageInputRef.current?.click(),
+                },
+                {
+                  key: 'slash',
+                  icon: <CodeOutlined />,
+                  label: 'Commands / Skills',
+                  disabled: slashItems.length === 0,
+                  onClick: insertSlash,
+                },
+                {
+                  key: 'file',
+                  icon: <PaperClipOutlined />,
+                  label: 'Upload file (coming soon)',
+                  disabled: true,
+                },
+              ],
+            }}
+          >
+            <Button
+              size="small"
+              type="text"
+              icon={<PlusOutlined />}
+              disabled={!runner.online}
+              aria-label="Add attachment"
+            />
+          </Dropdown>
           <Input.TextArea
             ref={taRef}
             variant="borderless"
             autoSize={{ minRows: 1, maxRows: 6 }}
             placeholder={
-              !runner.online ? 'Runner offline' : selectedId ? 'Reply…' : '给这个 Agent 发一个任务…'
+              !runner.online ? 'Runner offline' : selectedId ? 'Reply…' : 'Send this agent a task…'
             }
             value={text}
             disabled={!runner.online}
@@ -1738,12 +1779,12 @@ export function AgentView({ runner }: { runner: Runner }) {
             }}
           />
           {showStop ? (
-            <Tooltip title="停止当前回合">
+            <Tooltip title="Stop the current turn">
               <Button
                 type="primary"
                 icon={<BorderOutlined />}
                 onClick={() => selected && control.mutate(selected.id)}
-                aria-label="停止"
+                aria-label="Stop"
               />
             </Tooltip>
           ) : (
@@ -1753,7 +1794,7 @@ export function AgentView({ runner }: { runner: Runner }) {
               disabled={!canSend}
               loading={send.isPending}
               onClick={onSend}
-              aria-label="发送"
+              aria-label="Send"
             />
           )}
         </div>
@@ -1780,7 +1821,7 @@ export function AgentView({ runner }: { runner: Runner }) {
           {/* Tooltip wraps the span (not the Select): a disabled Select has no pointer
               events, so the parent span is what surfaces the reason on hover. With the
               icons gone, the tooltip also names what each pill controls. */}
-          <Tooltip title={configHint || '权限模式'}>
+          <Tooltip title={configHint || 'Permission mode'}>
             <span className="composer-pill">
               <Select
                 size="small"
@@ -1794,7 +1835,7 @@ export function AgentView({ runner }: { runner: Runner }) {
                   value: m,
                   // Carry the Auto-mode constraint on the greyed option itself, where it's
                   // actionable, instead of in a row-wide paragraph.
-                  label: m === 'Auto' && !autoOk ? 'Auto（需 Sonnet 4.6 或 Opus 4.8）' : m,
+                  label: m === 'Auto' && !autoOk ? 'Auto (needs Sonnet 4.6 or Opus 4.8)' : m,
                   disabled: m === 'Auto' && !autoOk,
                 }))}
                 disabled={!configEditable}
@@ -1810,7 +1851,7 @@ export function AgentView({ runner }: { runner: Runner }) {
               </span>
             </Tooltip>
           )}
-          <Tooltip title={configHint || '模型'}>
+          <Tooltip title={configHint || 'Model'}>
             <span className="composer-pill">
               <Select
                 size="small"
@@ -1834,7 +1875,7 @@ export function AgentView({ runner }: { runner: Runner }) {
               />
             </span>
           </Tooltip>
-          <Tooltip title={configHint || '推理强度'}>
+          <Tooltip title={configHint || 'Reasoning effort'}>
             <span className="composer-pill">
               <Select
                 size="small"
