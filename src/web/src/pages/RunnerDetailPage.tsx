@@ -262,7 +262,7 @@ export function RunnerDetailPage() {
       <div className="rd-title-row">
         <span
           className="runner-dot"
-          style={{ background: runner.online ? '#2ea121' : '#c0c4cc' }}
+          style={{ background: runner.online ? 'var(--success-solid)' : 'var(--dot-idle)' }}
           title={runner.online ? 'Online' : 'Offline'}
         />
         <h1 className="page-title" style={{ margin: 0 }}>
@@ -381,7 +381,7 @@ export function RunnerDetailPage() {
           maxLength={60}
           autoFocus
         />
-        <div style={{ marginTop: 8, color: '#8f959e', fontSize: 12 }}>
+        <div style={{ marginTop: 8, color: 'var(--text-3)', fontSize: 12 }}>
           Leave empty to use the machine name ({runner.name}).
         </div>
       </Modal>
@@ -405,7 +405,7 @@ export function RunnerDetailPage() {
           style={{ width: '100%' }}
           autoFocus
         />
-        <div style={{ marginTop: 8, color: '#8f959e', fontSize: 12 }}>
+        <div style={{ marginTop: 8, color: 'var(--text-3)', fontSize: 12 }}>
           Max sessions this runner runs at once. Takes effect on the next claim — no
           restart needed.
         </div>

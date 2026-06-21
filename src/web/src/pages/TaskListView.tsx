@@ -374,7 +374,7 @@ export function TaskListView() {
               <LockOutlined
                 style={{
                   fontSize: 12,
-                  color: r.dependencyState === 'BLOCKED_FAILED' ? '#d4380d' : '#8c8c8c',
+                  color: r.dependencyState === 'BLOCKED_FAILED' ? 'var(--error-solid)' : 'var(--text-3)',
                 }}
               />
             </Tooltip>
@@ -385,7 +385,7 @@ export function TaskListView() {
             <>
               <Avatar
                 size={22}
-                style={{ background: '#e1eaff', color: '#3370ff', fontSize: 11, flex: 'none' }}
+                style={{ background: 'var(--brand-tint-hover)', color: 'var(--brand)', fontSize: 11, flex: 'none' }}
               >
                 {assigneeName.trim().charAt(0).toUpperCase()}
               </Avatar>
@@ -492,7 +492,7 @@ export function TaskListView() {
               <Spin />
             </div>
           ) : isListView && listQ.isError ? (
-            <div style={{ padding: '24px 16px', color: '#8a9099', fontSize: 13 }}>
+            <div style={{ padding: '24px 16px', color: 'var(--text-3)', fontSize: 13 }}>
               This list could not be loaded.
             </div>
           ) : (
@@ -512,7 +512,7 @@ export function TaskListView() {
               </div>
 
               {rows.length === 0 ? (
-                <div style={{ padding: '24px 16px', color: '#8a9099', fontSize: 13 }}>
+                <div style={{ padding: '24px 16px', color: 'var(--text-3)', fontSize: 13 }}>
                   {isListView
                     ? 'No tasks in this list yet.'
                     : isUnlisted
@@ -565,9 +565,9 @@ export function TaskListView() {
             onChange={(v) => setConcurrency(v ?? 1)}
             style={{ width: 96 }}
           />
-          <span style={{ color: '#8a9099' }}>tasks running at once</span>
+          <span style={{ color: 'var(--text-3)' }}>tasks running at once</span>
         </div>
-        <p style={{ marginTop: 10, marginBottom: 0, color: '#8a9099', fontSize: 12 }}>
+        <p style={{ marginTop: 10, marginBottom: 0, color: 'var(--text-3)', fontSize: 12 }}>
           All tasks are submitted at once; at most this many run concurrently in this batch, the rest queue and start as slots free up. This limit applies only to this batch and never changes any runner's own concurrency cap.
         </p>
       </Modal>

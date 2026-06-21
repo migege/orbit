@@ -1,5 +1,7 @@
 import {
+  BgColorsOutlined,
   CaretDownOutlined,
+  CheckOutlined,
   DesktopOutlined,
   LogoutOutlined,
   ThunderboltOutlined,
@@ -28,6 +30,7 @@ import type { SlashCommandInfo } from '@orbit/shared';
 import { api, clearToken } from '../api';
 import { decodeId, encodeId } from '../lib/idCodec';
 import { sessionQuery, sessionsQuery } from '../lib/queries';
+import { useThemeMode, type ThemeMode } from '../lib/theme';
 
 // Feishu-style top navigation. Each entry routes to "/<key>" (they all share the
 // Tasks view for now — only the heading differs). "Runners" opens the runners
@@ -101,6 +104,7 @@ export function TasksSidePanel() {
   const loc = useLocation();
   const navigate = useNavigate();
   const qc = useQueryClient();
+  const { mode, setMode } = useThemeMode();
   // A small drag threshold so a plain click still opens an agent; only real movement
   // starts a reorder drag.
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
@@ -432,14 +436,39 @@ export function TasksSidePanel() {
         <Dropdown
           placement="topLeft"
           menu={{
-            items: [{ key: 'logout', icon: <LogoutOutlined />, label: 'Logout', onClick: logout }],
+            items: [
+              {
+                key: 'appearance',
+                icon: <BgColorsOutlined />,
+                label: 'Appearance',
+                children: (
+                  [
+                    { key: 'system', label: 'System' },
+                    { key: 'light', label: 'Light' },
+                    { key: 'dark', label: 'Dark' },
+                  ] as { key: ThemeMode; label: string }[]
+                ).map((it) => ({
+                  key: `theme-${it.key}`,
+                  label: it.label,
+                  icon:
+                    mode === it.key ? (
+                      <CheckOutlined />
+                    ) : (
+                      <span style={{ display: 'inline-block', width: 14 }} />
+                    ),
+                  onClick: () => setMode(it.key),
+                })),
+              },
+              { type: 'divider' },
+              { key: 'logout', icon: <LogoutOutlined />, label: 'Logout', onClick: logout },
+            ],
           }}
         >
           <div className="tp-user-trigger">
             <Avatar
               size={32}
               icon={<UserOutlined />}
-              style={{ background: '#3370ff', flex: 'none' }}
+              style={{ background: 'var(--brand)', flex: 'none' }}
             />
           </div>
         </Dropdown>
@@ -492,7 +521,7 @@ function SortableAgentRow({
           width: 7,
           height: 7,
           borderRadius: '50%',
-          background: online ? '#2ea121' : '#c0c4cc',
+          background: online ? 'var(--success-solid)' : 'var(--dot-idle)',
           flex: 'none',
           marginRight: 8,
         }}

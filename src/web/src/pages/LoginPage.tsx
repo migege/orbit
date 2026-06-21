@@ -33,7 +33,7 @@ export function LoginPage() {
   };
 
   return (
-    <div style={{ display: 'grid', placeItems: 'center', height: '100vh', background: '#f0f2f5' }}>
+    <div style={{ display: 'grid', placeItems: 'center', height: '100vh', background: 'var(--bg-base)' }}>
       <Card title="🛰 Orbit" style={{ width: 400 }}>
         <Form layout="vertical" onFinish={submit}>
           <Form.Item name="email" label="Email" rules={[{ required: true }]}>

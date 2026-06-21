@@ -167,7 +167,7 @@ export function RunnersPage() {
           {list.map((r) => {
             const state = !r.online ? 'offline' : r.status === 'DRAINING' ? 'draining' : 'online';
             const dotColor =
-              state === 'online' ? '#2ea121' : state === 'draining' ? '#f5a623' : '#c0c4cc';
+              state === 'online' ? 'var(--success-solid)' : state === 'draining' ? 'var(--warning-solid)' : 'var(--dot-idle)';
             const stateLabel =
               state === 'online' ? 'Online' : state === 'draining' ? 'Draining' : 'Offline';
             const max = r.maxConcurrent ?? 0;
@@ -246,7 +246,7 @@ export function RunnersPage() {
           maxLength={60}
           autoFocus
         />
-        <div style={{ marginTop: 8, color: '#8f959e', fontSize: 12 }}>
+        <div style={{ marginTop: 8, color: 'var(--text-3)', fontSize: 12 }}>
           Leave empty to use the machine name{renaming ? ` (${renaming.name})` : ''}.
         </div>
       </Modal>
@@ -262,7 +262,7 @@ export function RunnersPage() {
         ]}
         destroyOnClose
       >
-        <div style={{ color: '#8f959e', fontSize: 13, marginBottom: 12 }}>
+        <div style={{ color: 'var(--text-3)', fontSize: 13, marginBottom: 12 }}>
           Copy this token now — it won’t be shown again. Set it as <code>runnerToken</code> in{' '}
           <code>~/.orbit/config.json</code> on <b>{revealed?.name}</b>, then restart the runner.
         </div>

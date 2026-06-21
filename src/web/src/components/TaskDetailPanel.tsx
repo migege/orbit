@@ -375,7 +375,7 @@ export function TaskDetailPanel({
             <span className={`tdp-badge tone-${status.tone}`}>{status.label}</span>
             {task?.assignee && (
               <span className="tdp-meta-item">
-                <Avatar size={18} style={{ background: '#e1eaff', color: '#3370ff', fontSize: 10 }}>
+                <Avatar size={18} style={{ background: 'var(--brand-tint-hover)', color: 'var(--brand)', fontSize: 10 }}>
                   {initial(task.assignee.name)}
                 </Avatar>
                 {task.assignee.name}
@@ -428,8 +428,8 @@ export function TaskDetailPanel({
                 gap: 8,
                 padding: '8px 12px',
                 marginBottom: 12,
-                background: '#fffbe6',
-                border: '1px solid #ffe58f',
+                background: 'var(--warning-bg)',
+                border: '1px solid var(--warning-border)',
                 borderRadius: 6,
                 fontSize: 13,
               }}
@@ -512,9 +512,9 @@ export function TaskDetailPanel({
                   marginBottom: 8,
                   borderRadius: 6,
                   fontSize: 12,
-                  background: dependencyState === 'BLOCKED_FAILED' ? '#fff1f0' : '#f0f5ff',
-                  border: `1px solid ${dependencyState === 'BLOCKED_FAILED' ? '#ffccc7' : '#adc6ff'}`,
-                  color: dependencyState === 'BLOCKED_FAILED' ? '#cf1322' : '#1d39c4',
+                  background: dependencyState === 'BLOCKED_FAILED' ? 'var(--error-bg)' : 'var(--brand-tint)',
+                  border: `1px solid ${dependencyState === 'BLOCKED_FAILED' ? 'var(--error-border)' : 'var(--brand-border)'}`,
+                  color: dependencyState === 'BLOCKED_FAILED' ? 'var(--error)' : 'var(--brand-strong)',
                 }}
               >
                 {dependencyState === 'BLOCKED_FAILED'
@@ -619,7 +619,7 @@ export function TaskDetailPanel({
                 <div key={c.id} className="tdp-comment">
                   <Avatar
                     size={24}
-                    style={{ background: '#e1eaff', color: '#3370ff', fontSize: 11, flex: 'none' }}
+                    style={{ background: 'var(--brand-tint-hover)', color: 'var(--brand)', fontSize: 11, flex: 'none' }}
                   >
                     {initial(c.authorName)}
                   </Avatar>
@@ -659,7 +659,7 @@ export function TaskDetailPanel({
               >
                 <Avatar
                   size={18}
-                  style={{ background: '#e1eaff', color: '#3370ff', fontSize: 10, flex: 'none' }}
+                  style={{ background: 'var(--brand-tint-hover)', color: 'var(--brand)', fontSize: 10, flex: 'none' }}
                 >
                   {initial(a.name)}
                 </Avatar>
