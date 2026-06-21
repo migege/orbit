@@ -50,7 +50,7 @@ export function EnrollPage() {
   };
 
   return (
-    <div style={{ display: 'grid', placeItems: 'center', minHeight: '100vh', background: '#f0f2f5' }}>
+    <div style={{ display: 'grid', placeItems: 'center', minHeight: '100vh', background: 'var(--bg-base)' }}>
       <Card title="🛰 Register a machine" style={{ width: 460 }}>
         {loading ? (
           <div style={{ textAlign: 'center', padding: 24 }}>

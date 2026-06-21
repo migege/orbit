@@ -238,30 +238,30 @@ function StatusIcon({ session, completed }: { session: any; completed?: boolean 
   if (completed && status !== 'FAILED')
     return (
       <Tooltip title="Completed">
-        <CheckCircleFilled style={{ color: '#2ea121', fontSize }} />
+        <CheckCircleFilled style={{ color: 'var(--success-solid)', fontSize }} />
       </Tooltip>
     );
   if (status === 'RUNNING') {
     return (session.pendingApprovals ?? 0) > 0 ? (
       <Tooltip title="Waiting for approval">
-        <PauseCircleOutlined style={{ color: '#ff8800', fontSize }} />
+        <PauseCircleOutlined style={{ color: 'var(--warning-solid)', fontSize }} />
       </Tooltip>
     ) : (
       <Tooltip title="Running">
-        <LoadingOutlined spin style={{ color: '#3370ff', fontSize }} />
+        <LoadingOutlined spin style={{ color: 'var(--brand)', fontSize }} />
       </Tooltip>
     );
   }
   if (status === 'AWAITING_INPUT')
     return (
       <Tooltip title="Waiting for your reply">
-        <MessageOutlined style={{ color: '#8c8c8c', fontSize }} />
+        <MessageOutlined style={{ color: 'var(--text-3)', fontSize }} />
       </Tooltip>
     );
   if (status === 'SUCCEEDED')
     return (
       <Tooltip title="Completed">
-        <CheckCircleFilled style={{ color: '#2ea121', fontSize }} />
+        <CheckCircleFilled style={{ color: 'var(--success-solid)', fontSize }} />
       </Tooltip>
     );
   if (status === 'FAILED') {
@@ -269,12 +269,12 @@ function StatusIcon({ session, completed }: { session: any; completed?: boolean 
     if (err.toLowerCase().includes('offline'))
       return (
         <Tooltip title="Disconnected — runner went offline">
-          <DisconnectOutlined style={{ color: '#8c8c8c', fontSize }} />
+          <DisconnectOutlined style={{ color: 'var(--text-3)', fontSize }} />
         </Tooltip>
       );
     return (
       <Tooltip title={err || 'Failed'}>
-        <CloseCircleFilled style={{ color: '#f54a45', fontSize }} />
+        <CloseCircleFilled style={{ color: 'var(--error)', fontSize }} />
       </Tooltip>
     );
   }
@@ -294,7 +294,7 @@ function StatusIcon({ session, completed }: { session: any; completed?: boolean 
     if (!terminalCancel)
       return (
         <Tooltip title="Dormant — send a message to resume">
-          <PauseCircleOutlined style={{ color: '#8c8c8c', fontSize }} />
+          <PauseCircleOutlined style={{ color: 'var(--text-3)', fontSize }} />
         </Tooltip>
       );
     return (
@@ -307,14 +307,14 @@ function StatusIcon({ session, completed }: { session: any; completed?: boolean 
               : 'Cancelled'
         }
       >
-        <MinusCircleOutlined style={{ color: '#8c8c8c', fontSize }} />
+        <MinusCircleOutlined style={{ color: 'var(--text-3)', fontSize }} />
       </Tooltip>
     );
   }
   // PENDING — queued, not yet started
   return (
     <Tooltip title="Queued">
-      <ClockCircleOutlined style={{ color: '#c9cdd4', fontSize }} />
+      <ClockCircleOutlined style={{ color: 'var(--scrollbar-hover)', fontSize }} />
     </Tooltip>
   );
 }

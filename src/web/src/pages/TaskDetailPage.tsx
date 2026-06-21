@@ -8,7 +8,7 @@ export function TaskDetailPage() {
   const { id } = useParams();
   return (
     <div style={{ padding: 24 }}>
-      <Link to="/tasks" style={{ color: '#646a73' }}>
+      <Link to="/tasks" style={{ color: 'var(--text-2)' }}>
         ← Back to Tasks
       </Link>
       <Typography.Paragraph style={{ marginTop: 16 }}>
