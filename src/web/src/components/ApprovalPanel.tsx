@@ -124,8 +124,8 @@ export function ApprovalPanel({
     <div className="approval-card">
       <div className="approval-head">
         {isPlan(approval)
-          ? '📋 待确认：退出 plan 模式并按此计划实施？'
-          : `🔓 待批准工具调用：${approval.toolName}`}
+          ? '📋 Confirm: exit plan mode and proceed with this plan?'
+          : `🔓 Approve tool call: ${approval.toolName}`}
       </div>
       <div className="approval-body">
         {plan ? (
@@ -136,21 +136,21 @@ export function ApprovalPanel({
       </div>
       <div className="approval-actions">
         <button className="approval-btn approve" onClick={() => onDecide(approval.id, 'allow')}>
-          {isPlan(approval) ? '批准并实施' : '批准'}
+          {isPlan(approval) ? 'Approve & run' : 'Approve'}
           {active && <span className="approval-btn-kbd">{ENTER_HINT}</span>}
         </button>
         {rule && (
           <button
             className="approval-btn approve-always"
-            title="本次会话内自动批准同类调用，不再询问"
+            title="Auto-approve calls like this for the rest of this session"
             onClick={() => onDecide(approval.id, 'allow', undefined, undefined, rule)}
           >
-            批准，并自动允许后续 <code className="approval-rule">{rememberLabel(rule)}</code>
+            Approve, and auto-allow future <code className="approval-rule">{rememberLabel(rule)}</code>
             {active && <span className="approval-btn-kbd">{SHORTCUT_HINT}</span>}
           </button>
         )}
         <button className="approval-btn deny" onClick={() => onDecide(approval.id, 'deny')}>
-          {isPlan(approval) ? '继续规划' : '拒绝'}
+          {isPlan(approval) ? 'Keep planning' : 'Reject'}
         </button>
       </div>
     </div>
@@ -243,7 +243,7 @@ function QuestionForm({
 
   return (
     <div className="approval-card">
-      <div className="approval-head">❓ Claude 有问题需要你回答</div>
+      <div className="approval-head">❓ Claude has a question for you</div>
       <div className="approval-body is-questions">
         <div className="chat-questions">
           {questions.map((qq, k) => {
@@ -274,7 +274,7 @@ function QuestionForm({
                 <input
                   type="text"
                   className="chat-q-custom"
-                  placeholder="或输入你自己的回答…"
+                  placeholder="Or type your own answer…"
                   value={custom[q] ?? ''}
                   onChange={(e) => onCustom(q, e.target.value, multi)}
                   onKeyDown={(e) => {
@@ -284,7 +284,7 @@ function QuestionForm({
                     }
                   }}
                 />
-                {multi && <div className="chat-q-multi">可多选</div>}
+                {multi && <div className="chat-q-multi">Multiple choice</div>}
               </div>
             );
           })}
@@ -293,7 +293,7 @@ function QuestionForm({
           <textarea
             ref={chatRef}
             className="chat-q-reply"
-            placeholder="和 Claude 聊聊这个问题…（它会读到你的话并继续，而不强制你选某个选项）"
+            placeholder="Chat with Claude about this… (it reads your message and continues, instead of forcing you to pick an option)"
             value={chatText}
             onChange={(e) => setChatText(e.target.value)}
             onKeyDown={(e) => {
@@ -308,7 +308,7 @@ function QuestionForm({
       {chatting ? (
         <div className="approval-actions">
           <button className="approval-btn approve" disabled={!chatText.trim()} onClick={sendChat}>
-            发送
+            Send
             {active && chatText.trim() && <span className="approval-btn-kbd">{SHORTCUT_HINT}</span>}
           </button>
           <button
@@ -318,17 +318,17 @@ function QuestionForm({
               setChatText('');
             }}
           >
-            返回
+            Back
           </button>
         </div>
       ) : (
         <div className="approval-actions">
           <button className="approval-btn approve" disabled={!complete} onClick={submit}>
-            提交
+            Submit
             {active && complete && <span className="approval-btn-kbd">{SHORTCUT_HINT}</span>}
           </button>
           <button className="approval-btn chat" onClick={() => setChatting(true)}>
-            💬 聊聊这个
+            💬 Chat about this
           </button>
         </div>
       )}

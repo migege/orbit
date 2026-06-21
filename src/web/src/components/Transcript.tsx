@@ -281,11 +281,11 @@ export function ChatImage({ src }: { src: string }) {
     <Image
       className="chat-image"
       src={src}
-      alt="用户发送的图片"
+      alt="Image sent by user"
       preview={{
         mask: (
           <span className="chat-image-mask">
-            <EyeOutlined /> 预览
+            <EyeOutlined /> Preview
           </span>
         ),
       }}

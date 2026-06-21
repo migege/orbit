@@ -359,7 +359,7 @@ export class TasksService {
 
   /** Add a "task depends on dependsOnTaskId" edge; rejects self-deps and cycles. */
   async addDependency(ownerId: string, taskId: string, dependsOnTaskId: string) {
-    if (taskId === dependsOnTaskId) throw new BadRequestException('任务不能依赖自身');
+    if (taskId === dependsOnTaskId) throw new BadRequestException('A task cannot depend on itself');
     await this.assertOwnedTasks(ownerId, [taskId, dependsOnTaskId]);
     // Cycle check over this owner's whole dependency subgraph (both endpoints are
     // same-owner by construction, so filtering edges by the dependent's owner is enough).
@@ -368,13 +368,13 @@ export class TasksService {
       select: { taskId: true, dependsOnTaskId: true },
     });
     if (wouldCreateCycle(edges, taskId, dependsOnTaskId)) {
-      throw new BadRequestException('该依赖会形成循环依赖');
+      throw new BadRequestException('This dependency would create a cycle');
     }
     try {
       await this.prisma.taskDependency.create({ data: { taskId, dependsOnTaskId } });
     } catch (e) {
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
-        throw new ConflictException('该依赖已存在');
+        throw new ConflictException('This dependency already exists');
       }
       throw e;
     }
@@ -533,12 +533,12 @@ export class TasksService {
     if (!canRun(depState)) {
       throw new BadRequestException(
         depState === 'BLOCKED_FAILED'
-          ? '前置任务已取消，请先处理前置任务后再执行'
-          : '前置任务尚未全部完成，无法执行',
+          ? 'A prerequisite was cancelled — resolve it before running'
+          : 'Prerequisites are not all complete yet, cannot run',
       );
     }
-    if (!task.assignee) throw new BadRequestException('请先为任务指定负责 Agent');
-    if (!task.assignee.runnerId) throw new BadRequestException('负责 Agent 未绑定 runner，无法执行');
+    if (!task.assignee) throw new BadRequestException('Assign a responsible agent to the task first');
+    if (!task.assignee.runnerId) throw new BadRequestException('The responsible agent is not bound to a runner, cannot run');
     const prompt = this.buildExecutePrompt(task);
     const sessionId = await this.runAgentOnTask(
       ownerId,
@@ -601,17 +601,17 @@ export class TasksService {
     const skipped: { id: string; title: string; reason: string }[] = [];
     for (const t of tasks) {
       const state = states.get(t.id) ?? 'NONE';
-      if (!t.assignee) skipped.push({ id: t.id, title: t.title, reason: '未指定负责 Agent' });
+      if (!t.assignee) skipped.push({ id: t.id, title: t.title, reason: 'No assignee' });
       else if (!t.assignee.runnerId)
-        skipped.push({ id: t.id, title: t.title, reason: '负责 Agent 未绑定 runner' });
+        skipped.push({ id: t.id, title: t.title, reason: 'Assignee not bound to a runner' });
       else if (!canRun(state))
         skipped.push({
           id: t.id,
           title: t.title,
-          reason: state === 'BLOCKED_FAILED' ? '前置任务已取消' : '前置任务尚未完成',
+          reason: state === 'BLOCKED_FAILED' ? 'Prerequisite cancelled' : 'Prerequisites not complete',
         });
       else if (occupied.has(t.id))
-        skipped.push({ id: t.id, title: t.title, reason: '已有进行中的会话' });
+        skipped.push({ id: t.id, title: t.title, reason: 'Already has an in-progress session' });
       else runnable.push(t);
     }
     // taskIds with no matching owned task (deleted / not owned) are silently ignored.
