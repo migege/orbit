@@ -120,6 +120,13 @@ body {
   background: #eaf1ff;
   color: #3370ff;
 }
+.tp-item:focus {
+  outline: none;
+}
+.tp-item:focus-visible {
+  outline: 2px solid #3370ff;
+  outline-offset: -2px;
+}
 .tp-item.inset {
   padding-left: 30px;
 }
