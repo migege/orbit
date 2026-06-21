@@ -27,6 +27,7 @@ import { App as AntApp, Button, Dropdown, Image, Input, type MenuProps, Segmente
 import { type MouseEvent as ReactMouseEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMatch, useNavigate } from 'react-router-dom';
 import { decodeId, encodeId } from '../lib/idCodec';
+import { useIsMobile } from '../lib/useMediaQuery';
 import { agentsQuery, sessionQuery, sessionsQuery } from '../lib/queries';
 import {
   type ApprovalInfo,
@@ -396,6 +397,9 @@ export function AgentView({ runner }: { runner: Runner }) {
   const agentMatch = useMatch('/agents/:id/*');
   const lockedAgentId = decodeId(agentMatch?.params.id);
   const composingRoute = (agentMatch?.params['*'] ?? '') === 'new';
+  // Below the mobile breakpoint the two panes stack one-at-a-time; a couple of layout
+  // choices (the auto-open redirect, the in-pane back button) key off this.
+  const isMobile = useIsMobile();
   const [text, setText] = useState('');
   // Composer history cursor: -1 = editing the live draft; otherwise an index into the
   // session's stored history. `histDraft` stashes what was typed before recall started,
@@ -547,10 +551,13 @@ export function AgentView({ runner }: { runner: Runner }) {
   // /new draft) jumps to the agent's most recent session so the right pane is never
   // blank. replace() keeps it out of history; archived/trash tabs never auto-open.
   useEffect(() => {
-    if (selectedId || composingRoute || view !== 'active' || !sessionsQ.isSuccess) return;
+    // On mobile the list is its own full screen — auto-opening would trap the back
+    // button (it returns here, which would immediately redirect into a session again).
+    if (isMobile || selectedId || composingRoute || view !== 'active' || !sessionsQ.isSuccess)
+      return;
     const first = visibleSessions[0];
     if (first) navigate(`/sessions/${encodeId(first.id)}`, { replace: true });
-  }, [selectedId, composingRoute, view, sessionsQ.isSuccess, visibleSessions, navigate]);
+  }, [isMobile, selectedId, composingRoute, view, sessionsQ.isSuccess, visibleSessions, navigate]);
 
   // Step the open session up/down the visible list. Shared by the window-level Up/Down
   // handler and the Segmented's capture handler below. Returns false (a no-op) at the
@@ -1293,7 +1300,7 @@ export function AgentView({ runner }: { runner: Runner }) {
         : '';
 
   return (
-    <div className="agent-split">
+    <div className={`agent-split${selectedId || composingRoute ? ' show-conversation' : ''}`}>
       <aside className="session-col" style={{ width: colWidth }}>
         <div className="session-col-head">
           <span className={`agent-status-dot ${runner.online ? 'online' : ''}`} />
@@ -1451,6 +1458,19 @@ export function AgentView({ runner }: { runner: Runner }) {
 
       <div className="agent-view">
         <div className="agent-header">
+          {isMobile && (
+            <button
+              type="button"
+              className="agent-back-mobile"
+              aria-label="Back to sessions"
+              onClick={() => {
+                const a = scopeAgentId ?? agentsForRunner[0]?.id;
+                navigate(a ? `/agents/${encodeId(a)}` : `/runners/${encodeId(runner.id)}`);
+              }}
+            >
+              <ArrowLeftOutlined />
+            </button>
+          )}
           <div className="agent-header-main">
             {selected?.taskId && !composing && (
               <button
