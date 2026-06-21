@@ -1256,6 +1256,11 @@ body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  /* overflow-y:auto alone makes the browser compute overflow-x to `auto` too, so the
+     few sub-pixels the rows spill once the vertical scrollbar narrows the client width
+     surface a stray horizontal scrollbar along the bottom. Pin it hidden — a vertical
+     list never scrolls sideways (titles/previews already ellipsize). */
+  overflow-x: hidden;
 }
 .session-row.active {
   background: var(--brand-tint);
