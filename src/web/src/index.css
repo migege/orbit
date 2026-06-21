@@ -280,12 +280,9 @@ body {
   background: var(--brand-tint);
   color: var(--brand);
 }
-.tp-item:focus {
-  outline: none;
-}
+.tp-item:focus,
 .tp-item:focus-visible {
-  outline: 2px solid var(--brand);
-  outline-offset: -2px;
+  outline: none;
 }
 .tp-item.inset {
   padding-left: 30px;
@@ -1758,6 +1755,11 @@ body {
 }
 .composer-box:focus-within {
   border-color: var(--brand);
+}
+/* Attach (+) button: keep the full 32px line height so its icon aligns with the
+   send button, but narrow the width so the icon sits close to the text. */
+.composer-box .composer-attach-btn.ant-btn {
+  width: 24px;
 }
 
 /* `/` command & skill autocomplete — floats just above the composer box */

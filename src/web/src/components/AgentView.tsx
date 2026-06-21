@@ -1663,6 +1663,7 @@ export function AgentView({ runner }: { runner: Runner }) {
             }}
           >
             <Button
+              className="composer-attach-btn"
               type="text"
               icon={<PlusOutlined />}
               disabled={!runner.online}
