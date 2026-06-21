@@ -226,10 +226,12 @@ export class TasksService {
         // author is polymorphic (no FK), so names are resolved separately below.
         comments: { orderBy: { createdAt: 'asc' } },
         sessions: {
+          orderBy: { createdAt: 'desc' },
           select: {
             id: true,
             title: true,
             status: true,
+            createdAt: true,
             agent: { select: { name: true } },
           },
         },

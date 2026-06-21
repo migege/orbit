@@ -2641,6 +2641,11 @@ body {
   color: #d4380d;
   border-color: #ffccc7;
 }
+.tdp-badge.tone-amber {
+  background: #fff7e6;
+  color: #d46b08;
+  border-color: #ffd591;
+}
 
 .tdp-body {
   flex: 1;
@@ -2727,6 +2732,26 @@ body {
   border: 1px solid #eceef1;
   border-radius: 8px;
   padding: 12px 14px;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 10;
+  overflow: hidden;
+}
+.tdp-prose.expanded {
+  display: block;
+  overflow: visible;
+}
+.tdp-prose-toggle {
+  margin-top: 6px;
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: 12px;
+  color: #3370ff;
+  cursor: pointer;
+}
+.tdp-prose-toggle:hover {
+  text-decoration: underline;
 }
 .tdp-muted {
   color: #8f959e;
@@ -2745,29 +2770,27 @@ body {
 .tdp-session:hover {
   background: #f5f6f7;
 }
-.tdp-session-title {
+.tdp-session.is-failed {
+  background: #fff5f5;
+}
+.tdp-session.is-failed:hover {
+  background: #ffecec;
+}
+.tdp-session-main {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.tdp-session-title {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.tdp-session-agent {
-  font-size: 11px;
-  color: #646a73;
-  background: #f0f1f2;
-  padding: 1px 7px;
-  border-radius: 10px;
-  flex: none;
-  max-width: 120px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.tdp-session-status {
+.tdp-session-sub {
   font-size: 11px;
   color: #8f959e;
-  flex: none;
+  margin-top: 1px;
 }
 .tdp-dot {
   width: 8px;
@@ -2785,6 +2808,9 @@ body {
 }
 .tdp-dot.FAILED {
   background: #f54a45;
+}
+.tdp-dot.AWAITING_INPUT {
+  background: #fa8c16;
 }
 
 .tdp-comment {

@@ -1,7 +1,7 @@
 import { CheckOutlined, CloseOutlined, PlayCircleOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { App as AntApp, Avatar, Button, Input, Select, Spin, Switch, Tooltip } from 'antd';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import Markdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
@@ -16,6 +16,20 @@ const STATUS_META: Record<string, { label: string; tone: string }> = {
   DONE: { label: 'Done', tone: 'green' },
   CANCELLED: { label: 'Cancelled', tone: 'muted' },
   FAILED: { label: 'Failed', tone: 'red' },
+};
+
+// RunStatus (session.status) -> a single run's badge label + tone. The task header uses
+// STATUS_META; a run's enum is different (PENDING/RUNNING/SUCCEEDED/FAILED/CANCELLED/
+// AWAITING_INPUT/INTERRUPTED). AWAITING_INPUT means the turn finished and the agent is
+// waiting on you, so it gets a distinct amber tone rather than a neutral grey.
+const RUN_STATUS_META: Record<string, { label: string; tone: string }> = {
+  PENDING: { label: '排队中', tone: 'muted' },
+  RUNNING: { label: '运行中', tone: 'blue' },
+  SUCCEEDED: { label: '已完成', tone: 'green' },
+  FAILED: { label: '失败', tone: 'red' },
+  CANCELLED: { label: '已取消', tone: 'muted' },
+  AWAITING_INPUT: { label: '等待回复', tone: 'amber' },
+  INTERRUPTED: { label: '已中断', tone: 'muted' },
 };
 
 // The task counts as "执行中" only while one of its sessions is actually working:
@@ -97,6 +111,37 @@ interface AgentRow {
   id: string;
   name: string;
   runnerId?: string | null;
+}
+
+// The description is free-form spec text that often runs many lines. Clamp it (like the
+// skills catalog) and only offer 展开 when it's actually cut off, so the 运行/评论 sections
+// below stay reachable without scrolling past a wall of text.
+function TaskDescription({ text }: { text: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [overflowing, setOverflowing] = useState(false);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    // Measured while clamped — only show the toggle when the text is truncated.
+    setOverflowing(el.scrollHeight > el.clientHeight + 1);
+  }, [text]);
+  return (
+    <>
+      <div ref={ref} className={`tdp-prose${expanded ? ' expanded' : ''}`}>
+        {text}
+      </div>
+      {(overflowing || expanded) && (
+        <button
+          type="button"
+          className="tdp-prose-toggle"
+          onClick={() => setExpanded((v) => !v)}
+        >
+          {expanded ? '收起' : '展开'}
+        </button>
+      )}
+    </>
+  );
 }
 
 export function TaskDetailPanel({
@@ -565,7 +610,7 @@ export function TaskDetailPanel({
           {q.data?.description && (
             <section className="tdp-section">
               <div className="tdp-section-title">描述</div>
-              <div className="tdp-prose">{q.data.description}</div>
+              <TaskDescription text={q.data.description} />
             </section>
           )}
 
@@ -574,14 +619,27 @@ export function TaskDetailPanel({
             {sessions.length === 0 ? (
               <div className="tdp-muted">暂无关联运行</div>
             ) : (
-              sessions.map((s: any) => (
-                <Link key={s.id} to={`/sessions/${encodeId(s.id)}`} className="tdp-session">
-                  <span className={`tdp-dot ${s.status}`} />
-                  <span className="tdp-session-title">{s.title || '未命名会话'}</span>
-                  {s.agent?.name && <span className="tdp-session-agent">{s.agent.name}</span>}
-                  <span className="tdp-session-status">{s.status}</span>
-                </Link>
-              ))
+              sessions.map((s: any) => {
+                const meta = RUN_STATUS_META[s.status] ?? { label: s.status, tone: 'muted' };
+                return (
+                  <Link
+                    key={s.id}
+                    to={`/sessions/${encodeId(s.id)}`}
+                    className={`tdp-session${s.status === 'FAILED' ? ' is-failed' : ''}`}
+                  >
+                    <span className={`tdp-dot ${s.status}`} />
+                    <div className="tdp-session-main">
+                      {/* Agent leads — it's what tells two runs of the same task apart; the
+                          system-generated title just repeats the task name. */}
+                      <div className="tdp-session-title">
+                        {s.agent?.name || s.title || '未命名会话'}
+                      </div>
+                      <div className="tdp-session-sub">{fmt(s.createdAt)}</div>
+                    </div>
+                    <span className={`tdp-badge tone-${meta.tone}`}>{meta.label}</span>
+                  </Link>
+                );
+              })
             )}
           </section>
 
