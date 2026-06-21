@@ -998,24 +998,27 @@ body {
   display: flex;
   height: 100%;
   min-height: 0;
-  /* Horizontal page gutter only. The vertical gutter lives on each pane below, so the
-     divider (a flex child) can stretch the full panel height instead of being inset by
-     a wrapper that also holds it — matching the full-bleed .app-nav border. */
-  padding: 0 32px;
+  /* One gutter token drives every horizontal gap. It lives on the panes (.session-col /
+     .agent-view), not here, so page edge → list → divider → conversation stay symmetric:
+     each pane is inset --pane-gutter on both sides and the divider (zero margin) centers
+     itself in the two panes' padding. The wrapper keeps no padding so the divider (a flex
+     child) still stretches the full panel height. A symmetric layout forces the centre seam
+     to 2×--pane-gutter — that's inherent, tune the single token to taste. */
+  --pane-gutter: 20px;
 }
 .session-col {
   flex: none;
   display: flex;
   flex-direction: column;
   min-height: 0;
-  padding: 24px 0;
+  padding: 24px var(--pane-gutter);
 }
 /* Draggable divider between the session list and the conversation. The visible
    1px line matches the old column border; ::before widens the grab area. */
 .session-resizer {
   flex: none;
   width: 1px;
-  margin: 0 10px;
+  margin: 0;
   position: relative;
   background: #eceef1;
   cursor: col-resize;
@@ -1099,7 +1102,7 @@ body {
   display: flex;
   flex-direction: column;
   height: 100%;
-  padding: 24px 0;
+  padding: 24px var(--pane-gutter);
 }
 .agent-header {
   display: flex;
