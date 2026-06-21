@@ -117,7 +117,7 @@ export function ActiveSessionsView() {
           <Spin />
         </div>
       ) : active.length === 0 ? (
-        <div style={{ padding: '32px 16px', color: '#8a9099', fontSize: 13 }}>
+        <div style={{ padding: '32px 16px', color: 'var(--text-3)', fontSize: 13 }}>
           当前没有正在运行的会话。
         </div>
       ) : (

@@ -117,7 +117,7 @@ export function SkillsPage() {
                     <div className="skills-runner-head">
                       <span
                         className="runner-dot"
-                        style={{ background: r.online ? '#2ea121' : '#c0c4cc' }}
+                        style={{ background: r.online ? 'var(--success-solid)' : 'var(--dot-idle)' }}
                         title={r.online ? 'Online' : 'Offline'}
                       />
                       <span className="skills-runner-name">{r.displayName || r.name}</span>
