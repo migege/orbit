@@ -38,3 +38,9 @@ export class UpdatePreferencesDto {
   @IsEnum(PermissionMode)
   defaultPermissionMode?: PermissionMode;
 }
+
+/** Set a user's access role (admin area). */
+export class UpdateRoleDto {
+  @IsIn(['MEMBER', 'ADMIN'])
+  role!: 'MEMBER' | 'ADMIN';
+}

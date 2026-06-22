@@ -40,6 +40,7 @@ export interface Me {
   name: string;
   createdAt: string;
   preferences?: UserPreferences;
+  role?: 'MEMBER' | 'ADMIN';
 }
 
 /** The signed-in user — backs the account page and the nav footer's avatar + name. */

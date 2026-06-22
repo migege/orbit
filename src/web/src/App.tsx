@@ -7,6 +7,7 @@ import { ActiveSessionsView } from './components/ActiveSessionsView';
 import { RunnerRegisterGuide } from './components/RunnerRegisterGuide';
 import { ProfilePage } from './pages/ProfilePage';
 import { SettingsPage } from './pages/SettingsPage';
+import { AdminUsersPage } from './pages/AdminUsersPage';
 import { EnrollPage } from './pages/EnrollPage';
 import { LoginPage } from './pages/LoginPage';
 import { RunnerDetailPage } from './pages/RunnerDetailPage';
@@ -89,6 +90,14 @@ export function App() {
               element={
                 <DocView>
                   <SettingsPage />
+                </DocView>
+              }
+            />
+            <Route
+              path="admin"
+              element={
+                <DocView>
+                  <AdminUsersPage />
                 </DocView>
               }
             />

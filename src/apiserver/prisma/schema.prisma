@@ -66,6 +66,8 @@ model User {
   // Per-account UI preferences (theme, new-agent defaults). Shape: UserPreferences
   // (@orbit/shared). JSON so new keys need no migration; missing keys fall back.
   preferences  Json     @default("{}")
+  // Access role. MEMBER (default) for everyone; ADMIN unlocks the user-management area.
+  role         String   @default("MEMBER")
 
   agents           Agent[]
   runners          Runner[]

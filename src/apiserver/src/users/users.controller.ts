@@ -1,11 +1,11 @@
-import { Body, ConflictException, Controller, Get, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Patch, Post, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AuthUser, CurrentUser } from '../common/current-user.decorator';
-import { generateToken, hashPassword } from '../common/crypto.util';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AdminAuthGuard } from './admin-auth.guard';
 import { CreateUserDto, UpdatePreferencesDto } from './dto';
+import { createOrResetUser } from './users.util';
 
 @Controller('users')
 export class UsersController {
@@ -16,7 +16,7 @@ export class UsersController {
   me(@CurrentUser() user: AuthUser) {
     return this.prisma.user.findUnique({
       where: { id: user.userId },
-      select: { id: true, email: true, name: true, createdAt: true, preferences: true },
+      select: { id: true, email: true, name: true, createdAt: true, preferences: true, role: true },
     });
   }
 
@@ -39,7 +39,7 @@ export class UsersController {
     return this.prisma.user.update({
       where: { id: user.userId },
       data: { preferences: merged as Prisma.InputJsonValue },
-      select: { id: true, email: true, name: true, createdAt: true, preferences: true },
+      select: { id: true, email: true, name: true, createdAt: true, preferences: true, role: true },
     });
   }
 
@@ -50,33 +50,7 @@ export class UsersController {
    */
   @UseGuards(AdminAuthGuard)
   @Post()
-  async create(@Body() dto: CreateUserDto) {
-    const email = dto.email.trim();
-    const name = dto.name?.trim() || email.split('@')[0];
-
-    const existing = await this.prisma.user.findUnique({ where: { email } });
-    if (existing && !dto.force) {
-      throw new ConflictException(`user ${email} already exists (set force to reset their password)`);
-    }
-
-    let password = dto.password;
-    let generated = false;
-    if (!password) {
-      password = generateToken(12);
-      generated = true;
-    }
-    const passwordHash = hashPassword(password);
-
-    const user = existing
-      ? await this.prisma.user.update({ where: { email }, data: { passwordHash } })
-      : await this.prisma.user.create({ data: { email, name, passwordHash } });
-
-    return {
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      reset: Boolean(existing),
-      ...(generated ? { generatedPassword: password } : {}),
-    };
+  create(@Body() dto: CreateUserDto) {
+    return createOrResetUser(this.prisma, dto);
   }
 }
