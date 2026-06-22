@@ -900,16 +900,21 @@ body {
 .rd-agent-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--bg-raised);
+  overflow: hidden;
+}
+/* One panel with hairline dividers between rows, instead of boxing each row —
+   denser and faster to scan. */
+.rd-agent-list > * + * {
+  border-top: 1px solid var(--border-subtle);
 }
 .rd-agent-row {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 12px 14px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 10px;
-  background: var(--bg-raised);
+  padding: 10px 14px;
 }
 .rd-agent-ico {
   display: flex;
@@ -964,7 +969,7 @@ body {
   padding: 16px 16px 14px;
 }
 .rd-agent-form-new {
-  border-color: var(--brand);
+  box-shadow: inset 3px 0 0 var(--brand);
 }
 /* Two-column grid for the short fields; long fields below span full width. */
 .rd-form-grid {
@@ -986,10 +991,8 @@ body {
 /* Edit-in-place: the clicked row stays as a header and the editor expands below
    it, the two merged into one bordered card. */
 .rd-agent-editing {
-  border: 1px solid var(--brand);
-  border-radius: 10px;
-  background: var(--bg-raised);
   overflow: hidden;
+  box-shadow: inset 3px 0 0 var(--brand);
 }
 .rd-agent-editing > .rd-agent-row {
   border: none;
@@ -1000,6 +1003,12 @@ body {
   border: none;
   border-radius: 0;
   border-top: 1px solid var(--border-subtle);
+}
+/* Create form sits inline at the top of the panel — shed its own card frame too. */
+.rd-agent-list > .rd-agent-form-wrap > .rd-agent-form {
+  border: none;
+  border-radius: 0;
+  background: transparent;
 }
 /* Expand the editor open: grow its row track 0fr→1fr while fading in, so the
    rows below slide down smoothly. (Collapse is immediate — React unmounts it.) */
