@@ -961,6 +961,50 @@ body {
     grid-template-columns: 1fr;
   }
 }
+/* Edit-in-place: the clicked row stays as a header and the editor expands below
+   it, the two merged into one bordered card. */
+.rd-agent-editing {
+  border: 1px solid var(--brand);
+  border-radius: 10px;
+  background: var(--bg-raised);
+  overflow: hidden;
+}
+.rd-agent-editing > .rd-agent-row {
+  border: none;
+  border-radius: 0;
+  background: transparent;
+}
+.rd-agent-editing > .rd-agent-form-wrap > .rd-agent-form {
+  border: none;
+  border-radius: 0;
+  border-top: 1px solid var(--border-subtle);
+}
+/* Expand the editor open: grow its row track 0fr→1fr while fading in, so the
+   rows below slide down smoothly. (Collapse is immediate — React unmounts it.) */
+.rd-agent-form-wrap {
+  display: grid;
+  grid-template-rows: 1fr;
+  animation: rd-form-expand 0.2s ease;
+}
+.rd-agent-form-wrap > * {
+  min-height: 0;
+  overflow: hidden;
+}
+@keyframes rd-form-expand {
+  from {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+  to {
+    grid-template-rows: 1fr;
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rd-agent-form-wrap {
+    animation: none;
+  }
+}
 
 /* shared column grid: check | status | title | assignee */
 .orbit-tasklist {

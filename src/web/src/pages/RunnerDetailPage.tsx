@@ -300,6 +300,56 @@ export function RunnerDetailPage() {
     </div>
   );
 
+  // One agent row — shown on its own, or kept as the header above the in-place
+  // editor. While this row is being edited, the pencil toggles the editor closed.
+  const agentRow = (a: Agent) => (
+    <div key={a.id} className="rd-agent-row">
+      <span className="rd-agent-ico">
+        <RobotOutlined />
+      </span>
+      <div className="rd-agent-main">
+        <div className="rd-agent-name">
+          {a.name}
+          {a.enabled === false && <Tag style={{ marginLeft: 8 }}>disabled</Tag>}
+        </div>
+        <div className="rd-agent-meta">
+          {a.model || 'claude-sonnet-4-6'}
+          {a.workDir ? ` · ${a.workDir}` : ''}
+        </div>
+      </div>
+      <Button
+        size="small"
+        icon={<MessageOutlined />}
+        onClick={() => navigate(`/agents/${encodeId(a.id)}`)}
+      >
+        Chat
+      </Button>
+      <Button
+        size="small"
+        type={editing?.id === a.id ? 'primary' : 'text'}
+        icon={<EditOutlined />}
+        title={editing?.id === a.id ? 'Close editor' : 'Edit'}
+        onClick={() => (editing?.id === a.id ? closeForm() : openEdit(a))}
+      />
+      <Button
+        size="small"
+        type="text"
+        danger
+        icon={<DeleteOutlined />}
+        title="Delete"
+        onClick={() =>
+          modal.confirm({
+            title: `Delete agent “${a.name}”?`,
+            okText: 'Delete',
+            okButtonProps: { danger: true },
+            cancelText: 'Cancel',
+            onOk: () => removeAgentMut.mutateAsync(a.id),
+          })
+        }
+      />
+    </div>
+  );
+
   if (runners.isLoading) {
     return (
       <div style={{ padding: 48, textAlign: 'center' }}>
@@ -418,56 +468,17 @@ export function RunnerDetailPage() {
           </div>
         ) : (
           <div className="rd-agent-list">
-            {formOpen && !editing && agentForm('create')}
+            {formOpen && !editing && (
+              <div className="rd-agent-form-wrap">{agentForm('create')}</div>
+            )}
             {agents.map((a) =>
               formOpen && editing?.id === a.id ? (
-                <div key={a.id}>{agentForm('edit')}</div>
-              ) : (
-                <div key={a.id} className="rd-agent-row">
-                  <span className="rd-agent-ico">
-                    <RobotOutlined />
-                  </span>
-                  <div className="rd-agent-main">
-                    <div className="rd-agent-name">
-                      {a.name}
-                      {a.enabled === false && <Tag style={{ marginLeft: 8 }}>disabled</Tag>}
-                    </div>
-                    <div className="rd-agent-meta">
-                      {a.model || 'claude-sonnet-4-6'}
-                      {a.workDir ? ` · ${a.workDir}` : ''}
-                    </div>
-                  </div>
-                  <Button
-                    size="small"
-                    icon={<MessageOutlined />}
-                    onClick={() => navigate(`/agents/${encodeId(a.id)}`)}
-                  >
-                    Chat
-                  </Button>
-                  <Button
-                    size="small"
-                    type="text"
-                    icon={<EditOutlined />}
-                    title="Edit"
-                    onClick={() => openEdit(a)}
-                  />
-                  <Button
-                    size="small"
-                    type="text"
-                    danger
-                    icon={<DeleteOutlined />}
-                    title="Delete"
-                    onClick={() =>
-                      modal.confirm({
-                        title: `Delete agent “${a.name}”?`,
-                        okText: 'Delete',
-                        okButtonProps: { danger: true },
-                        cancelText: 'Cancel',
-                        onOk: () => removeAgentMut.mutateAsync(a.id),
-                      })
-                    }
-                  />
+                <div key={a.id} className="rd-agent-editing">
+                  {agentRow(a)}
+                  <div className="rd-agent-form-wrap">{agentForm('edit')}</div>
                 </div>
+              ) : (
+                agentRow(a)
               ),
             )}
           </div>
