@@ -1547,15 +1547,23 @@ export function AgentView({ runner }: { runner: Runner }) {
         <div className="agent-scroll-wrap">
         {selectedId ? (
           <div className="agent-sessions" ref={scrollRef}>
-            {selected &&
-              selected.status === 'PENDING' &&
-              (queuedForSlot ? (
-                <div className="chat-note">
-                  Queued · runner at capacity ({liveSlots}/{runner.maxConcurrent}), waiting for a free slot…
+            {selected && selected.status === 'PENDING' && events.length === 0 && (
+              <div className="chat-queued-state">
+                <div className="chat-queued-dots" aria-hidden="true">
+                  <span />
+                  <span />
+                  <span />
                 </div>
-              ) : (
-                <div className="chat-note">Starting session…</div>
-              ))}
+                <div className="chat-queued-title">
+                  {queuedForSlot ? 'Waiting for a free slot' : 'Starting session…'}
+                </div>
+                <div className="chat-queued-desc">
+                  {queuedForSlot
+                    ? `Runner at capacity (${liveSlots}/${runner.maxConcurrent}). This session starts as soon as a slot frees up.`
+                    : 'Your message is queued — the agent will pick it up in a moment.'}
+                </div>
+              </div>
+            )}
             <Transcript events={events} live={live} turnImages={turnImages} />
             {streamingThink && <div className="chat-think-stream chat-streaming">💭 {streamingThink}</div>}
             {streamingText && <StreamingMessage text={streamingText} />}
