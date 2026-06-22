@@ -5,7 +5,7 @@ import { AppShell, DocView, FlushView } from './components/AppShell';
 import { AgentConsole } from './components/AgentConsole';
 import { ActiveSessionsView } from './components/ActiveSessionsView';
 import { RunnerRegisterGuide } from './components/RunnerRegisterGuide';
-import { AccountSettingsPage } from './pages/AccountSettingsPage';
+import { ProfilePage } from './pages/ProfilePage';
 import { EnrollPage } from './pages/EnrollPage';
 import { LoginPage } from './pages/LoginPage';
 import { RunnerDetailPage } from './pages/RunnerDetailPage';
@@ -73,13 +73,16 @@ export function App() {
               }
             />
             <Route
-              path="settings/account"
+              path="settings/profile"
               element={
                 <DocView>
-                  <AccountSettingsPage />
+                  <ProfilePage />
                 </DocView>
               }
             />
+            {/* Old account-settings link, now Profile. Keep the redirect so existing
+                bookmarks/deep links don't 404. */}
+            <Route path="settings/account" element={<Navigate to="/settings/profile" replace />} />
             <Route
               path="runners"
               element={

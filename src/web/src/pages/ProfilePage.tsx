@@ -15,10 +15,10 @@ interface PwdValues {
   confirmPassword: string;
 }
 
-// Self-service account page. Profile is read-only for now; the only action is
-// changing your own password (the current password is re-verified server-side,
-// and the existing session keeps working — no token revocation).
-export function AccountSettingsPage() {
+// Self-service profile page: your identity (name/email, read-only for now) plus
+// account security. The only action is changing your own password (re-verified
+// server-side; the existing session keeps working — no token revocation).
+export function ProfilePage() {
   const { message } = AntdApp.useApp();
   const [form] = Form.useForm<PwdValues>();
 
@@ -39,9 +39,9 @@ export function AccountSettingsPage() {
 
   return (
     <div style={{ maxWidth: 560, margin: '0 auto' }}>
-      <h1 className="page-title">Account settings</h1>
+      <h1 className="page-title">Profile</h1>
 
-      <Card title="Profile" style={{ marginBottom: 16 }}>
+      <Card title="Basic information" style={{ marginBottom: 16 }}>
         <div style={{ display: 'grid', gap: 12 }}>
           <div>
             <div style={{ color: 'var(--text-3)', fontSize: 12, marginBottom: 2 }}>Name</div>
