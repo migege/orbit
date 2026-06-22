@@ -1,10 +1,9 @@
 import {
-  BgColorsOutlined,
   CaretDownOutlined,
-  CheckOutlined,
   DesktopOutlined,
   InboxOutlined,
   LogoutOutlined,
+  SettingOutlined,
   ThunderboltOutlined,
   UserOutlined,
 } from '@ant-design/icons';
@@ -31,7 +30,6 @@ import type { SlashCommandInfo } from '@orbit/shared';
 import { api, clearToken } from '../api';
 import { decodeId, encodeId } from '../lib/idCodec';
 import { meQuery, sessionQuery, sessionsQuery } from '../lib/queries';
-import { useThemeMode, type ThemeMode } from '../lib/theme';
 
 // Feishu-style top navigation. Each entry routes to "/<key>" (they all share the
 // Tasks view for now — only the heading differs). "Runners" opens the runners
@@ -105,7 +103,6 @@ export function TasksSidePanel({ open = false }: { open?: boolean }) {
   const loc = useLocation();
   const navigate = useNavigate();
   const qc = useQueryClient();
-  const { mode, setMode } = useThemeMode();
   // The signed-in user, for the footer avatar + name. Shares its key with the account
   // page (and the BootGate pre-warm) so it reads straight from cache.
   const me = useQuery(meQuery());
@@ -470,32 +467,16 @@ export function TasksSidePanel({ open = false }: { open?: boolean }) {
           menu={{
             items: [
               {
-                key: 'appearance',
-                icon: <BgColorsOutlined />,
-                label: 'Appearance',
-                children: (
-                  [
-                    { key: 'system', label: 'System' },
-                    { key: 'light', label: 'Light' },
-                    { key: 'dark', label: 'Dark' },
-                  ] as { key: ThemeMode; label: string }[]
-                ).map((it) => ({
-                  key: `theme-${it.key}`,
-                  label: it.label,
-                  icon:
-                    mode === it.key ? (
-                      <CheckOutlined />
-                    ) : (
-                      <span style={{ display: 'inline-block', width: 14 }} />
-                    ),
-                  onClick: () => setMode(it.key),
-                })),
-              },
-              {
                 key: 'profile',
                 icon: <UserOutlined />,
                 label: 'Profile',
                 onClick: () => navigate('/settings/profile'),
+              },
+              {
+                key: 'settings',
+                icon: <SettingOutlined />,
+                label: 'Settings',
+                onClick: () => navigate('/settings'),
               },
               { type: 'divider' },
               { key: 'logout', icon: <LogoutOutlined />, label: 'Logout', onClick: logout },
