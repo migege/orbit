@@ -30,7 +30,7 @@ import { useLocation, useMatch, useNavigate } from 'react-router-dom';
 import type { SlashCommandInfo } from '@orbit/shared';
 import { api, clearToken } from '../api';
 import { decodeId, encodeId } from '../lib/idCodec';
-import { sessionQuery, sessionsQuery } from '../lib/queries';
+import { meQuery, sessionQuery, sessionsQuery } from '../lib/queries';
 import { useThemeMode, type ThemeMode } from '../lib/theme';
 
 // Feishu-style top navigation. Each entry routes to "/<key>" (they all share the
@@ -106,6 +106,9 @@ export function TasksSidePanel({ open = false }: { open?: boolean }) {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const { mode, setMode } = useThemeMode();
+  // The signed-in user, for the footer avatar + name. Shares its key with the account
+  // page (and the BootGate pre-warm) so it reads straight from cache.
+  const me = useQuery(meQuery());
   // A small drag threshold so a plain click still opens an agent; only real movement
   // starts a reorder drag.
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
@@ -477,6 +480,9 @@ export function TasksSidePanel({ open = false }: { open?: boolean }) {
               icon={<UserOutlined />}
               style={{ background: 'var(--brand)', flex: 'none' }}
             />
+            {me.data && (
+              <span className="tp-user-name">{me.data.name || me.data.email}</span>
+            )}
           </div>
         </Dropdown>
       </div>

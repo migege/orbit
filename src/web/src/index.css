@@ -442,6 +442,16 @@ body {
 .tp-user-trigger:hover {
   background: var(--bg-hover);
 }
+.tp-user-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-1);
+}
 
 /* ---- Tasks page ---- */
 .page-title {
