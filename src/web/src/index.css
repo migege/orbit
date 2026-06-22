@@ -1462,6 +1462,146 @@ body {
   color: var(--text-3);
   margin-top: 2px;
 }
+
+/* Per-session worktree result, shown below the header once a run finishes (see
+   SessionOutputs.tsx): the branch the work was committed to + the changed files. */
+.session-outputs {
+  margin: 0 16px 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-subtle);
+  font-size: 12.5px;
+}
+.session-outputs-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.session-outputs-branch {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-weight: 600;
+  color: var(--text-1);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1px 7px;
+}
+.session-outputs-base {
+  color: var(--text-3);
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+.session-outputs-count {
+  color: var(--text-3);
+  margin-left: auto;
+}
+.session-outputs-files {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 220px;
+  overflow: auto;
+}
+.session-file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 1px 0;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+}
+.session-file-status {
+  flex: none;
+  width: 16px;
+  text-align: center;
+  font-weight: 700;
+  color: var(--text-3);
+}
+.session-file-status.st-a {
+  color: var(--success-solid);
+}
+.session-file-status.st-d {
+  color: var(--error-solid);
+}
+.session-file-status.st-r {
+  color: var(--warning-solid);
+}
+.session-file-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-2);
+}
+.session-file-stat {
+  flex: none;
+  display: inline-flex;
+  gap: 6px;
+}
+.session-file-stat .add {
+  color: var(--success-solid);
+}
+.session-file-stat .del {
+  color: var(--error-solid);
+}
+.session-file-bin {
+  flex: none;
+  color: var(--text-4);
+  font-style: italic;
+}
+.session-outputs-merge {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: var(--bg-sunken);
+  color: var(--text-2);
+  font-size: 11.5px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+.session-outputs-nogit {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  border-color: var(--warning-border);
+  background: var(--warning-bg);
+}
+.session-outputs-warn {
+  font-weight: 600;
+  color: var(--warning);
+}
+.session-outputs-hint {
+  color: var(--text-2);
+  line-height: 1.5;
+}
+.session-outputs-hint code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  background: var(--bg-raised);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+.session-outputs-enable {
+  align-self: flex-start;
+  margin-top: 6px;
+  padding: 4px 12px;
+  border: 1px solid var(--warning-border);
+  border-radius: 6px;
+  background: var(--bg-raised);
+  color: var(--warning);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.session-outputs-enable:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+.session-outputs-enable:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
 .agent-header-spacer {
   flex: 1;
 }
