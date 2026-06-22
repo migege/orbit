@@ -265,13 +265,25 @@ export function TaskListView() {
     [isListView, listQ.data, tasks.data, isUnlisted],
   );
   const counts = useMemo(() => {
-    const c = { total: baseRows.length, done: 0, inProgress: 0, open: 0, failed: 0, cancelled: 0 };
+    const c = {
+      total: baseRows.length,
+      done: 0,
+      inProgress: 0,
+      open: 0,
+      failed: 0,
+      cancelled: 0,
+      running: 0,
+      queued: 0,
+    };
     for (const t of baseRows) {
       if (t.status === 'DONE') c.done++;
       else if (t.status === 'FAILED') c.failed++;
       else if (t.status === 'CANCELLED') c.cancelled++;
       else if (t.status === 'IN_PROGRESS') c.inProgress++;
       else if (t.status === 'OPEN') c.open++;
+      // Live session overlays — orthogonal to lifecycle status, so counted separately.
+      if (t.running) c.running++;
+      else if (t.queued) c.queued++;
     }
     return c;
   }, [baseRows]);
@@ -284,7 +296,7 @@ export function TaskListView() {
     );
     return [
       { value: 'ALL', label: seg('All', counts.total) },
-      { value: 'ONGOING', label: seg('In progress', counts.open + counts.inProgress) },
+      { value: 'ONGOING', label: seg('Open', counts.open + counts.inProgress) },
       { value: 'FAILED', label: seg('Failed', counts.failed) },
       { value: 'DONE', label: seg('Done', counts.done) },
       { value: 'CANCELLED', label: seg('Cancelled', counts.cancelled) },
@@ -445,13 +457,22 @@ export function TaskListView() {
                 />
                 <span
                   className="task-progress-seg ongoing"
-                  style={{ width: `${(counts.inProgress / counts.total) * 100}%` }}
+                  style={{ width: `${(counts.running / counts.total) * 100}%` }}
                 />
               </div>
               <div className="task-progress-text">
                 Done <b>{counts.done}</b> / {counts.total}
-                <span className="sep">·</span>In progress {counts.inProgress}
-                <span className="sep">·</span>Open {counts.open}
+                <span className="sep">·</span>Open {counts.open + counts.inProgress}
+                {counts.running > 0 && (
+                  <>
+                    <span className="sep">·</span>Running {counts.running}
+                  </>
+                )}
+                {counts.queued > 0 && (
+                  <>
+                    <span className="sep">·</span>Queued {counts.queued}
+                  </>
+                )}
                 {counts.failed > 0 && (
                   <>
                     <span className="sep">·</span>Failed {counts.failed}
