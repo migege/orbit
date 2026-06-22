@@ -21,7 +21,7 @@ import {
   Tooltip,
 } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
-import { useLocation, useMatch } from 'react-router-dom';
+import { useLocation, useMatch, useSearchParams } from 'react-router-dom';
 import { api } from '../api';
 import { decodeId } from '../lib/idCodec';
 import { TaskDetailPanel } from '../components/TaskDetailPanel';
@@ -137,11 +137,28 @@ export function TaskListView() {
   const [concurrency, setConcurrency] = useState(3);
   const [assignOpen, setAssignOpen] = useState(false);
   const [assignAgentId, setAssignAgentId] = useState<string | null>(null);
-  const [filter, setFilter] = useState('ALL');
+  // Filter and sort live in the URL (?filter=…&sort=…&dir=…) so they survive a page
+  // refresh and are shareable. A param is dropped when it equals its default, keeping
+  // the URL clean for the initial view.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const setParam = (key: string, value: string, def: string) =>
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        if (value === def) next.delete(key);
+        else next.set(key, value);
+        return next;
+      },
+      { replace: true },
+    );
+  const filter = searchParams.get('filter') ?? 'ALL';
+  const setFilter = (v: string) => setParam('filter', v, 'ALL');
   // Client-side sort over the visible rows; default 'created'/'desc' mirrors the
   // backend's createdAt-desc ordering, so the initial view is unchanged.
-  const [sortField, setSortField] = useState('created');
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+  const sortField = searchParams.get('sort') ?? 'created';
+  const setSortField = (v: string) => setParam('sort', v, 'created');
+  const sortDir: 'asc' | 'desc' = searchParams.get('dir') === 'asc' ? 'asc' : 'desc';
+  const setSortDir = (v: 'asc' | 'desc') => setParam('dir', v, 'desc');
 
   // Poll while any task is running so its live indicator clears once the run ends;
   // 5s busy / 15s idle, matching the sidebar's task-list poll.
@@ -462,7 +479,7 @@ export function TaskListView() {
               <Tooltip title={sortDir === 'asc' ? 'Ascending' : 'Descending'}>
                 <Button
                   icon={sortDir === 'asc' ? <SortAscendingOutlined /> : <SortDescendingOutlined />}
-                  onClick={() => setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))}
+                  onClick={() => setSortDir(sortDir === 'asc' ? 'desc' : 'asc')}
                 />
               </Tooltip>
             </div>
