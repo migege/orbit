@@ -258,6 +258,12 @@ export function TasksSidePanel({ open = false }: { open?: boolean }) {
   const activeCount = (activeSessions.data ?? []).filter(
     (s: any) => s.status === 'RUNNING' || s.status === 'PENDING',
   ).length;
+  // "Needs you": active sessions blocked on a pending approval the user must act on
+  // (Allow/Deny on a permission card). Surfaces ActiveSessionsView's "Needs you" group
+  // up into the nav so it's visible from any page. Same cache, no extra request.
+  const needsReplyCount = (activeSessions.data ?? []).filter(
+    (s: any) => (s.pendingApprovals ?? 0) > 0,
+  ).length;
 
   // Open an agent's console — the same destination the runner detail page uses.
   // Config-only agents (no runner) have no console to open.
@@ -350,8 +356,14 @@ export function TasksSidePanel({ open = false }: { open?: boolean }) {
       <div className="tp-scroll">
         <div className="tp-section">
           {TOP.map((t) => {
-            // "Active" lists every task, so show its real total; the others carry no count.
-            const count = t.key === 'active' ? activeCount : null;
+            // "Active" shows its live session total. But when some of those sessions are
+            // blocked on an approval the user must act on, the count flips to that
+            // "needs you" number in an amber attention badge — so "it's your turn" reads
+            // from any page (the highlighted number = sessions awaiting you, not the total
+            // running). Other nav items carry no count.
+            const isActive = t.key === 'active';
+            const needsYou = isActive && needsReplyCount > 0;
+            const count = isActive ? (needsYou ? needsReplyCount : activeCount) : null;
             return (
               <div
                 key={t.key}
@@ -360,7 +372,14 @@ export function TasksSidePanel({ open = false }: { open?: boolean }) {
               >
                 <span className="tp-ico">{t.icon}</span>
                 <span className="tp-label">{t.label}</span>
-                {count != null && <span className="tp-count">{count}</span>}
+                {count != null && (
+                  <span
+                    className={`tp-count${needsYou ? ' needs-you' : ''}`}
+                    title={needsYou ? `${needsReplyCount} session(s) need your reply` : undefined}
+                  >
+                    {count}
+                  </span>
+                )}
               </div>
             );
           })}

@@ -318,6 +318,21 @@ body {
 .tp-item.active .tp-count {
   color: var(--brand);
 }
+/* "Needs you": one or more active sessions are blocked on an approval the user must
+   act on. Mirrors the amber "N pending" pill inside Active (.session-approval-badge)
+   so the nav speaks the same "waiting on you" language — visible from any page. */
+.tp-count.needs-you {
+  color: var(--warning);
+  background: var(--warning-bg);
+  border-radius: 999px;
+  padding: 1px 7px;
+  font-weight: 600;
+  font-size: 12px;
+}
+/* Hold the amber even when Active is the selected row (which otherwise tints counts blue). */
+.tp-item.active .tp-count.needs-you {
+  color: var(--warning);
+}
 /* Task-list status dot. Grey + static by default; turns blue and breathes while
    the list has a task executing right now (runningTasks > 0); turns green and
    static once the whole list is finished (every task DONE). */
