@@ -70,6 +70,12 @@ func runLoop(cfg *RunnerConfig) {
 	var assetMu sync.Mutex
 	hbCommands, hbSkills := scanSlashAssets(assetRoots())
 
+	// Claude subscription quota for this machine's login, refreshed in the background
+	// so the heartbeat attaches the latest snapshot without ever blocking on the
+	// (undocumented) usage endpoint. Best-effort: a nil snapshot reports nothing.
+	usageProbe := newPlanUsageProbe()
+	go usageProbe.run(loopCtx)
+
 	// Heartbeat every 30s; honor server-requested cancellations.
 	hbStop := make(chan struct{})
 	go func() {
@@ -108,6 +114,7 @@ func runLoop(cfg *RunnerConfig) {
 				resp, err := t.heartbeat(HeartbeatRequest{
 					Status: "ONLINE", IdleCapacity: idle, Version: version,
 					Commands: cmds, Skills: skills,
+					PlanUsage: usageProbe.snapshot(),
 				})
 				if err != nil {
 					logln("heartbeat failed:", err)
