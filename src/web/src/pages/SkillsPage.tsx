@@ -82,10 +82,10 @@ export function SkillsPage() {
     it.name.toLowerCase().includes(q) ||
     (it.description?.toLowerCase().includes(q) ?? false);
 
-  // Collapsed group keys; an active search forces every matching group open.
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  // Expanded group keys — groups start collapsed; an active search forces every match open.
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const toggle = (key: string) =>
-    setCollapsed((prev) => {
+    setExpanded((prev) => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
       else next.add(key);
@@ -172,7 +172,7 @@ export function SkillsPage() {
           ) : (
             <div className="skills-list">
               {groups.map((g) => {
-                const open = !!q || !collapsed.has(g.key);
+                const open = !!q || expanded.has(g.key);
                 const count = g.skills.length + g.commands.length;
                 return (
                   <div className="skills-group-card" key={g.key}>
