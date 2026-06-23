@@ -316,7 +316,11 @@ export interface ApprovalDecisionResponse {
 // 'reload' carries no user text: it tells the runner the session's model /
 // permission-mode changed, so it should re-spawn claude with --resume + the new
 // flags (full context preserved). The new config rides in the turn's `content` JSON.
-export type ConversationTurnKind = 'message' | 'interrupt' | 'end' | 'reload' | 'shell';
+// 'diff' is a fire-and-forget control turn (no text, no claude): it asks the runner to
+// recompute the live worktree diff and push it back, so an opened file's diff reflects
+// the current worktree even when the stored snapshot lagged (the heartbeat refreshes the
+// file list but not the patch text — see SessionDiffResultRequest).
+export type ConversationTurnKind = 'message' | 'interrupt' | 'end' | 'reload' | 'shell' | 'diff';
 
 /** An image attachment as handed to the runner on the inbox: the id to fetch its bytes
  *  with (runner-scoped `GET /runner/sessions/:id/attachments/:attId`) plus its MIME type,
@@ -478,4 +482,17 @@ export interface SessionMergeResultRequest {
 export interface SessionCommitResultRequest {
   status: 'committed' | 'nochange' | 'error';
   message?: string;
+}
+
+/**
+ * Runner → control plane: a freshly recomputed live worktree diff, pushed in response to a
+ * 'diff' inbox control turn (the web opened a file whose stored patch lagged the worktree).
+ * Mirrors the live fields of {@link TurnCompleteRequest}: the server overwrites the session's
+ * `changedFiles` and the SessionDiff side-table `patches` so list and diff are consistent
+ * again, fixing the "No diff to preview" gap for files added/changed since the last turn end.
+ */
+export interface SessionDiffResultRequest {
+  changedFiles?: ChangedFile[];
+  changedDiff?: FilePatch[];
+  worktreeDirty?: boolean;
 }

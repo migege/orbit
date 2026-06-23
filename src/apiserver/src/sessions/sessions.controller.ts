@@ -58,6 +58,14 @@ export class SessionsController {
     return this.sessions.getDiff(user.userId, id);
   }
 
+  // Ask the live runner to recompute the worktree diff now, so an opened file whose stored
+  // patch lagged the live worktree (the heartbeat refreshes the file list but not the patch
+  // text) gets its diff. No-op for a non-live session — see requestDiffRefresh.
+  @Post(':id/diff/refresh')
+  refreshDiff(@CurrentUser() user: AuthUser, @Param('id', Base62UuidPipe) id: string) {
+    return this.sessions.requestDiffRefresh(user.userId, id);
+  }
+
   @Post(':id/turns')
   turn(
     @CurrentUser() user: AuthUser,

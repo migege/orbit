@@ -38,6 +38,7 @@ import {
   RunnerRegisterResponse,
   SessionCommitResultRequest,
   SessionCompleteRequest,
+  SessionDiffResultRequest,
   SessionEndReason,
   SessionMergeResultRequest,
   TurnAttachment,
@@ -418,7 +419,9 @@ export class RunnerApiController {
         WHERE "session_id" = ${sessionId}::uuid
           AND (
             -- interrupt/end land immediately, even mid-message (interrupt is the point).
-            ("kind" IN ('interrupt', 'end')
+            -- 'diff' (an on-demand live-diff refresh) is read-only and claude-independent, so
+            -- it lands immediately too — even mid-turn — and is acked on delivery below.
+            ("kind" IN ('interrupt', 'end', 'diff')
               AND ("status" = 'PENDING' OR ("status" = 'IN_FLIGHT' AND "lease_deadline_at" < now())))
             -- A crashed in-flight message: re-deliver the same one (at-least-once lease).
             OR ("kind" IN ('message', 'shell') AND "status" = 'IN_FLIGHT' AND "lease_deadline_at" < now())
@@ -433,7 +436,7 @@ export class RunnerApiController {
                 AND inflight."status" = 'IN_FLIGHT'
             ))
           )
-        ORDER BY (CASE WHEN "kind" IN ('interrupt', 'end') THEN 0 WHEN "kind" = 'reload' THEN 1 ELSE 2 END), "seq" ASC
+        ORDER BY (CASE WHEN "kind" IN ('interrupt', 'end', 'diff') THEN 0 WHEN "kind" = 'reload' THEN 1 ELSE 2 END), "seq" ASC
         FOR UPDATE SKIP LOCKED
         LIMIT 1
       )
@@ -464,7 +467,7 @@ export class RunnerApiController {
         if (atts.length > 0) attachments = atts.map((a) => ({ id: a.id, mimeType: a.mimeType }));
       }
     } else {
-      // Control turns (interrupt/end) are fire-and-forget: ack on delivery so a
+      // Control turns (interrupt/end/reload/diff) are fire-and-forget: ack on delivery so a
       // stale one can never re-fire ahead of real messages every lease window.
       await this.prisma.conversationTurn.updateMany({
         where: { id: t.id, status: { not: 'ANSWERED' } },
@@ -908,6 +911,41 @@ export class RunnerApiController {
         ...(clean ? { worktreeDirty: false } : {}),
       },
     });
+    return { ok: true };
+  }
+
+  /** A freshly recomputed live worktree diff, pushed in response to a 'diff' inbox control
+   *  turn (the web opened a file whose stored patch lagged). Overwrites the session's
+   *  changedFiles and the SessionDiff side-table patches together, so the file list and the
+   *  per-file diffs are consistent again. Guarded to LIVE + this runner (mirrors the heartbeat
+   *  guard) so a straggler can't clobber a just-finalized session's committed diff. */
+  @UseGuards(RunnerAuthGuard)
+  @Post('sessions/:id/diff')
+  @HttpCode(202)
+  async diffResult(
+    @CurrentRunner() runner: { id: string },
+    @Param('id') sessionId: string,
+    @Body() dto: SessionDiffResultRequest,
+  ) {
+    await this.assertSessionOwnership(sessionId, runner.id);
+    const updated = await this.prisma.session.updateMany({
+      where: { id: sessionId, assignedRunnerId: runner.id, status: { in: LIVE } },
+      data: {
+        ...(dto.changedFiles !== undefined
+          ? { changedFiles: dto.changedFiles as unknown as Prisma.InputJsonValue }
+          : {}),
+        ...(dto.worktreeDirty !== undefined ? { worktreeDirty: dto.worktreeDirty } : {}),
+      },
+    });
+    // Only persist the patches once we've confirmed the session is still live (count > 0);
+    // a no-op update means it finalized, so its committed diff must stay authoritative.
+    if (updated.count > 0 && dto.changedDiff !== undefined) {
+      await this.prisma.sessionDiff.upsert({
+        where: { sessionId },
+        create: { sessionId, patches: dto.changedDiff as unknown as Prisma.InputJsonValue },
+        update: { patches: dto.changedDiff as unknown as Prisma.InputJsonValue },
+      });
+    }
     return { ok: true };
   }
 

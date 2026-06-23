@@ -493,6 +493,22 @@ func runSessionProcess(ctx context.Context, shutdownCtx context.Context, t *Tran
 				reloadRequested.Store(true)
 				procCancel() // kill claude; the main loop returns reload=true to re-spawn
 				return
+			case "diff":
+				// On-demand live-diff refresh: the web opened a file's diff and the stored
+				// snapshot may lag the current worktree (the heartbeat refreshes the file list
+				// but not the patch text). Recompute the full live diff and push it back so the
+				// drawer shows the real diff within a second or two. Read-only (throwaway temp
+				// index, like the heartbeat's liveDiffStat), so it's safe even mid-turn; no
+				// claude involvement and no turn consumed. Acked server-side on delivery, so
+				// there's no redelivery to dedup against.
+				liveFiles, livePatches := liveDiff(job.WT)
+				if err := t.diffResult(job.SessionID, DiffResultRequest{
+					ChangedFiles:  liveFiles,
+					ChangedDiff:   livePatches,
+					WorktreeDirty: worktreeIsDirty(job.WT),
+				}); err != nil {
+					logln("diff-result failed for", job.SessionID+":", err)
+				}
 			case "end":
 				endSession()
 				return
