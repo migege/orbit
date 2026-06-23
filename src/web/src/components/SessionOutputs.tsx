@@ -20,14 +20,34 @@ export function SessionOutputs({
   committed,
   onEnableIsolation,
   enabling,
+  onMergeToMain,
+  merging,
+  onResolveInSession,
+  resolving,
+  onCommit,
+  committing,
 }: {
   detail?: SessionDetail | null;
-  /** True once the session has ended and the runner committed the work to the branch; while
-   *  the session is still live the diff is uncommitted working-tree state (refreshed each turn). */
+  /** Fallback for older runners that don't report `worktreeDirty`: true once the session has
+   *  ended (work committed at completion) so the bar shows Merge, false while live so it shows
+   *  the read-only "uncommitted" note. When the runner DOES report worktreeDirty, that drives
+   *  the Commit-vs-Merge choice instead — for live and ended sessions alike. */
   committed?: boolean;
   /** Provided by the parent (which owns the mutation); enables the non-git nudge's button. */
   onEnableIsolation?: () => void;
   enabling?: boolean;
+  /** Provided by the parent (owns the mutation + confirm); enables the "Merge to main" button.
+   *  The outcome surfaces via detail.mergeStatus/mergeError (the parent polls while pending). */
+  onMergeToMain?: () => void;
+  merging?: boolean;
+  /** Provided by the parent; on a conflict/error, resumes the session so its agent merges main
+   *  in and resolves the conflicts (after which the branch merges clean). */
+  onResolveInSession?: () => void;
+  resolving?: boolean;
+  /** Provided by the parent (owns the mutation); enables the "Commit" button shown while the
+   *  live worktree is dirty. The outcome surfaces via detail.commitStatus/worktreeDirty. */
+  onCommit?: () => void;
+  committing?: boolean;
 }) {
   const { message } = AntApp.useApp();
   const [open, setOpen] = useState(false);
@@ -69,6 +89,14 @@ export function SessionOutputs({
   const add = files.reduce((s, f) => s + Math.max(0, f.additions), 0);
   const del = files.reduce((s, f) => s + Math.max(0, f.deletions), 0);
 
+  // Git-state-driven primary action. When the runner reports `worktreeDirty`, the bar shows
+  // Commit while the worktree has uncommitted changes and Merge once it's clean — for live and
+  // ended sessions alike. Older runners don't report it (null) → fall back to the session
+  // lifecycle (`committed`): live shows the read-only "uncommitted" note, ended shows Merge.
+  const dirtyKnown = detail.worktreeDirty != null;
+  const showCommit = dirtyKnown && detail.worktreeDirty === true;
+  const showMerge = dirtyKnown ? !showCommit : !!committed;
+
   return (
     <>
     <div className={`wt-bar${open ? ' wt-open' : ''}`}>
@@ -83,13 +111,25 @@ export function SessionOutputs({
             <span className="wt-del">−{del}</span>
             <span className="wt-files">
               · {files.length} {files.length === 1 ? 'file' : 'files'}
-              {committed ? ' · committed' : ''}
+              {showMerge ? ' · committed' : ''}
             </span>
           </span>
         ) : (
           <span className="wt-stat wt-nochange">no changes</span>
         )}
         <span className="wt-spacer" />
+        {showCommit && hasChanges && (
+          <CommitButton status={detail.commitStatus} busy={committing} onCommit={onCommit} />
+        )}
+        {showMerge && hasChanges && (
+          <MergeButton
+            status={detail.mergeStatus}
+            busy={merging}
+            onMerge={onMergeToMain}
+            onResolveInSession={onResolveInSession}
+            resolving={resolving}
+          />
+        )}
         {hasChanges && (
           <button
             type="button"
@@ -107,13 +147,33 @@ export function SessionOutputs({
             <FileRow key={f.path} file={f} onClick={() => setOpenFile(f.path)} />
           ))}
           <div className="wt-merge">
-            {committed ? (
-              <>
-                <span className="wt-merge-label">Committed to {branch} · merge with</span>
-                <code className="wt-merge-cmd" title="Copy" onClick={() => copy(`git merge ${branch}`)}>
-                  git merge {branch}
-                </code>
-              </>
+            {showCommit ? (
+              <div className="wt-merge-manual">
+                {detail.commitStatus === 'error' && (
+                  <span className="wt-merge-err" title={detail.commitError ?? undefined}>
+                    {detail.commitError || 'Commit failed'}
+                  </span>
+                )}
+                <span className="wt-merge-label">
+                  Uncommitted changes on {branch} — commit them to merge into main.
+                </span>
+              </div>
+            ) : showMerge ? (
+              <div className="wt-merge-manual">
+                {(detail.mergeStatus === 'conflict' || detail.mergeStatus === 'error') && (
+                  <span className="wt-merge-err" title={detail.mergeError ?? undefined}>
+                    {detail.mergeStatus === 'conflict'
+                      ? 'Merge conflict — aborted, working tree left clean. Resolve manually:'
+                      : detail.mergeError || 'Merge failed. Merge manually:'}
+                  </span>
+                )}
+                <span className="wt-merge-or">
+                  {detail.mergeStatus === 'merged' ? 'Merged ✓ · or by hand:' : 'Or merge manually:'}
+                  <code className="wt-merge-cmd" title="Copy" onClick={() => copy(`git merge ${branch}`)}>
+                    git merge {branch}
+                  </code>
+                </span>
+              </div>
             ) : (
               <span className="wt-merge-label">Working changes (uncommitted) on {branch}</span>
             )}
@@ -131,6 +191,93 @@ export function SessionOutputs({
         onClose={() => setOpenFile(null)}
       />
     </>
+  );
+}
+
+/** Compact "Merge to main" control sitting on the worktree bar itself (shown once the work is
+ *  committed). Drives off the server-reported mergeStatus: idle → a Merge button; pending →
+ *  "Merging…"; merged → a ✓ chip; conflict/error → "Resolve in session" (resume the session so
+ *  its agent merges main in and fixes the conflicts), falling back to "Retry merge" when the
+ *  parent can't resume. The failure detail + a copyable `git merge <branch>` fallback live in
+ *  the expandable file panel below. With no driver at all only the merged chip can show. */
+function MergeButton({
+  status,
+  busy,
+  onMerge,
+  onResolveInSession,
+  resolving,
+}: {
+  status?: SessionDetail['mergeStatus'];
+  busy?: boolean;
+  onMerge?: () => void;
+  onResolveInSession?: () => void;
+  resolving?: boolean;
+}) {
+  if (status === 'merged') {
+    return (
+      <span className="wt-merge-done" title="Merged into main">
+        ✓ Merged
+      </span>
+    );
+  }
+  const failed = status === 'conflict' || status === 'error';
+  // On a conflict/error, the best recovery is letting the session's own agent merge main in and
+  // resolve — it has the context for the changes it made. Falls back to a plain retry.
+  if (failed && onResolveInSession) {
+    return (
+      <button
+        type="button"
+        className="wt-merge-btn wt-merge-btn-failed"
+        disabled={resolving}
+        onClick={onResolveInSession}
+        title="Resume the session and have its agent merge main in and resolve the conflicts"
+      >
+        {resolving ? 'Resuming…' : 'Resolve in session'}
+      </button>
+    );
+  }
+  if (!onMerge) return null;
+  const pending = busy || status === 'pending';
+  return (
+    <button
+      type="button"
+      className={`wt-merge-btn${failed ? ' wt-merge-btn-failed' : ''}`}
+      disabled={pending}
+      onClick={onMerge}
+      title={failed ? 'Merge failed — expand the file list for details' : 'Merge this branch into main'}
+    >
+      {pending ? 'Merging…' : failed ? 'Retry merge' : 'Merge to main'}
+    </button>
+  );
+}
+
+/** Compact "Commit" control on the worktree bar, shown while the live worktree has uncommitted
+ *  changes (worktreeDirty). Commits them onto the branch via the runner (heartbeat round-trip);
+ *  once the runner reports the tree clean the bar flips to MergeButton. Drives off commitStatus:
+ *  idle → Commit; pending → "Committing…"; error → "Retry commit" (detail sits in the expanded
+ *  panel). With no driver (no onCommit) it renders nothing. */
+function CommitButton({
+  status,
+  busy,
+  onCommit,
+}: {
+  status?: SessionDetail['commitStatus'];
+  busy?: boolean;
+  onCommit?: () => void;
+}) {
+  if (!onCommit) return null;
+  const pending = busy || status === 'pending';
+  const failed = status === 'error';
+  return (
+    <button
+      type="button"
+      className={`wt-merge-btn${failed ? ' wt-merge-btn-failed' : ''}`}
+      disabled={pending}
+      onClick={onCommit}
+      title={failed ? 'Commit failed — try again' : 'Commit the worktree changes onto this branch'}
+    >
+      {pending ? 'Committing…' : failed ? 'Retry commit' : 'Commit'}
+    </button>
   );
 }
 

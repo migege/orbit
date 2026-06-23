@@ -593,6 +593,7 @@ func runSessionProcess(ctx context.Context, shutdownCtx context.Context, t *Tran
 					IsolationStatus: job.IsolationStatus,
 					ChangedFiles:    liveFiles,
 					ChangedDiff:     livePatches,
+					WorktreeDirty:   worktreeIsDirty(job.WT),
 				}); err != nil {
 					logln("turn-complete failed for", job.SessionID+":", err)
 				}

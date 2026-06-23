@@ -560,6 +560,62 @@ export class SessionsService {
   }
 
   /**
+   * Queue a "merge this session's worktree branch into main" for the runner that ran it.
+   * Worktree-isolated sessions only, whose `branch` holds committed work (auto-committed at
+   * /complete for a finished session, or via {@link commitWorktree} for a live one) and whose
+   * `assignedRunnerId` still points at the machine whose local repo holds it. The runner
+   * picks the request up on its next heartbeat (≤30s), merges its branch's committed state
+   * into main (the live checkout, if any, is a separate worktree and is undisturbed), and
+   * reports the outcome back into `mergeStatus`/`mergeError`/`mergedAt`. Idempotent while a
+   * merge is already pending; re-requesting a merged/conflicted session re-queues it.
+   */
+  async mergeToMain(ownerId: string, id: string) {
+    const session = await this.prisma.session.findFirst({ where: { id, ownerId } });
+    if (!session) throw new NotFoundException('session not found');
+    if (session.isolationStatus !== 'worktree' || !session.branch) {
+      throw new BadRequestException('session has no worktree branch to merge');
+    }
+    if (!session.assignedRunnerId) {
+      throw new ConflictException('no runner is associated with this session');
+    }
+    if (session.mergeStatus === 'pending') return { ok: true };
+    await this.prisma.session.update({
+      where: { id },
+      data: { mergeStatus: 'pending', mergeRequestedAt: new Date(), mergeError: null, mergedAt: null },
+    });
+    return { ok: true };
+  }
+
+  /**
+   * Queue a "commit this live session's uncommitted worktree changes onto its branch" for the
+   * runner that's running it. Worktree-isolated, still-live sessions only: the checkout exists
+   * on the runner and `assignedRunnerId` points at that machine. The runner picks the request
+   * up on its next heartbeat (≤30s), commits, and reports the outcome back into
+   * `commitStatus`/`commitError` (clearing `worktreeDirty` on success, so the bar flips to
+   * Merge). Idempotent while a commit is already pending. A finished session already committed
+   * its work at completion, so it has nothing to commit here (the bar shows Merge instead).
+   */
+  async commitWorktree(ownerId: string, id: string) {
+    const session = await this.prisma.session.findFirst({ where: { id, ownerId } });
+    if (!session) throw new NotFoundException('session not found');
+    if (session.isolationStatus !== 'worktree' || !session.branch) {
+      throw new BadRequestException('session has no worktree to commit');
+    }
+    if (!SessionsService.LIVE.includes(session.status) || session.cancelRequestedAt) {
+      throw new ConflictException('the session has ended — its work is already committed');
+    }
+    if (!session.assignedRunnerId) {
+      throw new ConflictException('no runner is associated with this session');
+    }
+    if (session.commitStatus === 'pending') return { ok: true };
+    await this.prisma.session.update({
+      where: { id },
+      data: { commitStatus: 'pending', commitRequestedAt: new Date(), commitError: null },
+    });
+    return { ok: true };
+  }
+
+  /**
    * Stop a session and settle it to CANCELLED — unlike {@link end}, which PARKS the
    * session as dormant/resumable. A live session has its claude process torn down
    * (endLive, reason CANCELLED so /complete finalizes CANCELLED not PARKED). A still-
@@ -773,6 +829,15 @@ export class SessionsService {
         error: null,
         result: null,
         lastTurnAt: new Date(),
+        // Reviving will change the branch (more work / a conflict-resolution merge), so any
+        // prior "merge to main" outcome is stale — clear it so the bar offers Merge afresh.
+        mergeStatus: null,
+        mergeError: null,
+        mergedAt: null,
+        // Likewise the live-worktree commit state: the revived run re-reports worktreeDirty,
+        // and a stale 'pending'/'error' would otherwise wedge the bar's Commit button.
+        commitStatus: null,
+        commitError: null,
         // Re-apply any mode/model/effort changes made while the session was ended;
         // buildSession reads these when the runner re-claims and re-spawns claude.
         // Omitted fields keep their prior value (don't clobber to null).

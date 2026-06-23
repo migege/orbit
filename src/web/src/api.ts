@@ -209,6 +209,16 @@ export const interruptSession = (sessionId: string) =>
 
 export const endSession = (sessionId: string) => api(`/sessions/${sessionId}/end`, { method: 'POST' });
 
+/** Ask the runner that ran this session to merge its worktree branch into main. Async:
+ *  the outcome lands on SessionDetail.mergeStatus within a heartbeat (~30s). */
+export const mergeSessionToMain = (sessionId: string) =>
+  api(`/sessions/${sessionId}/merge`, { method: 'POST' });
+
+/** Ask the runner to commit a live session's uncommitted worktree changes onto its branch.
+ *  Async: the outcome lands on SessionDetail.commitStatus / worktreeDirty within a heartbeat. */
+export const commitSession = (sessionId: string) =>
+  api(`/sessions/${sessionId}/commit`, { method: 'POST' });
+
 // Soft visibility actions for ended sessions. Archive hides a session into the
 // Archived view; delete moves it to the trash. Both keep all data; restore (which
 // clears both) brings it back to the active list. There is no hard delete.
@@ -241,6 +251,19 @@ export interface SessionDetail {
   baseSha?: string | null;
   changedFiles?: SessionChangedFile[] | null;
   isolationStatus?: string | null;
+  // "Merge to main" outcome (see mergeSessionToMain): 'pending' while the runner works,
+  // then 'merged' (mergedAt set) | 'conflict' | 'error' (mergeError carries why). Null
+  // until the user clicks merge.
+  mergeStatus?: 'pending' | 'merged' | 'conflict' | 'error' | null;
+  mergeError?: string | null;
+  mergedAt?: string | null;
+  // Live-worktree commit state (see commitSession). worktreeDirty drives the bar's primary
+  // action — true → Commit, false → Merge — when the runner reports it (null = not reported,
+  // so the bar falls back to the session lifecycle). commitStatus is 'pending' while the
+  // runner commits, then 'committed' | 'nochange' | 'error' (commitError carries why).
+  worktreeDirty?: boolean | null;
+  commitStatus?: 'pending' | 'committed' | 'nochange' | 'error' | null;
+  commitError?: string | null;
 }
 
 /** Fetch one session by id (accepts a base62 public id or a raw UUID). Used to

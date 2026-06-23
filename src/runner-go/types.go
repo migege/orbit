@@ -55,6 +55,21 @@ type HeartbeatRequest struct {
 	// Claude subscription quota for the account this runner uses (the `/usage`
 	// popover numbers). Nil when unavailable — never blocks or fails the heartbeat.
 	PlanUsage *PlanUsage `json:"planUsage,omitempty"`
+	// Sessions carries each running session's live worktree diff so the web status bar
+	// appears mid-turn, not just at turn-complete. Empty when no isolated session runs.
+	Sessions []SessionLiveState `json:"sessions,omitempty"`
+}
+
+// SessionLiveState is one running session's live worktree state, reported each heartbeat
+// while a turn is in flight (the uncommitted diff vs base, mirroring TurnCompleteRequest).
+type SessionLiveState struct {
+	SessionID       string        `json:"sessionId"`
+	IsolationStatus string        `json:"isolationStatus"`
+	ChangedFiles    []ChangedFile `json:"changedFiles"`
+	// WorktreeDirty is the worktree's current `git status` (true → uncommitted changes). No
+	// omitempty: a clean worktree must report false so the server flips the bar to Merge,
+	// rather than dropping the field (which an older server reads as "not reported").
+	WorktreeDirty bool `json:"worktreeDirty"`
 }
 
 // SlashCommandInfo mirrors @orbit/shared: one `/`-invocable asset (command or skill).
@@ -72,6 +87,46 @@ type HeartbeatResponse struct {
 	// Server-authoritative max-concurrent (the editable DB value). 0 from an older
 	// control plane that doesn't send it — the runner keeps its current value then.
 	MaxConcurrent int `json:"maxConcurrent"`
+	// Branch merges the user requested for sessions this runner ran: merge each one's
+	// branch into the repo's main, then POST the outcome to /merge-result. Omitted by
+	// older control planes (the field is simply absent → no merges).
+	MergeRequests []MergeCommand `json:"mergeRequests,omitempty"`
+	// Commits the user requested for live sessions: commit each one's uncommitted worktree
+	// changes onto its branch, then POST the outcome to /commit-result. Omitted by older
+	// control planes (absent → no commits).
+	CommitRequests []CommitCommand `json:"commitRequests,omitempty"`
+}
+
+// MergeCommand mirrors @orbit/shared: a request to merge one session's worktree branch into
+// the repo's main on this runner's local repo. WorkDir is the session agent's dir; the
+// runner resolves the repo root from it.
+type MergeCommand struct {
+	SessionID string `json:"sessionId"`
+	Branch    string `json:"branch"`
+	WorkDir   string `json:"workDir"`
+}
+
+// MergeResultRequest mirrors @orbit/shared SessionMergeResultRequest: the outcome of a
+// MergeCommand, POSTed back so the UI status bar can show merged ✓ / conflict / error.
+type MergeResultRequest struct {
+	Status    string `json:"status"` // "merged" | "conflict" | "error"
+	MergedSha string `json:"mergedSha,omitempty"`
+	Message   string `json:"message,omitempty"`
+}
+
+// CommitCommand mirrors @orbit/shared: a request to commit a live session's uncommitted
+// worktree changes onto its branch. The runner locates the checkout from SessionID (its
+// per-session worktree dir); Branch is for logging.
+type CommitCommand struct {
+	SessionID string `json:"sessionId"`
+	Branch    string `json:"branch"`
+}
+
+// CommitResultRequest mirrors @orbit/shared SessionCommitResultRequest: the outcome of a
+// CommitCommand, POSTed back so the UI status bar can flip from Commit to Merge.
+type CommitResultRequest struct {
+	Status  string `json:"status"` // "committed" | "nochange" | "error"
+	Message string `json:"message,omitempty"`
 }
 
 type MeResponse struct {
@@ -200,6 +255,9 @@ type TurnCompleteRequest struct {
 	// Per-file unified diffs (capped) for the same uncommitted worktree state, so the web
 	// can open a file's diff on demand without a round-trip back to this runner.
 	ChangedDiff []FilePatch `json:"changedDiff,omitempty"`
+	// Whether the worktree has uncommitted changes (drives Commit vs Merge). No omitempty
+	// (false must be sent so a just-committed tree flips the bar to Merge).
+	WorktreeDirty bool `json:"worktreeDirty"`
 }
 
 type RunEvent struct {

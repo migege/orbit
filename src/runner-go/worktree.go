@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // Isolation outcomes reported back on /complete (Session.isolationStatus): the session
@@ -240,11 +241,26 @@ func diffFiles(dir, base, head string) []ChangedFile {
 }
 
 // liveDiff returns the per-file stat summary AND the per-file unified-diff patches of the
-// worktree's CURRENT state (uncommitted + untracked) vs its base, for the live status bar
-// (and on-demand file diffs) while a session is still running. It stages into a throwaway
-// temp index (GIT_INDEX_FILE) so it never touches the real index claude may be using, and
-// respects .gitignore so node_modules/build output don't show.
+// worktree's CURRENT state (uncommitted + untracked) vs its base — for the turn-boundary
+// reports (turn-complete/complete) that drive the on-demand file diffs.
 func liveDiff(wt *Worktree) ([]ChangedFile, []FilePatch) {
+	return stagedLiveDiff(wt, true)
+}
+
+// liveDiffStat is the stats-only counterpart, for the heartbeat's SessionLiveState: it carries
+// the changed-file summary for the mid-turn status bar every ~30s, so it deliberately skips the
+// (heavier) per-file patch text that would bloat the heartbeat payload — the diff *patches*
+// refresh at turn boundaries via liveDiff instead.
+func liveDiffStat(wt *Worktree) []ChangedFile {
+	files, _ := stagedLiveDiff(wt, false)
+	return files
+}
+
+// stagedLiveDiff stages the worktree's current state into a throwaway temp index and computes
+// the per-file stat summary vs base; with withPatch it also captures the per-file unified-diff
+// patches (capped). The temp index (GIT_INDEX_FILE) never touches the real index claude may be
+// using, and .gitignore is respected so node_modules/build output don't show.
+func stagedLiveDiff(wt *Worktree, withPatch bool) ([]ChangedFile, []FilePatch) {
 	if wt == nil || wt.BaseSha == "" {
 		return nil, nil
 	}
@@ -268,10 +284,24 @@ func liveDiff(wt *Worktree) ([]ChangedFile, []FilePatch) {
 	}
 	statusOut, _ := gitEnv(wt.Path, env, "diff", "--cached", "--name-status", wt.BaseSha)
 	files := parseNumstat(numOut, statusOut)
+	if !withPatch {
+		return files, nil
+	}
 	// Same staged index → the full patch matches the numstat exactly. Best-effort: a patch
 	// failure just leaves the file list without diffs, the status bar still works.
 	patchOut, _ := gitEnv(wt.Path, env, "diff", "--cached", wt.BaseSha)
 	return files, buildFilePatches(files, splitPatch(patchOut))
+}
+
+// worktreeIsDirty reports whether the worktree has uncommitted changes right now — tracked
+// or untracked, respecting .gitignore (`git status --porcelain` non-empty). Drives the
+// status bar's Commit-vs-Merge action. False for a nil/missing worktree.
+func worktreeIsDirty(wt *Worktree) bool {
+	if wt == nil {
+		return false
+	}
+	out, err := git(wt.Path, "status", "--porcelain")
+	return err == nil && out != ""
 }
 
 // parseNumstat zips `git diff --numstat` (+/-/path) with `git diff --name-status` (the
@@ -401,6 +431,130 @@ func removeWorktree(wt *Worktree) {
 		_, _ = git(wt.RepoDir, "worktree", "prune")
 	}
 	_, _ = git(wt.RepoDir, "update-ref", "-d", baseRefName(wt.Session))
+}
+
+// mergeLock serializes merges so two "merge to main" requests can't race on the same repo's
+// working tree / main ref.
+var mergeLock sync.Mutex
+
+// mergeOutcome is what mergeToMain reports: "merged" advanced main (MergedSha = new HEAD),
+// "conflict" means the merge was aborted cleanly, "error" means a precondition failed.
+// Message carries git's output / the failed precondition for the UI.
+type mergeOutcome struct {
+	Status    string
+	MergedSha string
+	Message   string
+}
+
+// mergeToMain merges a session's branch into the repo's main on the runner's local repo.
+// Conservative by design: it only auto-merges when the repo root is already on a CLEAN main
+// (the normal state — isolated sessions run in their own worktrees, so the primary checkout
+// sits on main between runs). Any other state returns an "error" outcome with an actionable
+// message; the UI keeps a copyable `git merge` fallback for those cases. The session branch
+// is never deleted. Serialized by mergeLock so concurrent merges don't race on the repo.
+func mergeToMain(req MergeCommand) mergeOutcome {
+	mergeLock.Lock()
+	defer mergeLock.Unlock()
+
+	repoRoot, err := git(expandTilde(req.WorkDir), "rev-parse", "--show-toplevel")
+	if err != nil || repoRoot == "" {
+		return mergeOutcome{Status: "error", Message: "workDir is not a git repository"}
+	}
+	// Detect the merge target: main, else master.
+	target := ""
+	for _, b := range []string{"main", "master"} {
+		if branchExists(repoRoot, b) {
+			target = b
+			break
+		}
+	}
+	if target == "" {
+		return mergeOutcome{Status: "error", Message: "no main or master branch in this repo"}
+	}
+	if !branchExists(repoRoot, req.Branch) {
+		return mergeOutcome{Status: "error", Message: fmt.Sprintf("branch %q not found", req.Branch)}
+	}
+	// Guard: only merge when the primary checkout is on a clean target branch, so we never
+	// disturb an in-progress checkout or leave a half-applied merge in the shared tree.
+	if cur, _ := git(repoRoot, "rev-parse", "--abbrev-ref", "HEAD"); cur != target {
+		return mergeOutcome{Status: "error", Message: fmt.Sprintf("repo is on %q, not %q — switch to %s and merge manually", cur, target, target)}
+	}
+	// Block on modified tracked files (a merge would mix them in / could clobber); untracked
+	// files are fine — git itself refuses only if the merge would overwrite one, which the
+	// error path below catches.
+	if st, _ := git(repoRoot, "status", "--porcelain", "--untracked-files=no"); st != "" {
+		return mergeOutcome{Status: "error", Message: fmt.Sprintf("%s has uncommitted changes — commit/stash, or merge manually", target)}
+	}
+	// Inline identity so a merge commit never fails on a runner with no git user.* set.
+	out, err := git(repoRoot,
+		"-c", "user.email=runner@orbit", "-c", "user.name=Orbit Runner",
+		"merge", "--no-edit", req.Branch)
+	if err != nil {
+		// A failed merge (almost always a conflict, given the clean-tree pre-check). git
+		// writes "CONFLICT ..." to stdout (returned as `out`); ExitError carries stderr.
+		msg := strings.TrimSpace(out + "\n" + gitStderr(err))
+		_, _ = git(repoRoot, "merge", "--abort") // leave the working tree clean
+		return mergeOutcome{Status: "conflict", Message: clip(msg, 1000)}
+	}
+	sha, _ := git(repoRoot, "rev-parse", "HEAD")
+	logln(fmt.Sprintf("merged %s into %s (%s) for session %s", req.Branch, target, shortSha(sha), req.SessionID))
+	return mergeOutcome{Status: "merged", MergedSha: sha}
+}
+
+// commitOutcome is what commitWorktree reports: "committed" advanced the branch, "nochange"
+// means the tree was already clean, "error" means a precondition failed / git errored.
+type commitOutcome struct {
+	Status  string
+	Message string
+}
+
+// commitWorktree commits a live session's uncommitted worktree changes onto its branch, so
+// the user can checkpoint (and then merge) without ending the session. It operates on the
+// session's own checkout (worktreesDir()/SessionID), which is separate from the primary repo
+// on main, so it never disturbs main or another session. Returns "nochange" when the tree is
+// already clean, "committed" on a new commit, "error" if the checkout is missing or git
+// fails. Serialized per session by the runloop's in-flight guard.
+func commitWorktree(req CommitCommand) commitOutcome {
+	wtPath := filepath.Join(worktreesDir(), req.SessionID)
+	if !isGitRepo(wtPath) {
+		return commitOutcome{Status: "error", Message: "no live worktree for this session"}
+	}
+	if _, err := git(wtPath, "add", "-A"); err != nil {
+		return commitOutcome{Status: "error", Message: clip(gitStderr(err), 1000)}
+	}
+	// `diff --cached --quiet` exits 0 when nothing is staged → the tree is already clean.
+	if _, err := git(wtPath, "diff", "--cached", "--quiet"); err == nil {
+		return commitOutcome{Status: "nochange"}
+	}
+	// Inline identity + --no-verify so the commit never fails on a runner with no git user.*
+	// set or a repo pre-commit hook (mirrors finalizeWorktree).
+	if _, err := git(wtPath,
+		"-c", "user.email=runner@orbit", "-c", "user.name=Orbit Runner",
+		"commit", "--no-verify", "-m", "orbit: commit "+req.Branch); err != nil {
+		return commitOutcome{Status: "error", Message: clip(gitStderr(err), 1000)}
+	}
+	logln(fmt.Sprintf("committed worktree changes for session %s onto %s", req.SessionID, req.Branch))
+	return commitOutcome{Status: "committed"}
+}
+
+// gitStderr extracts git's stderr from a failed git() call (Output() puts it on ExitError).
+func gitStderr(err error) string {
+	if ee, ok := err.(*exec.ExitError); ok {
+		return strings.TrimSpace(string(ee.Stderr))
+	}
+	if err != nil {
+		return err.Error()
+	}
+	return ""
+}
+
+// clip truncates s to at most n runes, appending an ellipsis when it cut anything.
+func clip(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
 }
 
 // gcWorktrees removes leftover session checkouts whose session is no longer live — a crash

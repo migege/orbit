@@ -160,6 +160,24 @@ export interface RunnerHeartbeatRequest {
    *  OAuth usage endpoint. Absent when the runner authenticates with an API key
    *  (no OAuth creds) or is too old to report it. */
   planUsage?: PlanUsage;
+  /** Live worktree state for each session this runner is currently running, so the
+   *  composer's status bar appears mid-turn — not just after a turn completes. Absent
+   *  from older runners (the bar then waits for the first turn-complete as before). */
+  sessions?: SessionLiveState[];
+}
+
+/** One running session's live worktree diff, reported on the heartbeat while a turn is
+ *  still in flight (cf. TurnCompleteRequest, which carries the same at turn boundaries). */
+export interface SessionLiveState {
+  sessionId: string;
+  /** What the runner did: 'worktree' | 'shared-nogit'. */
+  isolationStatus: string;
+  /** The worktree's current uncommitted diff vs base; empty when nothing changed yet. */
+  changedFiles: ChangedFile[];
+  /** Whether the worktree has uncommitted changes right now (`git status` non-empty). Drives
+   *  the status bar's primary action: dirty → Commit, clean-but-ahead → Merge. Absent from
+   *  older runners (the bar then falls back to the session lifecycle). */
+  worktreeDirty?: boolean;
 }
 
 export interface RunnerHeartbeatResponse {
@@ -169,6 +187,33 @@ export interface RunnerHeartbeatResponse {
    *  adopts this live on each heartbeat, so a UI/API change to it takes effect within
    *  one heartbeat without restarting the runner. */
   maxConcurrent: number;
+  /** Branch merges the user requested from the UI for sessions this runner ran. The
+   *  runner merges each session's branch into main on its local repo and reports the
+   *  outcome back via POST /runner/sessions/:id/merge-result. Absent on older control
+   *  planes (older runners ignore the field → the merge stays pending). */
+  mergeRequests?: MergeCommand[];
+  /** Commits the user requested for live sessions this runner is running: commit the
+   *  worktree's uncommitted changes onto its branch, then POST the outcome via
+   *  /runner/sessions/:id/commit-result. Absent on older control planes. */
+  commitRequests?: CommitCommand[];
+}
+
+/** Control plane → runner: merge one session's worktree branch into the repo's main. */
+export interface MergeCommand {
+  sessionId: string;
+  /** The session's worktree branch, e.g. orbit/<slug>-<hash>. */
+  branch: string;
+  /** The session agent's workDir; the runner resolves the repo root from it. */
+  workDir: string;
+}
+
+/** Control plane → runner: commit a live session's uncommitted worktree changes onto its
+ *  branch. The runner locates the checkout from the session id (its per-session worktree
+ *  dir); `branch` is for logging only. */
+export interface CommitCommand {
+  sessionId: string;
+  /** The session's worktree branch, e.g. orbit/<slug>-<hash>. */
+  branch: string;
 }
 
 // ─────────────────────────── Interactive sessions (Route B) ───────────────────────────
@@ -358,6 +403,8 @@ export interface TurnCompleteRequest {
   changedFiles?: ChangedFile[];
   /** Per-file unified diffs (capped) for the same uncommitted state, for on-demand viewing. */
   changedDiff?: FilePatch[];
+  /** Whether the worktree has uncommitted changes (drives Commit vs Merge in the bar). */
+  worktreeDirty?: boolean;
 }
 
 /** One file changed by a worktree-isolated session, as a compact diff summary the runner
@@ -409,4 +456,26 @@ export interface SessionCompleteRequest {
   changedDiff?: FilePatch[];
   /** What the runner did: 'worktree' (isolated) | 'shared-nogit' (no git → shared dir). */
   isolationStatus?: string;
+}
+
+/**
+ * Runner → control plane: the outcome of a {@link MergeCommand}. `merged` advanced main
+ * (mergedSha is the new HEAD); `conflict` means the merge was aborted cleanly; `error`
+ * means a precondition failed (workDir not on a clean main, branch missing, …). `message`
+ * carries git's stderr / the precondition for the UI.
+ */
+export interface SessionMergeResultRequest {
+  status: 'merged' | 'conflict' | 'error';
+  mergedSha?: string;
+  message?: string;
+}
+
+/**
+ * Runner → control plane: the outcome of a {@link CommitCommand}. `committed` advanced the
+ * branch (the worktree is now clean); `nochange` means there was nothing to commit; `error`
+ * means the commit failed (no worktree, git error). `message` carries git's stderr.
+ */
+export interface SessionCommitResultRequest {
+  status: 'committed' | 'nochange' | 'error';
+  message?: string;
 }
