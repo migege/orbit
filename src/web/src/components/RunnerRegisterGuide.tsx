@@ -7,13 +7,27 @@ import { api } from '../api';
 
 type OS = 'macOS' | 'Linux' | 'Windows';
 
+// The deployment serves install.sh, the runner binaries (/dl) and the API all from its own
+// origin. __PUBLIC_ORIGIN__ is that origin, baked into the bundle at build time from the
+// PUBLIC_ORIGIN env (.env → web image build arg, see vite.config). It defaults to the hosted
+// host below, so self-hosted deploys just set PUBLIC_ORIGIN instead of being hardwired to it.
+declare const __PUBLIC_ORIGIN__: string;
+const DEFAULT_HOST = 'https://orbit.wikova.com';
+
 // Only the install line differs per OS; everything else is identical.
-const INSTALL_CMD: Record<OS, string> = {
-  macOS: 'curl -fsSL https://orbit.wikova.com/install.sh | bash',
-  Linux: 'curl -fsSL https://orbit.wikova.com/install.sh | bash',
-  Windows: 'irm https://orbit.wikova.com/install.ps1 | iex',
-};
-const REGISTER_CMD = 'orbit register';
+function buildCommands(origin: string): { install: Record<OS, string>; register: string } {
+  // On the canonical hosted instance the CLI/script defaults already match its origin, so
+  // keep the commands clean there; on any other origin pass it through explicitly.
+  const custom = origin !== DEFAULT_HOST;
+  const sh = `curl -fsSL ${origin}/install.sh | ${custom ? `ORBIT_BASE_URL=${origin} ` : ''}bash`;
+  const ps = custom
+    ? `$env:ORBIT_BASE_URL='${origin}'; irm ${origin}/install.ps1 | iex`
+    : `irm ${origin}/install.ps1 | iex`;
+  return {
+    install: { macOS: sh, Linux: sh, Windows: ps },
+    register: custom ? `orbit register --server ${origin}` : 'orbit register',
+  };
+}
 
 interface Runner {
   id: string;
@@ -75,6 +89,7 @@ export function RunnerRegisterGuide() {
   const navigate = useNavigate();
   const [os, setOs] = useState<OS>('macOS');
   const [copied, setCopied] = useState<string | null>(null);
+  const { install: installCmd, register: registerCmd } = buildCommands(__PUBLIC_ORIGIN__);
 
   const copy = (key: string, text: string) => {
     void navigator.clipboard?.writeText(text)?.catch(() => {});
@@ -137,9 +152,9 @@ export function RunnerRegisterGuide() {
           desc="Installs the orbit CLI on this machine."
         >
           <CommandBox
-            cmd={INSTALL_CMD[os]}
+            cmd={installCmd[os]}
             copied={copied === 'install'}
-            onCopy={() => copy('install', INSTALL_CMD[os])}
+            onCopy={() => copy('install', installCmd[os])}
           />
         </Step>
 
@@ -151,9 +166,9 @@ export function RunnerRegisterGuide() {
           desc="Opens your browser to confirm this machine belongs to you."
         >
           <CommandBox
-            cmd={REGISTER_CMD}
+            cmd={registerCmd}
             copied={copied === 'register'}
-            onCopy={() => copy('register', REGISTER_CMD)}
+            onCopy={() => copy('register', registerCmd)}
           />
         </Step>
 

@@ -16,6 +16,10 @@ RUN npm ci
 COPY src/web ./src/web
 COPY src/shared ./src/shared
 RUN npm run build -w @orbit/shared
+# Public origin baked into the web bundle (the "Add a runner" install commands). Declared
+# here, after npm ci and the shared build, so changing it only rebuilds the web bundle.
+ARG PUBLIC_ORIGIN
+ENV PUBLIC_ORIGIN=$PUBLIC_ORIGIN
 RUN npm run build -w @orbit/web
 
 # ───────────────────────── runner binaries (Go, static) ─────────────────────────
