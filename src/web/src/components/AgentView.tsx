@@ -1275,12 +1275,17 @@ export function AgentView({ runner }: { runner: Runner }) {
   // The `+` menu opens the picker scoped to one asset kind; null (manual `/` typing) shows both.
   const [slashScope, setSlashScope] = useState<'command' | 'skill' | null>(null);
   const slashToken = /(?:^|\s)\/(\S*)$/.exec(text)?.[1] ?? null;
+  // Scope the `/` menu to the composer's agent: host-level assets (no agentId — e.g.
+  // ~/.claude or the runner's default dir) plus the assets of the agent this session
+  // runs as. A live session's agent is fixed; a draft uses the picked agent.
+  const composerAgentId = live ? selected?.agent?.id : agentId;
   const slashItems = useMemo(
-    () => [
-      ...(runner.commands ?? []).map((c) => ({ name: c.name, description: c.description, type: 'command' as const })),
-      ...(runner.skills ?? []).map((s) => ({ name: s.name, description: s.description, type: 'skill' as const })),
-    ],
-    [runner.commands, runner.skills],
+    () =>
+      [
+        ...(runner.commands ?? []).map((c) => ({ name: c.name, description: c.description, type: 'command' as const, agentId: c.agentId })),
+        ...(runner.skills ?? []).map((s) => ({ name: s.name, description: s.description, type: 'skill' as const, agentId: s.agentId })),
+      ].filter((it) => !it.agentId || it.agentId === composerAgentId),
+    [runner.commands, runner.skills, composerAgentId],
   );
   const slashMatches = useMemo(() => {
     if (slashToken === null) return [];
@@ -1727,6 +1732,7 @@ export function AgentView({ runner }: { runner: Runner }) {
                 >
                   <span className="composer-slash-name">/{it.name}</span>
                   <span className="composer-slash-type">{it.type === 'skill' ? 'skill' : 'cmd'}</span>
+                  {it.agentId && <span className="composer-slash-type">project</span>}
                   {it.description && <span className="composer-slash-desc">{it.description}</span>}
                 </div>
               ))}
