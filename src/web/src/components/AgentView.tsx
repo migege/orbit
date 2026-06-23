@@ -1606,7 +1606,7 @@ export function AgentView({ runner }: { runner: Runner }) {
             const deleteItem = {
               key: 'delete',
               icon: <DeleteOutlined />,
-              label: ended ? 'Delete' : 'Delete & end session',
+              label: 'Delete',
               danger: true,
               onClick: ({ domEvent }: { domEvent: { stopPropagation: () => void } }) => {
                 domEvent.stopPropagation();
@@ -1735,7 +1735,7 @@ export function AgentView({ runner }: { runner: Runner }) {
                       key: 'delete',
                       icon: <DeleteOutlined />,
                       danger: true,
-                      label: TERMINAL.includes(selected.status) ? 'Delete' : 'Delete & end session',
+                      label: 'Delete',
                       onClick: () => deleteMut.mutate(selected.id),
                     },
                   ],
