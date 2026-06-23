@@ -69,6 +69,9 @@ type TextNode = {
   kind: 'user' | 'assistant' | 'thinking';
   seq: number;
   text: string;
+  // Wall-clock of the source event — carried for user turns to show a relative
+  // timestamp ("1w ago") under the bubble.
+  ts?: string;
   // Local previews of images the composer just sent (object URLs, shown instantly).
   images?: TurnImage[];
   // Durable refs from the persisted `user` event — fetched on demand so a turn's images
@@ -115,6 +118,7 @@ function buildNodes(events: RunEvent[], turnImages?: Record<string, TurnImage[]>
             kind: 'user',
             seq: ev.seq,
             text: p.text ? String(p.text) : '',
+            ts: ev.ts,
             images: imgs,
             imageRefs: refs,
           });
@@ -227,8 +231,10 @@ function NodeView({ node, live }: { node: Node; live?: boolean }) {
 // User message bubble. Input is kept verbatim (pre-wrap), not Markdown-parsed, so a
 // literal '#' or '*' the user typed isn't reinterpreted. Any images sent with the turn
 // render above the text (an image-only turn has empty text) — prefer the local preview
-// (instant), falling back to the durable refs when there's none. A copy button fades in
-// on hover (only when the turn has text) to lift the message text back out to the clipboard.
+// (instant), falling back to the durable refs when there's none. Below the bubble a
+// right-aligned meta row (copy button · relative time) fades in on hover, like Claude;
+// it's absolutely positioned so it never adds height, and lives inside the hover wrap so
+// the pointer can travel down onto it without dismissing it (CSS :hover hits ancestors).
 function UserBubble({ node }: { node: TextNode }) {
   const [copied, setCopied] = useState(false);
   const copy = () => {
@@ -237,37 +243,60 @@ function UserBubble({ node }: { node: TextNode }) {
     setTimeout(() => setCopied(false), 1600);
   };
   return (
-    <div className="chat-msg chat-user" data-seq={node.seq}>
-      {node.images && node.images.length > 0 ? (
-        <div className="chat-images">
-          {node.images.map((im, i) => (
-            <ChatImage key={i} src={im.url} />
-          ))}
-        </div>
-      ) : (
-        node.imageRefs &&
-        node.imageRefs.length > 0 && (
+    <div className="chat-user-wrap">
+      <div className="chat-msg chat-user" data-seq={node.seq}>
+        {node.images && node.images.length > 0 ? (
           <div className="chat-images">
-            {node.imageRefs.map((r) => (
-              <AttachmentImage key={r.id} id={r.id} />
+            {node.images.map((im, i) => (
+              <ChatImage key={i} src={im.url} />
             ))}
           </div>
-        )
-      )}
-      {node.text}
+        ) : (
+          node.imageRefs &&
+          node.imageRefs.length > 0 && (
+            <div className="chat-images">
+              {node.imageRefs.map((r) => (
+                <AttachmentImage key={r.id} id={r.id} />
+              ))}
+            </div>
+          )
+        )}
+        {node.text}
+      </div>
       {node.text && (
-        <button
-          type="button"
-          className="chat-copy"
-          onClick={copy}
-          title={copied ? 'Copied' : 'Copy message'}
-          aria-label={copied ? 'Copied' : 'Copy message'}
-        >
-          {copied ? <CheckOutlined /> : <CopyOutlined />}
-        </button>
+        <div className="chat-user-meta">
+          <button
+            type="button"
+            className="chat-copy"
+            onClick={copy}
+            title={copied ? 'Copied' : 'Copy message'}
+            aria-label={copied ? 'Copied' : 'Copy message'}
+          >
+            {copied ? <CheckOutlined /> : <CopyOutlined />}
+          </button>
+          {node.ts && <span className="chat-time">{relTime(node.ts)}</span>}
+        </div>
       )}
     </div>
   );
+}
+
+// Relative timestamp under a user bubble ("just now", "5m ago", "3h ago", "2d ago",
+// "1w ago"); older than ~4 weeks falls back to a short absolute month/day.
+function relTime(iso: string): string {
+  const t = new Date(iso).getTime();
+  if (!Number.isFinite(t)) return '';
+  const diff = Date.now() - t;
+  const min = 60_000;
+  const hour = 60 * min;
+  const day = 24 * hour;
+  const week = 7 * day;
+  if (diff < min) return 'just now';
+  if (diff < hour) return `${Math.floor(diff / min)}m ago`;
+  if (diff < day) return `${Math.floor(diff / hour)}h ago`;
+  if (diff < week) return `${Math.floor(diff / day)}d ago`;
+  if (diff < 4 * week) return `${Math.floor(diff / week)}w ago`;
+  return new Date(t).toLocaleDateString([], { month: 'numeric', day: 'numeric' });
 }
 
 // Renders a past turn's image from its attachment id. The download endpoint is
