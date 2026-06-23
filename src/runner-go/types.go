@@ -55,6 +55,17 @@ type HeartbeatRequest struct {
 	// Claude subscription quota for the account this runner uses (the `/usage`
 	// popover numbers). Nil when unavailable — never blocks or fails the heartbeat.
 	PlanUsage *PlanUsage `json:"planUsage,omitempty"`
+	// Sessions carries each running session's live worktree diff so the web status bar
+	// appears mid-turn, not just at turn-complete. Empty when no isolated session runs.
+	Sessions []SessionLiveState `json:"sessions,omitempty"`
+}
+
+// SessionLiveState is one running session's live worktree state, reported each heartbeat
+// while a turn is in flight (the uncommitted diff vs base, mirroring TurnCompleteRequest).
+type SessionLiveState struct {
+	SessionID       string        `json:"sessionId"`
+	IsolationStatus string        `json:"isolationStatus"`
+	ChangedFiles    []ChangedFile `json:"changedFiles"`
 }
 
 // SlashCommandInfo mirrors @orbit/shared: one `/`-invocable asset (command or skill).

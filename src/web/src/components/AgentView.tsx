@@ -602,9 +602,16 @@ export function AgentView({ runner }: { runner: Runner }) {
   const sessionDetailQ = useQuery({
     ...sessionQuery(selectedId),
     placeholderData: keepPreviousData,
-    // While a "merge to main" is pending, poll so the runner's outcome (≤1 heartbeat away)
-    // lands without the user refreshing; idle otherwise.
-    refetchInterval: (q) => (q.state.data?.mergeStatus === 'pending' ? 3000 : false),
+    // Poll the detail when either side has a live update the runner pushes via heartbeat:
+    // while the session is live, for the worktree status bar (isolation + uncommitted diff,
+    // reported mid-turn) to appear without waiting for turn_end; and while a "merge to main"
+    // is pending, for the runner's merge outcome (≤1 heartbeat away) to land. Idle otherwise.
+    refetchInterval: (q) =>
+      q.state.data?.mergeStatus === 'pending'
+        ? 3000
+        : selected && !TERMINAL.includes(selected.status)
+          ? 5000
+          : false,
   });
   const live = selected ? !TERMINAL.includes(selected.status) : false;
   // An ended session can be revived (--resume claude's context) only if it actually

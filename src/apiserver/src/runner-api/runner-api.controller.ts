@@ -260,6 +260,27 @@ export class RunnerApiController {
         planUsage: (dto?.planUsage ?? undefined) as Prisma.InputJsonValue | undefined,
       },
     });
+    // Persist each running session's live worktree diff so the composer's status bar can
+    // appear mid-turn, not just at turn-complete. The `status in LIVE` guard stops a
+    // straggler heartbeat from overwriting a just-finalized session's committed diff;
+    // the try/catch keeps a DB hiccup here from failing the heartbeat (→ reads as offline).
+    if (dto?.sessions?.length) {
+      try {
+        await Promise.all(
+          dto.sessions.map((s) =>
+            this.prisma.session.updateMany({
+              where: { id: s.sessionId, assignedRunnerId: runner.id, status: { in: LIVE } },
+              data: {
+                isolationStatus: s.isolationStatus,
+                changedFiles: (s.changedFiles ?? []) as unknown as Prisma.InputJsonValue,
+              },
+            }),
+          ),
+        );
+      } catch {
+        // Next heartbeat retries; the status bar tolerates a one-cycle lag.
+      }
+    }
     let cancelSessionIds: string[] = [];
     let mergeRequests: RunnerHeartbeatResponse['mergeRequests'] = [];
     try {
