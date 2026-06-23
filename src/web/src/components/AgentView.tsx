@@ -601,6 +601,9 @@ export function AgentView({ runner }: { runner: Runner }) {
   const sessionDetailQ = useQuery({
     ...sessionQuery(selectedId),
     placeholderData: keepPreviousData,
+    // Poll while the session is live so the worktree status bar (isolation + uncommitted
+    // diff, now reported on the heartbeat mid-turn) shows up without waiting for turn_end.
+    refetchInterval: selected && !TERMINAL.includes(selected.status) ? 5000 : false,
   });
   const live = selected ? !TERMINAL.includes(selected.status) : false;
   // An ended session can be revived (--resume claude's context) only if it actually

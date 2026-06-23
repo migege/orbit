@@ -160,6 +160,20 @@ export interface RunnerHeartbeatRequest {
    *  OAuth usage endpoint. Absent when the runner authenticates with an API key
    *  (no OAuth creds) or is too old to report it. */
   planUsage?: PlanUsage;
+  /** Live worktree state for each session this runner is currently running, so the
+   *  composer's status bar appears mid-turn — not just after a turn completes. Absent
+   *  from older runners (the bar then waits for the first turn-complete as before). */
+  sessions?: SessionLiveState[];
+}
+
+/** One running session's live worktree diff, reported on the heartbeat while a turn is
+ *  still in flight (cf. TurnCompleteRequest, which carries the same at turn boundaries). */
+export interface SessionLiveState {
+  sessionId: string;
+  /** What the runner did: 'worktree' | 'shared-nogit'. */
+  isolationStatus: string;
+  /** The worktree's current uncommitted diff vs base; empty when nothing changed yet. */
+  changedFiles: ChangedFile[];
 }
 
 export interface RunnerHeartbeatResponse {
