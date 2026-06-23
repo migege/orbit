@@ -283,6 +283,34 @@ export class SessionsService {
     return { patches: (row?.patches as unknown as FilePatch[]) ?? [] };
   }
 
+  /**
+   * Ask the live runner to recompute this session's worktree diff right now. The stored
+   * patches only refresh at turn boundaries, but the file list refreshes on every heartbeat,
+   * so a file changed since the last turn end can show in the list with no diff ("No diff to
+   * preview"). Enqueueing a 'diff' control turn makes the runner's inbox poller recompute and
+   * push the diff back within a second or two (see RunnerApiController.diffResult).
+   *
+   * Only a live session has a running inbox poller; for anything else the stored snapshot is
+   * already as fresh as it gets, so this is a no-op. At most one refresh is queued at a time
+   * (dedup on a PENDING 'diff' turn) so repeated drawer opens / polls don't pile up turns.
+   */
+  async requestDiffRefresh(ownerId: string, id: string): Promise<void> {
+    const session = await this.prisma.session.findFirst({
+      where: { id, ownerId },
+      select: { id: true, status: true },
+    });
+    if (!session) throw new NotFoundException('session not found');
+    if (!SessionsService.LIVE.includes(session.status)) return;
+    const pending = await this.prisma.conversationTurn.findFirst({
+      where: { sessionId: id, kind: 'diff', status: 'PENDING' },
+      select: { id: true },
+    });
+    if (!pending) {
+      await this.insertTurn(id, { kind: 'diff', clientTurnId: randomUUID() });
+    }
+    this.realtime.notifyInbox(id);
+  }
+
   // The session list shows the last reply as a single ellipsised line, so it only
   // needs a short prefix of the (potentially multi-KB) denormalized preview text.
   private static readonly PREVIEW_LEN = 200;

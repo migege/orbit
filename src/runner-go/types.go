@@ -129,6 +129,15 @@ type CommitResultRequest struct {
 	Message string `json:"message,omitempty"`
 }
 
+// DiffResultRequest mirrors @orbit/shared SessionDiffResultRequest: a freshly recomputed live
+// worktree diff, POSTed back in response to a 'diff' inbox control turn so the web's diff
+// drawer reflects the current worktree even when the stored snapshot lagged.
+type DiffResultRequest struct {
+	ChangedFiles  []ChangedFile `json:"changedFiles,omitempty"`
+	ChangedDiff   []FilePatch   `json:"changedDiff,omitempty"`
+	WorktreeDirty bool          `json:"worktreeDirty"`
+}
+
 type MeResponse struct {
 	ID              string        `json:"id"`
 	Name            string        `json:"name"`

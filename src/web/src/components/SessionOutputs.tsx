@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { App as AntApp, Drawer } from 'antd';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { refreshSessionDiff } from '../api';
 import type { SessionChangedFile, SessionDetail, SessionFilePatch } from '../api';
 import { sessionDiffQuery } from '../lib/queries';
 
@@ -378,6 +379,7 @@ function WorktreeDiffDrawer({
   onSelect: (path: string) => void;
   onClose: () => void;
 }) {
+  const qc = useQueryClient();
   const q = useQuery({ ...sessionDiffQuery(sessionId), enabled: openPath != null });
   const patchByPath = useMemo(() => {
     const m = new Map<string, SessionFilePatch>();
@@ -385,6 +387,35 @@ function WorktreeDiffDrawer({
     return m;
   }, [q.data]);
   const active = files.find((f) => f.path === openPath) ?? null;
+
+  // The file list refreshes on every heartbeat but the stored per-file patches only refresh at
+  // turn boundaries, so a working-changes file changed since the last turn end can show in the
+  // list with no diff. When that happens, ask the live runner to recompute now and poll until
+  // the fresh diff lands. Skipped for committed snapshots (final — no live worktree to refresh)
+  // and binary/too-large files (which have their own placeholders).
+  const activePatch = active ? patchByPath.get(active.path) : undefined;
+  const activeBinary = active ? active.additions < 0 || active.deletions < 0 : false;
+  const stale =
+    !committed && !!active && !activeBinary && !activePatch?.patch && !activePatch?.truncated;
+  const [refreshing, setRefreshing] = useState(false);
+  useEffect(() => {
+    if (!stale) {
+      setRefreshing(false);
+      return;
+    }
+    setRefreshing(true);
+    let tries = 0;
+    void refreshSessionDiff(sessionId).catch(() => {});
+    const iv = setInterval(() => {
+      tries += 1;
+      void qc.invalidateQueries({ queryKey: sessionDiffQuery(sessionId).queryKey });
+      if (tries >= 8) {
+        clearInterval(iv);
+        setRefreshing(false); // gave up (~16s) — fall back to the empty placeholder
+      }
+    }, 2000);
+    return () => clearInterval(iv);
+  }, [stale, sessionId, active?.path, qc]);
 
   return (
     <Drawer
@@ -413,7 +444,12 @@ function WorktreeDiffDrawer({
         </div>
         <div className="wt-diff-pane">
           {active ? (
-            <DiffPane file={active} patch={patchByPath.get(active.path)} loading={q.isLoading} />
+            <DiffPane
+              file={active}
+              patch={activePatch}
+              loading={q.isLoading}
+              refreshing={refreshing}
+            />
           ) : (
             <div className="wt-diff-empty">Select a file to view its diff</div>
           )}
@@ -429,10 +465,12 @@ function DiffPane({
   file,
   patch,
   loading,
+  refreshing,
 }: {
   file: SessionChangedFile;
   patch?: SessionFilePatch;
   loading?: boolean;
+  refreshing?: boolean;
 }) {
   const binary = file.additions < 0 || file.deletions < 0;
   return (
@@ -454,6 +492,8 @@ function DiffPane({
         <div className="wt-diff-empty">Diff too large to preview inline</div>
       ) : loading ? (
         <div className="wt-diff-empty">Loading diff…</div>
+      ) : refreshing ? (
+        <div className="wt-diff-empty">Refreshing diff…</div>
       ) : (
         <div className="wt-diff-empty">No diff to preview</div>
       )}

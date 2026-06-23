@@ -285,6 +285,12 @@ export interface SessionFilePatch {
 export const getSessionDiff = (idOrPublicId: string) =>
   api<{ patches: SessionFilePatch[] }>(`/sessions/${idOrPublicId}/diff`);
 
+/** Ask the live runner to recompute the worktree diff now (fixes a file listed but with no
+ *  stored patch — "No diff to preview" — when the snapshot lagged the live worktree). The fresh
+ *  diff lands asynchronously via the runner, so the caller refetches getSessionDiff after. */
+export const refreshSessionDiff = (idOrPublicId: string) =>
+  api<void>(`/sessions/${idOrPublicId}/diff/refresh`, { method: 'POST' });
+
 /** Enable per-session worktree isolation for an agent whose workDir isn't a git repo:
  *  flips `autoInitGit` so the runner `git init`s the dir (default .gitignore + baseline
  *  commit) on the agent's next run, after which sessions isolate on their own branch. */
