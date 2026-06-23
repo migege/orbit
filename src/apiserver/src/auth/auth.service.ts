@@ -62,8 +62,17 @@ export class AuthService {
       throw new BadRequestException('invalid admin token');
     }
     const finalName = name?.trim() || email.split('@')[0];
+    // The first user is the deployment's operator, so seed them as ADMIN — the fresh-install
+    // counterpart to migration 0040, which promotes the earliest account on an *existing*
+    // deployment. Without this, a new install's first user would default to MEMBER and be
+    // locked out of the admin area (and thus unable to add anyone else).
     const user = await this.prisma.user.create({
-      data: { email: email.trim(), name: finalName, passwordHash: hashPassword(password) },
+      data: {
+        email: email.trim(),
+        name: finalName,
+        passwordHash: hashPassword(password),
+        role: 'ADMIN',
+      },
     });
     return this.tokenFor(user.id, user.email, user.name);
   }
