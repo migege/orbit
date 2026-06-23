@@ -2403,6 +2403,63 @@ body {
 .composer-pill-spacer {
   flex: 1 1 auto;
 }
+/* Compact plan-usage indicator at the right end of the pill row: a mini 5-hour bar +
+   percent; hover opens a popover with every window's gauge (mirrors Claude `/usage`). */
+.composer-usage {
+  gap: 6px;
+  padding-right: 6px;
+  cursor: default;
+}
+.composer-usage-bar {
+  width: 26px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border-subtle);
+  overflow: hidden;
+  flex: none;
+}
+.composer-usage-fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--brand);
+}
+.composer-usage.full .composer-usage-fill {
+  background: var(--warning-solid);
+}
+.composer-usage-pct {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+}
+/* Popover body: one gauge per subscription window (reuses .runner-util for the bar). */
+.cu-pop {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 220px;
+}
+.cu-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 16px;
+  margin-bottom: 5px;
+}
+.cu-label {
+  font-size: 13px;
+  color: var(--text-3);
+}
+.cu-pct {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-1);
+}
+.cu-reset {
+  margin-top: 5px;
+  font-size: 12px;
+  color: var(--text-4);
+}
 
 /* Staged image attachments — a row of thumbnail chips above the composer box. Each chip
    reuses the .composer-pill shape (rounded, bordered) sized to a small thumbnail. */
