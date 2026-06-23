@@ -353,10 +353,44 @@ export function ChatImage({ src }: { src: string }) {
 // react-markdown AST isn't re-parsed for messages that didn't change.
 // `highlight` is off while streaming — re-highlighting the whole doc on every chunk
 // is the expensive part, and code isn't complete mid-stream anyway.
+// A fenced code block rendered with a hover copy button pinned to its top-right corner. The
+// block itself is the hover area and the button sits inside it, so the pointer never leaves on
+// the way over. Copy reads the rendered <pre>'s textContent — highlight.js spans flatten back
+// to exactly the raw code, so "copy this whole HTML and save as a file" gets clean source.
+function CodeBlock({ children }: any) {
+  const preRef = useRef<HTMLPreElement>(null);
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    const text = preRef.current?.textContent ?? '';
+    if (!text) return;
+    void navigator.clipboard?.writeText(text)?.catch(() => {});
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1600);
+  };
+  return (
+    <div className="md-codeblock">
+      <button
+        type="button"
+        className="md-copy"
+        onClick={copy}
+        title={copied ? 'Copied' : 'Copy code'}
+        aria-label={copied ? 'Copied' : 'Copy code'}
+      >
+        {copied ? <CheckOutlined /> : <CopyOutlined />}
+      </button>
+      <pre ref={preRef}>{children}</pre>
+    </div>
+  );
+}
+
 export const MD = memo(function MD({ children, highlight = true }: { children: string; highlight?: boolean }) {
   return (
     <div className="md">
-      <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={highlight ? [rehypeHighlight] : []}>
+      <Markdown
+        remarkPlugins={[remarkGfm]}
+        rehypePlugins={highlight ? [rehypeHighlight] : []}
+        components={{ pre: CodeBlock }}
+      >
         {children}
       </Markdown>
     </div>
