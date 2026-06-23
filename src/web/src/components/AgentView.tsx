@@ -1818,7 +1818,11 @@ export function AgentView({ runner }: { runner: Runner }) {
 
       <div className="agent-composer">
         <SessionOutputs
-          detail={sessionDetailQ.data}
+          // Only the open session has a worktree to show. With nothing selected (new-session
+          // draft, empty list) `keepPreviousData` still holds the previously-open session's
+          // detail, which would render its stale branch/diff bar over a fresh draft — so gate
+          // on selectedId rather than the placeholder-backed query data.
+          detail={selectedId ? sessionDetailQ.data : null}
           committed={!live}
           enabling={enableIsoMut.isPending}
           onEnableIsolation={
