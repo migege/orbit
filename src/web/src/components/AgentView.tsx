@@ -30,6 +30,7 @@ import { useMatch, useNavigate } from 'react-router-dom';
 import { decodeId, encodeId } from '../lib/idCodec';
 import { useIsMobile } from '../lib/useMediaQuery';
 import { agentsQuery, sessionQuery, sessionsQuery } from '../lib/queries';
+import { MODEL_OPTIONS, supportsAuto } from '../lib/agentDefaults';
 import { SessionOutputs } from './SessionOutputs';
 import {
   type ApprovalInfo,
@@ -105,15 +106,6 @@ const PERMISSION_TO_MODE: Record<string, string> = Object.fromEntries(
   Object.entries(MODE_TO_PERMISSION).map(([label, value]) => [value, label]),
 );
 const MODE_OPTIONS = Object.keys(MODE_TO_PERMISSION);
-// Auto mode needs a recent model (Opus 4.6+ / Sonnet 4.6); claude rejects
-// --permission-mode auto on Haiku / older models, so gate the option by model.
-const AUTO_CAPABLE_MODELS = new Set(['claude-sonnet-4-6', 'claude-opus-4-8']);
-const supportsAuto = (m: string): boolean => AUTO_CAPABLE_MODELS.has(m);
-const MODEL_OPTIONS = [
-  { value: 'claude-sonnet-4-6', label: 'Sonnet 4.6' },
-  { value: 'claude-opus-4-8', label: 'Opus 4.8' },
-  { value: 'claude-haiku-4-5', label: 'Haiku 4.5' },
-];
 // Claude effort level. '' = Default (omit --effort, model picks its own).
 const EFFORT_OPTIONS = [
   { value: '', label: 'Default' },
@@ -1268,16 +1260,16 @@ export function AgentView({ runner }: { runner: Runner }) {
   // While the selected session is still loading we can't tell if it's live yet;
   // block send to avoid accidentally creating a duplicate session.
   const loadingSession = !!selectedId && !selected;
-  // A live session accepts a message any time it holds a runner slot (RUNNING queues
-  // it, AWAITING_INPUT runs it now) — but not while PENDING (still waiting for a slot,
-  // no claude process yet). A non-live (ended) session revives or starts fresh.
+  // A live session accepts a message in any non-terminal state: RUNNING/INTERRUPTED queue
+  // it, AWAITING_INPUT runs it now, and PENDING (still waiting for a slot, no claude yet)
+  // queues it until the runner claims the session. A non-live (ended) session revives or
+  // starts fresh. `live` is exactly "not terminal", so no per-status gate is needed here.
   const canSend =
     (!!text.trim() || readyImages.length > 0) &&
     !send.isPending &&
     !uploading &&
     runner.online &&
-    !loadingSession &&
-    (live ? SLOT_HELD.includes(selected.status) : true);
+    !loadingSession;
   // The single send button morphs into a Stop while a turn is generating AND the composer
   // is empty — interrupting that turn. With content typed it stays Send, so a follow-up can
   // still be queued mid-turn. Ending the whole session isn't a button here: it's destructive
@@ -1298,12 +1290,17 @@ export function AgentView({ runner }: { runner: Runner }) {
   // The `+` menu opens the picker scoped to one asset kind; null (manual `/` typing) shows both.
   const [slashScope, setSlashScope] = useState<'command' | 'skill' | null>(null);
   const slashToken = /(?:^|\s)\/(\S*)$/.exec(text)?.[1] ?? null;
+  // Scope the `/` menu to the composer's agent: host-level assets (no agentId — e.g.
+  // ~/.claude or the runner's default dir) plus the assets of the agent this session
+  // runs as. A live session's agent is fixed; a draft uses the picked agent.
+  const composerAgentId = live ? selected?.agent?.id : agentId;
   const slashItems = useMemo(
-    () => [
-      ...(runner.commands ?? []).map((c) => ({ name: c.name, description: c.description, type: 'command' as const })),
-      ...(runner.skills ?? []).map((s) => ({ name: s.name, description: s.description, type: 'skill' as const })),
-    ],
-    [runner.commands, runner.skills],
+    () =>
+      [
+        ...(runner.commands ?? []).map((c) => ({ name: c.name, description: c.description, type: 'command' as const, agentId: c.agentId })),
+        ...(runner.skills ?? []).map((s) => ({ name: s.name, description: s.description, type: 'skill' as const, agentId: s.agentId })),
+      ].filter((it) => !it.agentId || it.agentId === composerAgentId),
+    [runner.commands, runner.skills, composerAgentId],
   );
   const slashMatches = useMemo(() => {
     if (slashToken === null) return [];
@@ -1778,6 +1775,7 @@ export function AgentView({ runner }: { runner: Runner }) {
                 >
                   <span className="composer-slash-name">/{it.name}</span>
                   <span className="composer-slash-type">{it.type === 'skill' ? 'skill' : 'cmd'}</span>
+                  {it.agentId && <span className="composer-slash-type">project</span>}
                   {it.description && <span className="composer-slash-desc">{it.description}</span>}
                 </div>
               ))}
@@ -2045,7 +2043,7 @@ export function AgentView({ runner }: { runner: Runner }) {
                     if (drop) setMode('Default');
                   }
                 }}
-                options={MODEL_OPTIONS}
+                options={MODEL_OPTIONS.map((m) => ({ value: m.value, label: m.short }))}
                 disabled={!configEditable}
                 popupMatchSelectWidth={false}
               />
