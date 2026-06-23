@@ -25,7 +25,7 @@ import {
   UndoOutlined,
 } from '@ant-design/icons';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { App as AntApp, Button, Dropdown, Image, Input, type MenuProps, Segmented, Select, Tooltip } from 'antd';
+import { App as AntApp, Button, Dropdown, Image, Input, type MenuProps, Popover, Segmented, Select, Tooltip } from 'antd';
 import { type MouseEvent as ReactMouseEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMatch, useNavigate } from 'react-router-dom';
 import { decodeId, encodeId } from '../lib/idCodec';
@@ -55,6 +55,7 @@ import {
 import { AttachmentImage, ChatImage, StreamingMessage, Transcript, type TurnImage } from './Transcript';
 import { ApprovalPanel } from './ApprovalPanel';
 import type { Runner } from './TasksSidePanel';
+import type { PlanUsage } from '@orbit/shared';
 
 interface RunEvent {
   seq: number;
@@ -122,6 +123,64 @@ const EFFORT_OPTIONS = [
 // Last-picked reasoning effort, remembered across reloads so a new session starts
 // at the effort you last chose instead of resetting to Default. ('' = Default.)
 const EFFORT_KEY = 'orbit.effort';
+
+// Claude subscription windows surfaced in the composer's plan-usage popover, ordered
+// like Claude Code's `/usage`. Windows the plan lacks come back absent and are skipped.
+const PLAN_USAGE_ROWS: { key: 'fiveHour' | 'sevenDay' | 'sevenDayOpus' | 'sevenDaySonnet'; label: string }[] = [
+  { key: 'fiveHour', label: '5-hour limit' },
+  { key: 'sevenDay', label: 'Weekly · all models' },
+  { key: 'sevenDayOpus', label: 'Weekly · Opus' },
+  { key: 'sevenDaySonnet', label: 'Weekly · Sonnet' },
+];
+const fmtReset = (d?: string): string =>
+  d ? new Date(d).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
+
+// Compact plan-usage indicator for the composer footer (right of the effort pill),
+// mirroring Claude Code's `/usage`: the pill shows the binding 5-hour window; hover
+// reveals every window's gauge + reset. Quota is account-wide for this runner's login.
+function PlanUsageIndicator({ usage }: { usage: PlanUsage }) {
+  const rows = PLAN_USAGE_ROWS.flatMap(({ key, label }) => {
+    const w = usage[key];
+    return w && typeof w.utilization === 'number' ? [{ key, label, w }] : [];
+  });
+  if (rows.length === 0) return null;
+  const primaryPct = Math.round(rows[0].w.utilization); // fiveHour when present, else first available
+  const pop = (
+    <div className="cu-pop">
+      {rows.map(({ key, label, w }) => {
+        const pct = Math.round(w.utilization);
+        return (
+          <div className="cu-row" key={key}>
+            <div className="cu-head">
+              <span className="cu-label">{label}</span>
+              <span className="cu-pct">{pct}%</span>
+            </div>
+            <div className={`runner-util ${pct >= 90 ? 'full' : ''}`}>
+              <span className="runner-util-fill" style={{ width: `${Math.min(100, Math.max(0, pct))}%` }} />
+            </div>
+            {w.resetsAt && <div className="cu-reset">Resets {fmtReset(w.resetsAt)}</div>}
+          </div>
+        );
+      })}
+    </div>
+  );
+  return (
+    <Popover content={pop} title="Plan usage" placement="topRight" trigger={['hover', 'click']}>
+      <span
+        className={`composer-pill composer-usage ${primaryPct >= 90 ? 'full' : ''}`}
+        aria-label={`Plan usage ${primaryPct}%`}
+      >
+        <span className="composer-usage-bar">
+          <span
+            className="composer-usage-fill"
+            style={{ width: `${Math.min(100, Math.max(0, primaryPct))}%` }}
+          />
+        </span>
+        <span className="composer-usage-pct">{primaryPct}%</span>
+      </span>
+    </Popover>
+  );
+}
 
 // Drag-resizable width of the left session column, persisted across reloads.
 const SESSION_COL_KEY = 'orbit.sessionColWidth';
@@ -2122,6 +2181,7 @@ export function AgentView({ runner }: { runner: Runner }) {
               />
             </span>
           </Tooltip>
+          {runner.planUsage && <PlanUsageIndicator usage={runner.planUsage} />}
         </div>
       </div>
       </div>

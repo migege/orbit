@@ -13,7 +13,13 @@ import { AgentView } from './AgentView';
 // transcript or reloads the session list) on an in-console navigation.
 export function AgentConsole() {
   const agents = useQuery({ queryKey: ['agents'], queryFn: () => api<any[]>('/agents') });
-  const runners = useQuery({ queryKey: ['runners'], queryFn: () => api<any[]>('/runners') });
+  // Poll while the console is open so the composer's plan-usage gauge stays current
+  // (the runner refreshes its usage roughly every 2 min while busy).
+  const runners = useQuery({
+    queryKey: ['runners'],
+    queryFn: () => api<any[]>('/runners'),
+    refetchInterval: 60_000,
+  });
 
   // /agents/<agent> names the agent (its runner is derived below); /sessions/<id>
   // resolves the runner from the session behind it.
