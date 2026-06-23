@@ -2045,7 +2045,7 @@ export function AgentView({ runner }: { runner: Runner }) {
                     if (drop) setMode('Default');
                   }
                 }}
-                options={MODEL_OPTIONS.map((m) => ({ value: m.value, label: m.short }))}
+                options={MODEL_OPTIONS}
                 disabled={!configEditable}
                 popupMatchSelectWidth={false}
               />
