@@ -1243,14 +1243,22 @@ export function AgentView({ runner }: { runner: Runner }) {
   const onSend = (): void => {
     const c = text.trim();
     if (send.isPending || uploading) return;
-    // Replying to a pending AskUserQuestion: resolve it as a deny+message (claude reads the
-    // text as feedback and continues) rather than sending a fresh turn. A deny carries no
-    // images, so this path needs text.
+    // Replying to a pending AskUserQuestion: resolve it with the text as a deny+message
+    // (claude reads it as feedback and continues) instead of a fresh turn. The deny channel
+    // is text-only — a blocking question can only be answered with text — so attached images
+    // can't ride it; deliver them as the immediately-following turn via the normal image path
+    // (send.mutate, whose onSuccess also clears the staged chips). An image-only reply still
+    // needs a text resolution, hence the stand-in message.
     if (replyTo) {
-      if (!c) return;
-      void decide(replyTo.id, 'deny', undefined, c);
-      setText('');
+      const imgs = readyImages;
+      if (!c && imgs.length === 0) return;
+      void decide(replyTo.id, 'deny', undefined, c || '(see attached image)');
       setReplyTo(null);
+      setText('');
+      if (imgs.length > 0) {
+        setHistIdx(-1);
+        send.mutate({ content: '', images: imgs });
+      }
       return;
     }
     if (!c && readyImages.length === 0) return;
