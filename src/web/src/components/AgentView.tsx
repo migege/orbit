@@ -1896,6 +1896,35 @@ export function AgentView({ runner }: { runner: Runner }) {
         </div>
 
       <div className="agent-composer">
+        {/* Image previews sit above the worktree status bar so a staged screenshot reads
+            as part of the message you're about to send, not buried under the diff chip. */}
+        {images.length > 0 && (
+          <div className="composer-attachments">
+            {images.map((im) => (
+              <span key={im.uid} className="composer-pill composer-attach">
+                <Image
+                  className="composer-attach-thumb"
+                  src={im.previewUrl}
+                  alt=""
+                  preview={{ mask: <EyeOutlined className="composer-attach-eye" /> }}
+                />
+                {im.status === 'uploading' && (
+                  <span className="composer-attach-spin">
+                    <LoadingOutlined spin />
+                  </span>
+                )}
+                <button
+                  type="button"
+                  className="composer-attach-remove"
+                  onClick={() => removeImage(im.uid)}
+                  aria-label="Remove image"
+                >
+                  <CloseOutlined />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
         <SessionOutputs
           // Only the open session has a worktree to show. With nothing selected (new-session
           // draft, empty list) `keepPreviousData` still holds the previously-open session's
@@ -1931,33 +1960,6 @@ export function AgentView({ runner }: { runner: Runner }) {
               : undefined
           }
         />
-        {images.length > 0 && (
-          <div className="composer-attachments">
-            {images.map((im) => (
-              <span key={im.uid} className="composer-pill composer-attach">
-                <Image
-                  className="composer-attach-thumb"
-                  src={im.previewUrl}
-                  alt=""
-                  preview={{ mask: <EyeOutlined className="composer-attach-eye" /> }}
-                />
-                {im.status === 'uploading' && (
-                  <span className="composer-attach-spin">
-                    <LoadingOutlined spin />
-                  </span>
-                )}
-                <button
-                  type="button"
-                  className="composer-attach-remove"
-                  onClick={() => removeImage(im.uid)}
-                  aria-label="Remove image"
-                >
-                  <CloseOutlined />
-                </button>
-              </span>
-            ))}
-          </div>
-        )}
         {replyTo && (
           <div className="composer-replyto">
             <span className="composer-replyto-icon">↩</span>
