@@ -4,6 +4,7 @@ import {
   CheckSquareOutlined,
   CloseCircleFilled,
   CodeOutlined,
+  ConsoleSqlOutlined,
   DownOutlined,
   EditOutlined,
   EyeOutlined,
@@ -377,9 +378,12 @@ function ToolView({ node, live }: { node: ToolNode; live?: boolean }) {
   // node.input keeps its reference across tree rebuilds (the source event object is
   // reused when events are appended), so this holds the computed body/icon — and the
   // <Diff>/<MD>/<KeyVals> elements inside it — stable instead of rebuilding each append.
+  // A `!`-shell command the user ran (runner tags its tool_use id `shell-…`) renders as a
+  // distinct "Shell" card, not Claude's Bash tool — see describeTool's isShell branch.
+  const isShell = node.id.startsWith('shell-');
   const { label, summary, summaryMono, body, icon, tone, path, meta } = useMemo(
-    () => describeTool(node.name, node.input),
-    [node.name, node.input],
+    () => describeTool(node.name, node.input, isShell),
+    [node.name, node.input, isShell],
   );
   const isSubAgent = node.name === 'Task' || node.name === 'Agent';
   const p = path ? splitPath(path) : null;
@@ -387,7 +391,7 @@ function ToolView({ node, live }: { node: ToolNode; live?: boolean }) {
   // A plan or a question to the user is the point of the turn — open it by
   // default; errors also auto-open.
   const [open, setOpen] = useState(
-    !!node.result?.isError || node.name === 'ExitPlanMode' || node.name === 'AskUserQuestion',
+    !!node.result?.isError || node.name === 'ExitPlanMode' || node.name === 'AskUserQuestion' || isShell,
   );
   // While an AskUserQuestion or ExitPlanMode is still awaiting the user, the
   // interactive card (ApprovalPanel) is shown separately — don't also render this
@@ -473,8 +477,13 @@ type ToolDesc = {
 
 // describeTool maps a tool name + input to a folded-row label/summary/icon and an
 // optional expanded body, roughly matching how Claude Code Web renders each tool.
-function describeTool(name: string, input: any): ToolDesc {
+function describeTool(name: string, input: any, isShell?: boolean): ToolDesc {
   const i = input ?? {};
+  // A user-run `!`-shell command (not Claude's Bash tool): show the command inline in the
+  // folded row and render as a terminal-flavoured "Shell" card (ToolView auto-opens it).
+  if (isShell) {
+    return { label: 'Shell', icon: <ConsoleSqlOutlined />, tone: 'exec', summary: String(i.command ?? ''), summaryMono: true };
+  }
   switch (name) {
     case 'Bash':
       return { label: 'Bash', icon: <CodeOutlined />, tone: 'exec', summary: i.description, body: <Pre text={String(i.command ?? '')} prompt /> };
