@@ -30,6 +30,7 @@ import { useMatch, useNavigate } from 'react-router-dom';
 import { decodeId, encodeId } from '../lib/idCodec';
 import { useIsMobile } from '../lib/useMediaQuery';
 import { agentsQuery, sessionQuery, sessionsQuery } from '../lib/queries';
+import { MODEL_OPTIONS, supportsAuto } from '../lib/agentDefaults';
 import { SessionOutputs } from './SessionOutputs';
 import {
   type ApprovalInfo,
@@ -105,15 +106,6 @@ const PERMISSION_TO_MODE: Record<string, string> = Object.fromEntries(
   Object.entries(MODE_TO_PERMISSION).map(([label, value]) => [value, label]),
 );
 const MODE_OPTIONS = Object.keys(MODE_TO_PERMISSION);
-// Auto mode needs a recent model (Opus 4.6+ / Sonnet 4.6); claude rejects
-// --permission-mode auto on Haiku / older models, so gate the option by model.
-const AUTO_CAPABLE_MODELS = new Set(['claude-sonnet-4-6', 'claude-opus-4-8']);
-const supportsAuto = (m: string): boolean => AUTO_CAPABLE_MODELS.has(m);
-const MODEL_OPTIONS = [
-  { value: 'claude-sonnet-4-6', label: 'Sonnet 4.6' },
-  { value: 'claude-opus-4-8', label: 'Opus 4.8' },
-  { value: 'claude-haiku-4-5', label: 'Haiku 4.5' },
-];
 // Claude effort level. '' = Default (omit --effort, model picks its own).
 const EFFORT_OPTIONS = [
   { value: '', label: 'Default' },
@@ -1994,7 +1986,7 @@ export function AgentView({ runner }: { runner: Runner }) {
                     if (drop) setMode('Default');
                   }
                 }}
-                options={MODEL_OPTIONS}
+                options={MODEL_OPTIONS.map((m) => ({ value: m.value, label: m.short }))}
                 disabled={!configEditable}
                 popupMatchSelectWidth={false}
               />
