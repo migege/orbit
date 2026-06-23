@@ -3,6 +3,7 @@ import { Spin } from 'antd';
 import { useLayoutEffect, useRef, useState } from 'react';
 import type { SlashCommandInfo } from '@orbit/shared';
 import { api } from '../api';
+import { agentsQuery } from '../lib/queries';
 import type { Runner } from '../components/TasksSidePanel';
 
 // One catalog row: the skill/command name plus its (often long) routing description.
@@ -45,16 +46,22 @@ function SkillRow({ item }: { item: SlashCommandInfo }) {
 
 // Runners report the slash commands (.claude/commands) and skills (.claude/skills)
 // they found on disk via heartbeat; GET /runners surfaces them as runner.commands /
-// runner.skills. This page groups that catalog by runner so you can see, per machine,
-// which skills and commands are available. (Only name + description are reported — the
-// SKILL.md body isn't carried over the heartbeat.)
+// runner.skills, each tagged with the agent whose workDir it came from (empty = host,
+// shared by all agents). This page groups that catalog by runner, then by scope —
+// host-level assets, then each agent — so a skill two agents share (e.g. a dev and a
+// prod checkout) reads as "both have it" instead of a bare duplicate.
 export function SkillsPage() {
   const runners = useQuery({
     queryKey: ['runners'],
     queryFn: () => api<Runner[]>('/runners'),
     refetchInterval: 15_000,
   });
+  const agents = useQuery(agentsQuery());
   const list = runners.data ?? [];
+
+  // agentId -> display name, so a project-scoped group reads as the agent, not a uuid.
+  const agentName = (id: string): string =>
+    (agents.data ?? []).find((a: { id: string }) => a.id === id)?.name ?? id;
 
   const [query, setQuery] = useState('');
   const q = query.trim().toLowerCase();
@@ -63,15 +70,36 @@ export function SkillsPage() {
     it.name.toLowerCase().includes(q) ||
     (it.description?.toLowerCase().includes(q) ?? false);
 
-  const renderGroup = (title: string, items: SlashCommandInfo[]) => {
+  const renderGroup = (title: string, items: SlashCommandInfo[], keyPrefix: string) => {
     if (items.length === 0) return null;
     return (
       <div className="skills-group">
         <div className="skills-group-title">{title}</div>
         {items.map((it) => (
-          <SkillRow item={it} key={it.name} />
+          <SkillRow item={it} key={`${keyPrefix}:${it.name}`} />
         ))}
       </div>
+    );
+  };
+
+  // Split a runner's assets by scope: the host bucket (no agentId, shared by every agent)
+  // first, then one bucket per agent that owns project-level assets, sorted by name.
+  type Scope = { key: string; title: string; skills: SlashCommandInfo[]; commands: SlashCommandInfo[] };
+  const scopesFor = (skills: SlashCommandInfo[], commands: SlashCommandInfo[]): Scope[] => {
+    const map = new Map<string, Scope>();
+    const bucket = (agentId?: string): Scope => {
+      const key = agentId || '';
+      let s = map.get(key);
+      if (!s) {
+        s = { key, title: key === '' ? 'Host' : agentName(key), skills: [], commands: [] };
+        map.set(key, s);
+      }
+      return s;
+    };
+    for (const sk of skills) bucket(sk.agentId).skills.push(sk);
+    for (const c of commands) bucket(c.agentId).commands.push(c);
+    return [...map.values()].sort((a, b) =>
+      a.key === '' ? -1 : b.key === '' ? 1 : a.title.localeCompare(b.title),
     );
   };
 
@@ -112,6 +140,10 @@ export function SkillsPage() {
             <div className="skills-list">
               {cards.map(({ runner: r, skills, commands }) => {
                 const empty = skills.length === 0 && commands.length === 0;
+                const scopes = scopesFor(skills, commands);
+                // Only surface scope headers when assets actually span agents; a runner
+                // whose assets are all host-level keeps the simple flat layout.
+                const flat = scopes.length <= 1;
                 return (
                   <div className="skills-runner" key={r.id}>
                     <div className="skills-runner-head">
@@ -125,8 +157,20 @@ export function SkillsPage() {
                         {r.online ? 'Online' : 'Offline'}
                       </span>
                     </div>
-                    {renderGroup('Skills', skills)}
-                    {renderGroup('Commands', commands)}
+                    {flat ? (
+                      <>
+                        {renderGroup('Skills', skills, 'skill')}
+                        {renderGroup('Commands', commands, 'cmd')}
+                      </>
+                    ) : (
+                      scopes.map((s) => (
+                        <div className="skills-scope" key={s.key}>
+                          <div className="skills-scope-title">{s.title}</div>
+                          {renderGroup('Skills', s.skills, `${s.key}:skill`)}
+                          {renderGroup('Commands', s.commands, `${s.key}:cmd`)}
+                        </div>
+                      ))
+                    )}
                     {empty && (
                       <div className="skills-runner-empty">No skills or commands reported.</div>
                     )}
