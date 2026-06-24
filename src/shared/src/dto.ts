@@ -178,6 +178,10 @@ export interface SessionLiveState {
    *  the status bar's primary action: dirty → Commit, clean-but-ahead → Merge. Absent from
    *  older runners (the bar then falls back to the session lifecycle). */
   worktreeDirty?: boolean;
+  /** The repo's candidate merge-target branches (local refs/heads minus Orbit's own orbit/*
+   *  session branches), so the status bar's "Merge to…" dropdown can offer targets besides
+   *  main. Absent from older runners (the dropdown then offers only the auto-detected default). */
+  mergeTargets?: string[];
 }
 
 export interface RunnerHeartbeatResponse {
@@ -198,13 +202,17 @@ export interface RunnerHeartbeatResponse {
   commitRequests?: CommitCommand[];
 }
 
-/** Control plane → runner: merge one session's worktree branch into the repo's main. */
+/** Control plane → runner: merge one session's worktree branch into a target branch. */
 export interface MergeCommand {
   sessionId: string;
   /** The session's worktree branch, e.g. orbit/<slug>-<hash>. */
   branch: string;
   /** The session agent's workDir; the runner resolves the repo root from it. */
   workDir: string;
+  /** The branch to merge INTO. Absent/empty → the runner auto-detects main, else master
+   *  (the original behavior). Set when the user picked a non-default target from the
+   *  status bar's branch dropdown. */
+  targetBranch?: string;
 }
 
 /** Control plane → runner: commit a live session's uncommitted worktree changes onto its
@@ -464,6 +472,9 @@ export interface SessionCompleteRequest {
   changedDiff?: FilePatch[];
   /** What the runner did: 'worktree' (isolated) | 'shared-nogit' (no git → shared dir). */
   isolationStatus?: string;
+  /** The repo's candidate merge-target branches at completion (see SessionLiveState.mergeTargets),
+   *  so the ended session's "Merge to…" dropdown is populated. */
+  mergeTargets?: string[];
 }
 
 /**

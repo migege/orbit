@@ -224,10 +224,14 @@ export const interruptSession = (sessionId: string) =>
 
 export const endSession = (sessionId: string) => api(`/sessions/${sessionId}/end`, { method: 'POST' });
 
-/** Ask the runner that ran this session to merge its worktree branch into main. Async:
- *  the outcome lands on SessionDetail.mergeStatus within a heartbeat (~30s). */
-export const mergeSessionToMain = (sessionId: string) =>
-  api(`/sessions/${sessionId}/merge`, { method: 'POST' });
+/** Ask the runner that ran this session to merge its worktree branch into `targetBranch`
+ *  (omitted → the default: the runner auto-detects main, else master). Async: the outcome
+ *  lands on SessionDetail.mergeStatus within a heartbeat (~30s). */
+export const mergeSessionToMain = (sessionId: string, targetBranch?: string) =>
+  api(`/sessions/${sessionId}/merge`, {
+    method: 'POST',
+    body: targetBranch ? { targetBranch } : {},
+  });
 
 /** Ask the runner to commit a live session's uncommitted worktree changes onto its branch.
  *  Async: the outcome lands on SessionDetail.commitStatus / worktreeDirty within a heartbeat. */
@@ -261,7 +265,10 @@ export interface SessionChangedFile {
 export interface SessionDetail {
   id: string;
   assignedRunnerId: string | null;
-  agent: { id: string } | null;
+  // `defaultMergeTarget` is the branch this agent's sessions merge into by default,
+  // remembered from the last target the user switched to in the merge dropdown (null = the
+  // runner's auto-detected default). Agent-scoped, so it sticks across the agent's sessions.
+  agent: { id: string; defaultMergeTarget?: string | null } | null;
   branch?: string | null;
   baseSha?: string | null;
   changedFiles?: SessionChangedFile[] | null;
@@ -272,6 +279,13 @@ export interface SessionDetail {
   mergeStatus?: 'pending' | 'merged' | 'conflict' | 'error' | null;
   mergeError?: string | null;
   mergedAt?: string | null;
+  // The branch the user chose to merge into (status bar's branch dropdown). Null = the
+  // default (runner auto-detects main, else master). Shown on the merged ✓ chip + used by
+  // "Retry merge" to retry the same target.
+  mergeTarget?: string | null;
+  // Candidate merge-target branches the runner reported for this session's repo (local
+  // branches minus orbit/*), populating the dropdown. Empty for older runners → no dropdown.
+  mergeTargets?: string[] | null;
   // Live-worktree commit state (see commitSession). worktreeDirty drives the bar's primary
   // action — true → Commit, false → Merge — when the runner reports it (null = not reported,
   // so the bar falls back to the session lifecycle). commitStatus is 'pending' while the

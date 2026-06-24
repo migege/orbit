@@ -145,6 +145,7 @@ func runLoop(cfg *RunnerConfig) {
 						IsolationStatus: j.IsolationStatus,
 						ChangedFiles:    liveDiffStat(j.WT),
 						WorktreeDirty:   worktreeIsDirty(j.WT),
+						MergeTargets:    mergeTargetsForWT(j.WT),
 					})
 				}
 				resp, err := t.heartbeat(HeartbeatRequest{

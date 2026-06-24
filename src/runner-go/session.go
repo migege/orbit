@@ -179,6 +179,8 @@ func runInteractiveSession(t *Transport, job *ClaimedSession, ctx context.Contex
 		cr.Branch = job.WT.Branch
 		cr.BaseSha = job.WT.BaseSha
 		cr.ChangedFiles, cr.ChangedDiff = finalizeWorktree(job.WT, job.Title)
+		// Candidate merge targets for the ended session's "Merge to…" dropdown.
+		cr.MergeTargets = mergeTargetsForWT(job.WT)
 	}
 	if err := t.complete(job.SessionID, cr); err != nil {
 		logln("complete failed for", job.SessionID+":", err)

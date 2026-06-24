@@ -70,6 +70,9 @@ type SessionLiveState struct {
 	// omitempty: a clean worktree must report false so the server flips the bar to Merge,
 	// rather than dropping the field (which an older server reads as "not reported").
 	WorktreeDirty bool `json:"worktreeDirty"`
+	// MergeTargets is the repo's candidate merge-target branches (local heads minus orbit/*),
+	// for the status bar's "Merge to…" dropdown. Omitted when none / not isolated.
+	MergeTargets []string `json:"mergeTargets,omitempty"`
 }
 
 // SlashCommandInfo mirrors @orbit/shared: one `/`-invocable asset (command or skill).
@@ -98,12 +101,15 @@ type HeartbeatResponse struct {
 }
 
 // MergeCommand mirrors @orbit/shared: a request to merge one session's worktree branch into
-// the repo's main on this runner's local repo. WorkDir is the session agent's dir; the
+// a target branch on this runner's local repo. WorkDir is the session agent's dir; the
 // runner resolves the repo root from it.
 type MergeCommand struct {
 	SessionID string `json:"sessionId"`
 	Branch    string `json:"branch"`
 	WorkDir   string `json:"workDir"`
+	// TargetBranch is the branch to merge INTO. Empty → auto-detect main, else master (the
+	// original behavior); set when the user picked a target from the status bar's dropdown.
+	TargetBranch string `json:"targetBranch,omitempty"`
 }
 
 // MergeResultRequest mirrors @orbit/shared SessionMergeResultRequest: the outcome of a
@@ -328,6 +334,9 @@ type CompleteRequest struct {
 	ChangedFiles    []ChangedFile `json:"changedFiles,omitempty"`
 	// Per-file unified diffs (capped) of the committed branch vs base, for on-demand viewing.
 	ChangedDiff []FilePatch `json:"changedDiff,omitempty"`
+	// MergeTargets is the repo's candidate merge-target branches at completion (see
+	// SessionLiveState.MergeTargets), populating the ended session's "Merge to…" dropdown.
+	MergeTargets []string `json:"mergeTargets,omitempty"`
 }
 
 type Manifest struct {

@@ -232,11 +232,17 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
   async drainMergeRequests(runnerId: string): Promise<MergeCommand[]> {
     const sessions = await this.prisma.session.findMany({
       where: { assignedRunnerId: runnerId, mergeStatus: 'pending', branch: { not: null } },
-      select: { id: true, branch: true, agent: { select: { workDir: true } } },
+      select: { id: true, branch: true, mergeTarget: true, agent: { select: { workDir: true } } },
     });
     return sessions
       .filter((s) => s.branch && s.agent?.workDir)
-      .map((s) => ({ sessionId: s.id, branch: s.branch!, workDir: s.agent!.workDir! }));
+      .map((s) => ({
+        sessionId: s.id,
+        branch: s.branch!,
+        workDir: s.agent!.workDir!,
+        // Null mergeTarget → omit it so the runner auto-detects main/master (original behavior).
+        ...(s.mergeTarget ? { targetBranch: s.mergeTarget } : {}),
+      }));
   }
 
   /**

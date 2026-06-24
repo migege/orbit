@@ -610,8 +610,17 @@ export class SessionsService {
    * into main (the live checkout, if any, is a separate worktree and is undisturbed), and
    * reports the outcome back into `mergeStatus`/`mergeError`/`mergedAt`. Idempotent while a
    * merge is already pending; re-requesting a merged/conflicted session re-queues it.
+   *
+   * `targetBranch` is the branch to merge INTO, picked from the status bar's dropdown; it's
+   * stored on `mergeTarget` and relayed to the runner. Omitted/empty → the default (the runner
+   * auto-detects main, else master). A target equal to the session's own branch is rejected.
+   *
+   * An explicit target is also remembered on the session's agent (`defaultMergeTarget`), so
+   * switching the target sticks across all of that agent's sessions — the next merge button
+   * defaults to it. Cleared back to the auto-detect default is not offered here (picking main
+   * from the dropdown re-records main).
    */
-  async mergeToMain(ownerId: string, id: string) {
+  async mergeToMain(ownerId: string, id: string, targetBranch?: string) {
     const session = await this.prisma.session.findFirst({ where: { id, ownerId } });
     if (!session) throw new NotFoundException('session not found');
     if (session.isolationStatus !== 'worktree' || !session.branch) {
@@ -620,11 +629,28 @@ export class SessionsService {
     if (!session.assignedRunnerId) {
       throw new ConflictException('no runner is associated with this session');
     }
+    const target = targetBranch?.trim() || null;
+    if (target && target === session.branch) {
+      throw new BadRequestException("can't merge a branch into itself");
+    }
     if (session.mergeStatus === 'pending') return { ok: true };
     await this.prisma.session.update({
       where: { id },
-      data: { mergeStatus: 'pending', mergeRequestedAt: new Date(), mergeError: null, mergedAt: null },
+      data: {
+        mergeStatus: 'pending',
+        mergeTarget: target,
+        mergeRequestedAt: new Date(),
+        mergeError: null,
+        mergedAt: null,
+      },
     });
+    // Remember an explicitly chosen target on the agent so every session of it defaults there.
+    if (target && session.agentId) {
+      await this.prisma.agent.update({
+        where: { id: session.agentId },
+        data: { defaultMergeTarget: target },
+      });
+    }
     return { ok: true };
   }
 

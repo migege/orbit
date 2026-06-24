@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { App as AntApp, Drawer } from 'antd';
+import { App as AntApp, Drawer, Dropdown } from 'antd';
+import type { MenuProps } from 'antd';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { refreshSessionDiff } from '../api';
 import type { SessionChangedFile, SessionDetail, SessionFilePatch } from '../api';
@@ -43,9 +44,10 @@ export function SessionOutputs({
   /** Provided by the parent (which owns the mutation); enables the non-git nudge's button. */
   onEnableIsolation?: () => void;
   enabling?: boolean;
-  /** Provided by the parent (owns the mutation + confirm); enables the "Merge to main" button.
-   *  The outcome surfaces via detail.mergeStatus/mergeError (the parent polls while pending). */
-  onMergeToMain?: () => void;
+  /** Provided by the parent (owns the mutation); enables the "Merge to main" button. Receives
+   *  the chosen target branch (undefined → the default, which the runner auto-detects: main,
+   *  else master). The outcome surfaces via detail.mergeStatus/mergeError (parent polls). */
+  onMergeToMain?: (target?: string) => void;
   merging?: boolean;
   /** Provided by the parent; on a conflict/error, resumes the session so its agent merges main
    *  in and resolves the conflicts (after which the branch merges clean). */
@@ -149,6 +151,9 @@ export function SessionOutputs({
           <MergeButton
             status={detail.mergeStatus}
             busy={merging}
+            targets={detail.mergeTargets ?? []}
+            mergeTarget={detail.mergeTarget}
+            agentDefaultTarget={detail.agent?.defaultMergeTarget}
             onMerge={onMergeToMain}
             onResolveInSession={onResolveInSession}
             resolving={resolving}
@@ -221,36 +226,54 @@ export function SessionOutputs({
   );
 }
 
-/** Compact "Merge to main" control sitting on the worktree bar itself (shown once the work is
- *  committed). Drives off the server-reported mergeStatus: idle → a Merge button; pending →
- *  "Merging…"; merged → a ✓ chip; conflict/error → "Resolve in session" (resume the session so
- *  its agent merges main in and fixes the conflicts), falling back to "Retry merge" when the
- *  parent can't resume. The failure detail + a copyable `git merge <branch>` fallback live in
- *  the expandable file panel below. With no driver at all only the merged chip can show. */
+/** Compact "Merge to main" control on the worktree bar — a split button once the work is
+ *  committed: the left segment merges into the default target (main, else master), and a caret
+ *  opens a dropdown of the repo's other branches (mergeTargets) to merge into instead. Drives
+ *  off the server-reported mergeStatus: idle → the split button; pending → "Merging…"; merged →
+ *  a ✓ chip (naming the target); conflict/error → "Resolve in session" (resume so the agent
+ *  merges main in and fixes conflicts — offered only for a main/master target) or "Retry merge"
+ *  (re-runs the same target). The failure detail + a copyable `git merge <branch>` fallback live
+ *  in the expandable file panel below. With no reported targets (older runner) the caret is
+ *  hidden and the button behaves exactly as before. With no driver at all only the ✓ can show. */
 function MergeButton({
   status,
   busy,
+  targets,
+  mergeTarget,
+  agentDefaultTarget,
   onMerge,
   onResolveInSession,
   resolving,
 }: {
   status?: SessionDetail['mergeStatus'];
   busy?: boolean;
-  onMerge?: () => void;
+  /** Candidate target branches reported by the runner (empty for older runners). */
+  targets: string[];
+  /** The branch the last merge targeted (null = the auto-detected default). */
+  mergeTarget?: string | null;
+  /** The agent's remembered default target (set when the user last switched in the dropdown).
+   *  Wins over main/master as the left-segment default — but only while it's still a reported
+   *  target, so a renamed/deleted branch falls back cleanly. */
+  agentDefaultTarget?: string | null;
+  onMerge?: (target?: string) => void;
   onResolveInSession?: () => void;
   resolving?: boolean;
 }) {
   if (status === 'merged') {
+    // Annotate the target only when it's an unusual one — keep the common main/master merge clean.
+    const elsewhere = mergeTarget && mergeTarget !== 'main' && mergeTarget !== 'master';
     return (
-      <span className="wt-merge-done" title="Merged into main">
-        ✓ Merged
+      <span className="wt-merge-done" title={`Merged into ${mergeTarget || 'main'}`}>
+        ✓ Merged{elsewhere ? ` → ${mergeTarget}` : ''}
       </span>
     );
   }
   const failed = status === 'conflict' || status === 'error';
-  // On a conflict/error, the best recovery is letting the session's own agent merge main in and
-  // resolve — it has the context for the changes it made. Falls back to a plain retry.
-  if (failed && onResolveInSession) {
+  // Resolve-in-session has the agent merge main into the branch and fix conflicts — only
+  // meaningful when the target IS main/master. For a conflict on some other target, fall
+  // through to a plain "Retry merge" (+ the manual fallback in the panel below).
+  const resolvable = !mergeTarget || mergeTarget === 'main' || mergeTarget === 'master';
+  if (failed && onResolveInSession && resolvable) {
     return (
       <button
         type="button"
@@ -268,19 +291,61 @@ function MergeButton({
   }
   if (!onMerge) return null;
   const pending = busy || status === 'pending';
-  return (
+
+  // The left-segment default: the agent's remembered target if it's still on offer, else main,
+  // else master, else the first reported branch; undefined means "let the runner auto-detect"
+  // (the original behavior, and the older-runner case where `targets` is empty). Retry re-runs
+  // the SAME target that failed; a fresh merge uses the default.
+  const remembered = agentDefaultTarget && targets.includes(agentDefaultTarget) ? agentDefaultTarget : undefined;
+  const defaultTarget =
+    remembered ?? (targets.includes('main') ? 'main' : targets.includes('master') ? 'master' : targets[0]);
+  const primaryTarget = failed ? (mergeTarget ?? undefined) : defaultTarget;
+  const primaryLabel = pending ? 'Merging…' : failed ? 'Retry merge' : `Merge to ${defaultTarget ?? 'main'}`;
+  const hasMenu = targets.length > 0 && !pending;
+
+  const mainBtn = (
     <button
       type="button"
-      className={`wt-merge-btn${failed ? ' wt-merge-btn-failed' : ''}`}
+      className={`wt-merge-btn${failed ? ' wt-merge-btn-failed' : ''}${hasMenu ? ' wt-merge-btn-split' : ''}`}
       disabled={pending}
       onClick={(e) => {
         e.stopPropagation();
-        onMerge();
+        onMerge(primaryTarget);
       }}
-      title={failed ? 'Merge failed — expand the file list for details' : 'Merge this branch into main'}
+      title={failed ? 'Merge failed — expand the file list for details' : `Merge this branch into ${defaultTarget ?? 'main'}`}
     >
-      {pending ? 'Merging…' : failed ? 'Retry merge' : 'Merge to main'}
+      {primaryLabel}
     </button>
+  );
+  // Older runner (no reported targets) or mid-merge → the plain button, no caret.
+  if (!hasMenu) return mainBtn;
+
+  const items: MenuProps['items'] = targets.map((b) => ({
+    key: b,
+    label: (
+      <span className="wt-merge-target">
+        <span className="wt-merge-target-name">{b}</span>
+        {b === defaultTarget && <span className="wt-merge-target-tag">default</span>}
+      </span>
+    ),
+    onClick: () => onMerge(b),
+  }));
+
+  return (
+    <span className="wt-merge-split-wrap" onClick={(e) => e.stopPropagation()}>
+      {mainBtn}
+      <Dropdown trigger={['click']} placement="topRight" menu={{ items }}>
+        <button
+          type="button"
+          className={`wt-merge-caret${failed ? ' wt-merge-btn-failed' : ''}`}
+          aria-label="Choose a branch to merge into"
+          title="Merge into another branch"
+          onClick={(e) => e.stopPropagation()}
+        >
+          ▾
+        </button>
+      </Dropdown>
+    </span>
   );
 }
 

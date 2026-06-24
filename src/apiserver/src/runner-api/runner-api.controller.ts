@@ -278,6 +278,8 @@ export class RunnerApiController {
                 // Drives the status bar's Commit-vs-Merge action (older runners omit it →
                 // left untouched, so the bar falls back to the session lifecycle).
                 ...(s.worktreeDirty !== undefined ? { worktreeDirty: s.worktreeDirty } : {}),
+                // Candidate branches for the "Merge to…" dropdown (older runners omit it).
+                ...(s.mergeTargets !== undefined ? { mergeTargets: s.mergeTargets } : {}),
               },
             }),
           ),
@@ -874,6 +876,8 @@ export class RunnerApiController {
           ...(dto.changedFiles !== undefined
             ? { changedFiles: dto.changedFiles as unknown as Prisma.InputJsonValue }
             : {}),
+          // Candidate branches for the ended session's "Merge to…" dropdown (older runners omit it).
+          ...(dto.mergeTargets !== undefined ? { mergeTargets: dto.mergeTargets } : {}),
           // finalizeWorktree committed everything onto the branch before /complete, so the
           // checkout is clean — the bar shows Merge (not Commit) for the ended session.
           worktreeDirty: false,

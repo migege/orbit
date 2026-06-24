@@ -20,7 +20,7 @@ import { Base62UuidPipe } from '../common/base62-uuid.pipe';
 import { AuthUser, CurrentUser } from '../common/current-user.decorator';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
-import { CreateSessionDto, SessionConfigDto, SessionResumeDto, SessionTurnDto } from './dto';
+import { CreateSessionDto, MergeToMainDto, SessionConfigDto, SessionResumeDto, SessionTurnDto } from './dto';
 import { SessionsService } from './sessions.service';
 
 @UseGuards(JwtAuthGuard)
@@ -121,10 +121,15 @@ export class SessionsController {
     return this.sessions.end(user.userId, id);
   }
 
-  /** Ask the runner that ran this session to merge its worktree branch into main. */
+  /** Ask the runner that ran this session to merge its worktree branch into a target branch
+   *  (body.targetBranch; omitted → the runner auto-detects main, else master). */
   @Post(':id/merge')
-  mergeToMain(@CurrentUser() user: AuthUser, @Param('id', Base62UuidPipe) id: string) {
-    return this.sessions.mergeToMain(user.userId, id);
+  mergeToMain(
+    @CurrentUser() user: AuthUser,
+    @Param('id', Base62UuidPipe) id: string,
+    @Body() dto: MergeToMainDto,
+  ) {
+    return this.sessions.mergeToMain(user.userId, id, dto?.targetBranch);
   }
 
   /** Ask the runner to commit this live session's uncommitted worktree changes onto its branch. */

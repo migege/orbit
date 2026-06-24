@@ -191,6 +191,10 @@ model Agent {
   // baseline commit) on the next claim so its sessions can be worktree-isolated. Opt-in
   // per agent — the web "Enable isolation" action on a non-git run flips this on.
   autoInitGit        Boolean  @default(false) @map("auto_init_git")
+  // The branch this agent's sessions merge into by default, remembered from the last time the
+  // user switched targets in the status bar's merge dropdown. Null → the runner's auto-detect
+  // (main, else master). Agent-scoped so a chosen target sticks across all the agent's sessions.
+  defaultMergeTarget String?  @map("default_merge_target")
   ownerId            String   @map("owner_id") @db.Uuid
   owner              User     @relation(fields: [ownerId], references: [id])
   createdAt          DateTime @default(now()) @map("created_at")
@@ -293,7 +297,7 @@ model Session {
   changedFiles      Json?     @map("changed_files")
   isolationStatus   String?   @map("isolation_status")
   // ── "Merge to main" (UI button on the worktree status bar) ──────────────────
-  // The user can ask the runner to merge this session's `branch` into the repo's main.
+  // The user can ask the runner to merge this session's `branch` into a target branch.
   // mergeStatus drives the button: 'pending' (queued for the next heartbeat of the
   // session's assigned runner) → 'merged' (mergedAt set) | 'conflict' | 'error'
   // (mergeError carries git's message / the failed precondition). All null until asked.
@@ -301,6 +305,14 @@ model Session {
   mergeError        String?   @map("merge_error")
   mergeRequestedAt  DateTime? @map("merge_requested_at")
   mergedAt          DateTime? @map("merged_at")
+  // The branch the user chose to merge into (from the status bar's branch dropdown). Null
+  // means the default — the runner auto-detects main, else master. Relayed to the runner in
+  // the MergeCommand and shown on the merged ✓ chip.
+  mergeTarget       String?   @map("merge_target")
+  // Candidate merge targets the runner reported for this session's repo (local branches
+  // minus Orbit's own orbit/* session branches), populating the dropdown. Refreshed each
+  // heartbeat while live and at completion; empty for older runners (dropdown hidden).
+  mergeTargets      String[]  @default([]) @map("merge_targets")
   // ── "Commit" (UI button on the worktree status bar, for a live session) ─────
   // worktreeDirty is the runner's last-reported `git status` for the live worktree: true
   // → the bar shows Commit (commit the uncommitted work onto `branch`), false → Merge.

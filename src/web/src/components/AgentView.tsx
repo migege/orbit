@@ -1266,9 +1266,11 @@ export function AgentView({ runner }: { runner: Runner }) {
   // runner merges on its next heartbeat and the outcome lands on sessionDetail.mergeStatus
   // (the status bar polls while pending). Invalidate detail so 'pending' shows immediately.
   const mergeMut = useMutation({
-    mutationFn: (id: string) => mergeSessionToMain(id),
-    onSuccess: () => {
-      message.success('Merging to main — the result will appear on the status bar shortly.');
+    mutationFn: (vars: { id: string; target?: string }) => mergeSessionToMain(vars.id, vars.target),
+    onSuccess: (_data, vars) => {
+      message.success(
+        `Merging to ${vars.target ?? 'main'} — the result will appear on the status bar shortly.`,
+      );
       if (selectedId) qc.invalidateQueries({ queryKey: ['session', selectedId] });
     },
     onError: (e: Error) => message.error(e.message),
@@ -1993,7 +1995,7 @@ export function AgentView({ runner }: { runner: Runner }) {
           merging={mergeMut.isPending}
           onMergeToMain={
             selectedId && sessionDetailQ.data?.branch
-              ? () => mergeMut.mutate(selectedId)
+              ? (target?: string) => mergeMut.mutate({ id: selectedId, target })
               : undefined
           }
           resolving={resolveMut.isPending}

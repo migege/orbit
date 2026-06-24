@@ -46,6 +46,12 @@ export interface SessionResumeDto extends SessionTurnDto {
   effort?: string;
 }
 
+export interface MergeToMainDto {
+  /** The branch to merge this session's worktree branch INTO, picked from the status bar's
+   *  branch dropdown. Omitted → the default: the runner auto-detects main, else master. */
+  targetBranch?: string;
+}
+
 export interface SessionConfigDto {
   /** Change the model, permission mode and/or effort of an already-started session.
    *  The runner re-spawns claude with --resume so the change takes effect on the next

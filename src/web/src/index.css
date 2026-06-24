@@ -2149,6 +2149,56 @@ body {
   font-weight: 600;
   color: var(--success);
 }
+/* Split "Merge to <branch>" button: the main action butted up against a caret that opens a
+   dropdown of other branches to merge into. The main button's right border is the divider. */
+.wt-merge-split-wrap {
+  flex: none;
+  display: inline-flex;
+  align-items: stretch;
+}
+.wt-merge-btn-split {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.wt-merge-caret {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 6px;
+  border: 1px solid var(--brand-border);
+  border-left: none;
+  border-top-right-radius: 6px;
+  border-bottom-right-radius: 6px;
+  background: var(--brand-tint);
+  color: var(--brand);
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+}
+.wt-merge-caret:hover {
+  background: var(--brand-tint-hover);
+}
+.wt-merge-caret.wt-merge-btn-failed {
+  border-color: var(--error-border, var(--error));
+  background: var(--error-bg);
+  color: var(--error);
+}
+/* A branch row in the merge-target dropdown: the name + a subtle "default" tag on main/master. */
+.wt-merge-target {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.wt-merge-target-name {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+}
+.wt-merge-target-tag {
+  font-size: 10px;
+  color: var(--text-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 0 4px;
+}
 .wt-merge-manual {
   display: flex;
   flex-direction: column;

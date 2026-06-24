@@ -51,6 +51,34 @@ func branchExists(repoRoot, branch string) bool {
 	return err == nil
 }
 
+// listMergeTargets returns the repo's local branches that make sense as merge targets for the
+// status bar's "Merge to…" dropdown: every refs/heads/* except Orbit's own per-session branches
+// (orbit/*), which you merge FROM, never INTO. Best-effort — nil on any git error / empty repo.
+func listMergeTargets(repoRoot string) []string {
+	out, err := git(repoRoot, "for-each-ref", "--format=%(refname:short)", "refs/heads/")
+	if err != nil || out == "" {
+		return nil
+	}
+	var targets []string
+	for _, b := range strings.Split(out, "\n") {
+		b = strings.TrimSpace(b)
+		if b == "" || strings.HasPrefix(b, "orbit/") {
+			continue
+		}
+		targets = append(targets, b)
+	}
+	return targets
+}
+
+// mergeTargetsForWT lists a worktree's repo branches usable as merge targets; nil for a nil
+// worktree (a shared-dir session — nothing to merge into).
+func mergeTargetsForWT(wt *Worktree) []string {
+	if wt == nil {
+		return nil
+	}
+	return listMergeTargets(wt.RepoDir)
+}
+
 // defaultGitignore is written into a non-git workDir before its baseline commit (only when
 // the dir has no .gitignore of its own), so auto-init doesn't sweep dependencies, build
 // output, or secrets into version control.
@@ -446,12 +474,18 @@ type mergeOutcome struct {
 	Message   string
 }
 
-// mergeToMain merges a session's branch into the repo's main on the runner's local repo.
-// Conservative by design: it only auto-merges when the repo root is already on a CLEAN main
-// (the normal state — isolated sessions run in their own worktrees, so the primary checkout
-// sits on main between runs). Any other state returns an "error" outcome with an actionable
-// message; the UI keeps a copyable `git merge` fallback for those cases. The session branch
-// is never deleted. Serialized by mergeLock so concurrent merges don't race on the repo.
+// mergeToMain merges a session's branch into a target branch on the runner's local repo.
+// The target is req.TargetBranch (the branch the user picked from the status bar's dropdown),
+// or auto-detected (main, else master) when empty. Two paths, both conservative:
+//   - target is the repo root's current checkout (the usual case for main — isolated sessions
+//     run in their own worktrees, so the root sits on main between runs): merge in place,
+//     guarding a clean tree so we never mix in unrelated work or leave a half-applied merge.
+//   - otherwise (a release/develop branch, or main when the root is on something else): merge
+//     through a THROWAWAY worktree, so the shared checkout is never disturbed. Fails cleanly
+//     if the target is checked out in another worktree.
+// Any precondition failure returns an "error" outcome with an actionable message; the UI keeps
+// a copyable `git merge` fallback. The session branch is never deleted. Serialized by mergeLock
+// so concurrent merges don't race on the repo.
 func mergeToMain(req MergeCommand) mergeOutcome {
 	mergeLock.Lock()
 	defer mergeLock.Unlock()
@@ -460,44 +494,74 @@ func mergeToMain(req MergeCommand) mergeOutcome {
 	if err != nil || repoRoot == "" {
 		return mergeOutcome{Status: "error", Message: "workDir is not a git repository"}
 	}
-	// Detect the merge target: main, else master.
-	target := ""
-	for _, b := range []string{"main", "master"} {
-		if branchExists(repoRoot, b) {
-			target = b
-			break
-		}
-	}
+	// Resolve the merge target: the branch the user picked, else auto-detect main → master.
+	target := strings.TrimSpace(req.TargetBranch)
 	if target == "" {
-		return mergeOutcome{Status: "error", Message: "no main or master branch in this repo"}
+		for _, b := range []string{"main", "master"} {
+			if branchExists(repoRoot, b) {
+				target = b
+				break
+			}
+		}
+		if target == "" {
+			return mergeOutcome{Status: "error", Message: "no main or master branch in this repo"}
+		}
+	} else if !branchExists(repoRoot, target) {
+		return mergeOutcome{Status: "error", Message: fmt.Sprintf("target branch %q not found", target)}
 	}
 	if !branchExists(repoRoot, req.Branch) {
 		return mergeOutcome{Status: "error", Message: fmt.Sprintf("branch %q not found", req.Branch)}
 	}
-	// Guard: only merge when the primary checkout is on a clean target branch, so we never
-	// disturb an in-progress checkout or leave a half-applied merge in the shared tree.
-	if cur, _ := git(repoRoot, "rev-parse", "--abbrev-ref", "HEAD"); cur != target {
-		return mergeOutcome{Status: "error", Message: fmt.Sprintf("repo is on %q, not %q — switch to %s and merge manually", cur, target, target)}
+	if req.Branch == target {
+		return mergeOutcome{Status: "error", Message: fmt.Sprintf("can't merge %q into itself", target)}
 	}
-	// Block on modified tracked files (a merge would mix them in / could clobber); untracked
-	// files are fine — git itself refuses only if the merge would overwrite one, which the
-	// error path below catches.
-	if st, _ := git(repoRoot, "status", "--porcelain", "--untracked-files=no"); st != "" {
-		return mergeOutcome{Status: "error", Message: fmt.Sprintf("%s has uncommitted changes — commit/stash, or merge manually", target)}
+
+	// Fast path: the target is already checked out at the repo root → merge in place.
+	if cur, _ := git(repoRoot, "rev-parse", "--abbrev-ref", "HEAD"); cur == target {
+		// Block on modified tracked files (a merge would mix them in / could clobber); untracked
+		// files are fine — git refuses only if the merge would overwrite one (caught below).
+		if st, _ := git(repoRoot, "status", "--porcelain", "--untracked-files=no"); st != "" {
+			return mergeOutcome{Status: "error", Message: fmt.Sprintf("%s has uncommitted changes — commit/stash, or merge manually", target)}
+		}
+		return runMerge(repoRoot, req.Branch, target, req.SessionID)
 	}
-	// Inline identity so a merge commit never fails on a runner with no git user.* set.
-	out, err := git(repoRoot,
+
+	// The target isn't the root checkout. Merge it through a throwaway worktree so the shared
+	// checkout stays put. `git worktree add` checks the target out there (advancing it via the
+	// merge) and fails if it's already checked out in another worktree.
+	tmp := filepath.Join(worktreesDir(), "_merge-"+req.SessionID)
+	_, _ = git(repoRoot, "worktree", "remove", "--force", tmp) // clear any crashed-merge leftover
+	_ = os.RemoveAll(tmp)
+	if _, err := git(repoRoot, "worktree", "add", tmp, target); err != nil {
+		msg := gitStderr(err)
+		if strings.Contains(msg, "already checked out") || strings.Contains(msg, "already used by worktree") {
+			return mergeOutcome{Status: "error", Message: fmt.Sprintf("%q is checked out in another worktree — merge it there or pick another branch", target)}
+		}
+		return mergeOutcome{Status: "error", Message: clip(fmt.Sprintf("could not check out %s: %s", target, msg), 1000)}
+	}
+	defer func() {
+		_, _ = git(repoRoot, "worktree", "remove", "--force", tmp)
+		_ = os.RemoveAll(tmp)
+	}()
+	return runMerge(tmp, req.Branch, target, req.SessionID)
+}
+
+// runMerge merges source into the branch checked out at mergeDir (which IS target), reporting
+// the outcome. On a failure (almost always a conflict, given the clean-tree pre-checks) it
+// aborts so the working tree is left clean. Shared by mergeToMain's in-place and throwaway-
+// worktree paths. Inline identity so the merge commit never fails on a runner with no git user.*.
+func runMerge(mergeDir, source, target, sessionID string) mergeOutcome {
+	out, err := git(mergeDir,
 		"-c", "user.email=runner@orbit", "-c", "user.name=Orbit Runner",
-		"merge", "--no-edit", req.Branch)
+		"merge", "--no-edit", source)
 	if err != nil {
-		// A failed merge (almost always a conflict, given the clean-tree pre-check). git
-		// writes "CONFLICT ..." to stdout (returned as `out`); ExitError carries stderr.
+		// git writes "CONFLICT ..." to stdout (returned as `out`); ExitError carries stderr.
 		msg := strings.TrimSpace(out + "\n" + gitStderr(err))
-		_, _ = git(repoRoot, "merge", "--abort") // leave the working tree clean
+		_, _ = git(mergeDir, "merge", "--abort") // leave the working tree clean
 		return mergeOutcome{Status: "conflict", Message: clip(msg, 1000)}
 	}
-	sha, _ := git(repoRoot, "rev-parse", "HEAD")
-	logln(fmt.Sprintf("merged %s into %s (%s) for session %s", req.Branch, target, shortSha(sha), req.SessionID))
+	sha, _ := git(mergeDir, "rev-parse", "HEAD")
+	logln(fmt.Sprintf("merged %s into %s (%s) for session %s", source, target, shortSha(sha), sessionID))
 	return mergeOutcome{Status: "merged", MergedSha: sha}
 }
 
