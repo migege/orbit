@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { App as AntApp, Drawer, Dropdown, Tooltip } from 'antd';
+import { type MouseEvent as ReactMouseEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { App as AntApp, Drawer, Dropdown, Segmented, Tooltip } from 'antd';
 import type { MenuProps } from 'antd';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { refreshSessionDiff } from '../api';
@@ -467,17 +467,141 @@ function BranchLabel({ branch }: { branch: string }) {
   );
 }
 
+const WT_DIFF_WIDTH_KEY = 'wt-diff-width';
+const WT_DIFF_WIDTH_MIN = 560;
+const WT_DIFF_WIDTH_DEFAULT = 'min(1100px, 94vw)';
+const WT_DIFF_MODE_KEY = 'wt-diff-mode';
+// Render at most this many rows of a single file's diff up front; a giant file (e.g. a
+// 2k-line new file) then offers a "show more" button rather than laying out everything at once.
+const DIFF_ROW_CAP = 600;
+
+/** Split a path into its (trailing-slash) directory and basename. */
+function splitPath(path: string): { dir: string; name: string } {
+  const i = path.lastIndexOf('/');
+  return i < 0 ? { dir: '', name: path } : { dir: path.slice(0, i + 1), name: path.slice(i + 1) };
+}
+
+type FileGroup = {
+  dir: string;
+  files: SessionChangedFile[];
+  add: number;
+  del: number;
+  binaryOnly: boolean;
+};
+
+/** Bucket changed files by directory, summing per-folder stats, so the drawer can show a
+ *  collapsible folder list instead of a flat wall of near-identical truncated paths. Groups are
+ *  sorted by directory and files within each. A folder whose files are all binary (e.g. a build
+ *  output dir like `.build/debug`) is flagged so the list can fold it away by default. */
+function groupChangedFiles(files: SessionChangedFile[]): FileGroup[] {
+  const byDir = new Map<string, SessionChangedFile[]>();
+  for (const f of files) {
+    const key = splitPath(f.path).dir || './';
+    const arr = byDir.get(key);
+    if (arr) arr.push(f);
+    else byDir.set(key, [f]);
+  }
+  const groups: FileGroup[] = [];
+  for (const [dir, gfiles] of byDir) {
+    let add = 0;
+    let del = 0;
+    for (const f of gfiles) {
+      if (f.additions > 0) add += f.additions;
+      if (f.deletions > 0) del += f.deletions;
+    }
+    groups.push({
+      dir,
+      files: gfiles.sort((a, b) => a.path.localeCompare(b.path)),
+      add,
+      del,
+      binaryOnly: gfiles.every((f) => f.additions < 0 || f.deletions < 0),
+    });
+  }
+  return groups.sort((a, b) => a.dir.localeCompare(b.dir));
+}
+
+/** The changed-file list for the drawer rail: files grouped by folder. A single-file folder
+ *  renders as one flat row (no header noise); a multi-file folder gets a collapsible header with
+ *  its count + summed stats. Binary-only folders start folded so build artifacts don't bury the
+ *  real diff — the user's manual toggles win and persist while live heartbeats refresh `files`. */
+function ChangedFileList({
+  files,
+  activePath,
+  onSelect,
+}: {
+  files: SessionChangedFile[];
+  activePath?: string | null;
+  onSelect: (path: string) => void;
+}) {
+  const groups = useMemo(() => groupChangedFiles(files), [files]);
+  // Per-folder open/closed overrides keyed by dir; absent → the default (binary-only folds shut).
+  const [override, setOverride] = useState<Record<string, boolean>>({});
+  const isCollapsed = (g: FileGroup) => override[g.dir] ?? (g.binaryOnly && g.files.length > 1);
+  return (
+    <div className="wt-diff-files">
+      {groups.map((g) =>
+        g.files.length === 1 ? (
+          <FileRow
+            key={g.files[0].path}
+            file={g.files[0]}
+            active={g.files[0].path === activePath}
+            onClick={() => onSelect(g.files[0].path)}
+          />
+        ) : (
+          <div key={g.dir} className="wt-diff-group">
+            <button
+              type="button"
+              className="wt-diff-group-head"
+              onClick={() => setOverride((o) => ({ ...o, [g.dir]: !isCollapsed(g) }))}
+              title={g.dir}
+            >
+              <span className="wt-diff-group-caret">{isCollapsed(g) ? '▸' : '▾'}</span>
+              <span className="wt-diff-group-dir">{g.dir}</span>
+              <span className="wt-diff-group-meta">
+                <span className="wt-diff-group-n">{g.files.length}</span>
+                {g.binaryOnly ? (
+                  <span className="session-file-bin">binary</span>
+                ) : (
+                  <>
+                    <span className="add">+{g.add}</span>
+                    <span className="del">−{g.del}</span>
+                  </>
+                )}
+              </span>
+            </button>
+            {!isCollapsed(g) &&
+              g.files.map((f) => (
+                <FileRow
+                  key={f.path}
+                  file={f}
+                  display="name"
+                  active={f.path === activePath}
+                  onClick={() => onSelect(f.path)}
+                />
+              ))}
+          </div>
+        ),
+      )}
+    </div>
+  );
+}
+
 function FileRow({
   file,
   active,
+  display = 'full',
   onClick,
 }: {
   file: SessionChangedFile;
   active?: boolean;
+  /** 'full' shows the dimmed directory + bold basename; 'name' shows only the basename (for a
+   *  row under a folder header that already carries the directory). */
+  display?: 'full' | 'name';
   onClick?: () => void;
 }) {
   const binary = file.additions < 0 || file.deletions < 0;
   const status = (file.status || 'M').slice(0, 1).toUpperCase();
+  const { dir, name } = splitPath(file.path);
   return (
     <button
       type="button"
@@ -488,7 +612,10 @@ function FileRow({
       <span className={`session-file-status st-${status.toLowerCase()}`} title={status}>
         {status}
       </span>
-      <span className="session-file-path">{file.path}</span>
+      <span className="session-file-path">
+        {display === 'full' && dir && <span className="session-file-dir">{dir}</span>}
+        <span className="session-file-name">{name}</span>
+      </span>
       {binary ? (
         <span className="session-file-bin">binary</span>
       ) : (
@@ -531,6 +658,66 @@ function WorktreeDiffDrawer({
   }, [q.data]);
   const active = files.find((f) => f.path === openPath) ?? null;
 
+  // Drag the drawer's left edge to widen it for a roomier review; the width persists, and a
+  // double-click on the handle resets to the default. null → the responsive CSS default.
+  const [width, setWidth] = useState<number | null>(() => {
+    const s = Number(localStorage.getItem(WT_DIFF_WIDTH_KEY));
+    return s >= WT_DIFF_WIDTH_MIN ? s : null;
+  });
+  const [resizing, setResizing] = useState(false);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const startResize = (e: ReactMouseEvent): void => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = width ?? bodyRef.current?.getBoundingClientRect().width ?? 1100;
+    let latest = startW;
+    setResizing(true);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    const onMove = (ev: MouseEvent): void => {
+      // The drawer sits on the right, so dragging left (smaller clientX) widens it.
+      latest = Math.min(window.innerWidth - 48, Math.max(WT_DIFF_WIDTH_MIN, startW + startX - ev.clientX));
+      setWidth(latest);
+    };
+    const onUp = (): void => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      setResizing(false);
+      localStorage.setItem(WT_DIFF_WIDTH_KEY, String(Math.round(latest)));
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  };
+  const resetWidth = (): void => {
+    setWidth(null);
+    localStorage.removeItem(WT_DIFF_WIDTH_KEY);
+  };
+
+  // Unified (default) vs side-by-side split rendering of the diff, remembered across reloads.
+  const [viewMode, setViewMode] = useState<'unified' | 'split'>(() =>
+    localStorage.getItem(WT_DIFF_MODE_KEY) === 'split' ? 'split' : 'unified',
+  );
+  const changeViewMode = (m: 'unified' | 'split'): void => {
+    setViewMode(m);
+    localStorage.setItem(WT_DIFF_MODE_KEY, m);
+  };
+
+  // Prev/next file nav follows the grouped display order and skips binary files (no diff to show).
+  const orderedPaths = useMemo(
+    () =>
+      groupChangedFiles(files)
+        .flatMap((g) => g.files)
+        .filter((f) => f.additions >= 0 && f.deletions >= 0)
+        .map((f) => f.path),
+    [files],
+  );
+  const navIdx = active ? orderedPaths.indexOf(active.path) : -1;
+  const prevPath = navIdx > 0 ? orderedPaths[navIdx - 1] : null;
+  const nextPath = navIdx >= 0 && navIdx < orderedPaths.length - 1 ? orderedPaths[navIdx + 1] : null;
+  const navPos = navIdx >= 0 ? `${navIdx + 1}/${orderedPaths.length}` : '';
+
   // The file list refreshes on every heartbeat but the stored per-file patches only refresh at
   // turn boundaries, so a working-changes file changed since the last turn end can show in the
   // list with no diff. When that happens, ask the live runner to recompute now and poll until
@@ -564,7 +751,7 @@ function WorktreeDiffDrawer({
     <Drawer
       className="wt-diff-drawer"
       placement="right"
-      width="min(960px, 94vw)"
+      width={width ?? WT_DIFF_WIDTH_DEFAULT}
       open={openPath != null}
       onClose={onClose}
       title={
@@ -574,16 +761,15 @@ function WorktreeDiffDrawer({
         </span>
       }
     >
-      <div className="wt-diff-body">
+      <div className="wt-diff-body" ref={bodyRef}>
+        <div
+          className={`wt-diff-resizer${resizing ? ' resizing' : ''}`}
+          onMouseDown={startResize}
+          onDoubleClick={resetWidth}
+          title="Drag to resize · double-click to reset"
+        />
         <div className="wt-diff-list">
-          {files.map((f) => (
-            <FileRow
-              key={f.path}
-              file={f}
-              active={f.path === openPath}
-              onClick={() => onSelect(f.path)}
-            />
-          ))}
+          <ChangedFileList files={files} activePath={openPath} onSelect={onSelect} />
         </div>
         <div className="wt-diff-pane">
           {active ? (
@@ -592,6 +778,11 @@ function WorktreeDiffDrawer({
               patch={activePatch}
               loading={q.isLoading}
               refreshing={refreshing}
+              viewMode={viewMode}
+              onViewMode={changeViewMode}
+              pos={navPos}
+              onPrev={prevPath ? () => onSelect(prevPath) : undefined}
+              onNext={nextPath ? () => onSelect(nextPath) : undefined}
             />
           ) : (
             <div className="wt-diff-empty">Select a file to view its diff</div>
@@ -609,28 +800,59 @@ function DiffPane({
   patch,
   loading,
   refreshing,
+  viewMode,
+  onViewMode,
+  pos,
+  onPrev,
+  onNext,
 }: {
   file: SessionChangedFile;
   patch?: SessionFilePatch;
   loading?: boolean;
   refreshing?: boolean;
+  viewMode: 'unified' | 'split';
+  onViewMode: (m: 'unified' | 'split') => void;
+  /** "3/17" position of this file within the navigable (non-binary) set. */
+  pos: string;
+  onPrev?: () => void;
+  onNext?: () => void;
 }) {
   const binary = file.additions < 0 || file.deletions < 0;
   return (
     <>
       <div className="wt-diff-pane-head">
+        <span className="wt-diff-nav">
+          <button type="button" onClick={onPrev} disabled={!onPrev} aria-label="Previous file" title="Previous file">
+            ‹
+          </button>
+          <span className="wt-diff-nav-pos">{pos}</span>
+          <button type="button" onClick={onNext} disabled={!onNext} aria-label="Next file" title="Next file">
+            ›
+          </button>
+        </span>
         <span className="wt-diff-pane-path">{file.path}</span>
         {!binary && (
-          <span className="wt-diff-pane-stat">
-            <span className="add">+{file.additions}</span>
-            <span className="del">−{file.deletions}</span>
-          </span>
+          <>
+            <span className="wt-diff-pane-stat">
+              <span className="add">+{file.additions}</span>
+              <span className="del">−{file.deletions}</span>
+            </span>
+            <Segmented
+              size="small"
+              value={viewMode}
+              onChange={(v) => onViewMode(v as 'unified' | 'split')}
+              options={[
+                { label: 'Unified', value: 'unified' },
+                { label: 'Split', value: 'split' },
+              ]}
+            />
+          </>
         )}
       </div>
       {binary ? (
         <div className="wt-diff-empty">Binary file — no preview</div>
       ) : patch?.patch ? (
-        <DiffView patch={patch.patch} />
+        viewMode === 'split' ? <SplitDiffView patch={patch.patch} /> : <DiffView patch={patch.patch} />
       ) : patch?.truncated ? (
         <div className="wt-diff-empty">Diff too large to preview inline</div>
       ) : loading ? (
@@ -644,9 +866,8 @@ function DiffPane({
   );
 }
 
-type PatchRow =
-  | { type: 'add' | 'del' | 'ctx'; text: string; oldNo?: number; newNo?: number }
-  | { type: 'hunk'; text: string };
+type PatchLine = { type: 'add' | 'del' | 'ctx'; text: string; oldNo?: number; newNo?: number };
+type PatchRow = PatchLine | { type: 'hunk'; text: string };
 
 /** Parse a git unified diff for ONE file into render rows, carrying real file line numbers
  *  from each `@@ -old +new @@` header. File-header noise (diff --git/index/+++/---/mode) is
@@ -701,9 +922,13 @@ function parseUnifiedDiff(patch: string): PatchRow[] {
  *  gutters + sign + text); hunk headers render like the collapsed-context "gap" rows. */
 function DiffView({ patch }: { patch: string }) {
   const rows = useMemo(() => parseUnifiedDiff(patch), [patch]);
+  const [expanded, setExpanded] = useState(false);
+  useEffect(() => setExpanded(false), [patch]); // a freshly opened file starts capped again
+  const capped = !expanded && rows.length > DIFF_ROW_CAP;
+  const shown = capped ? rows.slice(0, DIFF_ROW_CAP) : rows;
   return (
     <div className="chat-diff wt-diff-view">
-      {rows.map((r, k) =>
+      {shown.map((r, k) =>
         r.type === 'hunk' ? (
           <div key={k} className="diff-line diff-gap">
             <span className="diff-gutter" />
@@ -719,6 +944,104 @@ function DiffView({ patch }: { patch: string }) {
             <span className="diff-text">{r.text}</span>
           </div>
         ),
+      )}
+      {capped && (
+        <button type="button" className="wt-diff-more" onClick={() => setExpanded(true)}>
+          Show {rows.length - DIFF_ROW_CAP} more lines
+        </button>
+      )}
+    </div>
+  );
+}
+
+type SplitCell = { text: string; no?: number; kind: 'ctx' | 'add' | 'del' } | null;
+type SplitRow = { type: 'pair'; left: SplitCell; right: SplitCell } | { type: 'hunk'; text: string };
+
+/** Re-fold a parsed unified diff into side-by-side rows: context lines mirror on both sides, and
+ *  a run of deletions/additions within a change block zips row-by-row (deletion left, addition
+ *  right) so a modified line shows old-vs-new aligned; the longer side's leftovers stand alone. */
+function toSplitRows(rows: PatchRow[]): SplitRow[] {
+  const out: SplitRow[] = [];
+  let dels: PatchLine[] = [];
+  let adds: PatchLine[] = [];
+  const flush = () => {
+    const n = Math.max(dels.length, adds.length);
+    for (let i = 0; i < n; i++) {
+      const d = dels[i];
+      const a = adds[i];
+      out.push({
+        type: 'pair',
+        left: d ? { text: d.text, no: d.oldNo, kind: 'del' } : null,
+        right: a ? { text: a.text, no: a.newNo, kind: 'add' } : null,
+      });
+    }
+    dels = [];
+    adds = [];
+  };
+  for (const r of rows) {
+    if (r.type === 'hunk') {
+      flush();
+      out.push({ type: 'hunk', text: r.text });
+    } else if (r.type === 'del') {
+      dels.push(r);
+    } else if (r.type === 'add') {
+      adds.push(r);
+    } else {
+      flush();
+      out.push({
+        type: 'pair',
+        left: { text: r.text, no: r.oldNo, kind: 'ctx' },
+        right: { text: r.text, no: r.newNo, kind: 'ctx' },
+      });
+    }
+  }
+  flush();
+  return out;
+}
+
+function SplitSide({ cell }: { cell: SplitCell }) {
+  if (!cell) {
+    return (
+      <div className="diff-split-cell diff-split-empty">
+        <span className="diff-ln" />
+        <span className="diff-text" />
+      </div>
+    );
+  }
+  return (
+    <div className={`diff-split-cell diff-${cell.kind}`}>
+      <span className="diff-ln">{cell.no ?? ''}</span>
+      <span className="diff-sign">{cell.kind === 'add' ? '+' : cell.kind === 'del' ? '-' : ' '}</span>
+      <span className="diff-text">{cell.text}</span>
+    </div>
+  );
+}
+
+/** Side-by-side counterpart to DiffView: old on the left, new on the right. Shares the row cap. */
+function SplitDiffView({ patch }: { patch: string }) {
+  const rows = useMemo(() => toSplitRows(parseUnifiedDiff(patch)), [patch]);
+  const [expanded, setExpanded] = useState(false);
+  useEffect(() => setExpanded(false), [patch]);
+  const capped = !expanded && rows.length > DIFF_ROW_CAP;
+  const shown = capped ? rows.slice(0, DIFF_ROW_CAP) : rows;
+  return (
+    <div className="chat-diff wt-diff-view wt-diff-split">
+      {shown.map((r, k) =>
+        r.type === 'hunk' ? (
+          <div key={k} className="diff-line diff-gap diff-split-hunk">
+            <span className="diff-text">{r.text}</span>
+          </div>
+        ) : (
+          <div key={k} className="diff-split-row">
+            <SplitSide cell={r.left} />
+            <SplitSide cell={r.right} />
+          </div>
+        ),
+      )}
+      {capped && (
+        <button type="button" className="wt-diff-more" onClick={() => setExpanded(true)}>
+          Show {rows.length - DIFF_ROW_CAP} more rows
+        </button>
       )}
     </div>
   );
