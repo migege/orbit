@@ -6,8 +6,11 @@ VERSION="${VERSION:-0.1.0}"
 SIGN_ID="${SIGN_ID:--}"        # "-" = ad-hoc (本机用). Developer ID 才能分发给别人
 ARCHS="${ARCHS:-arm64}"        # 设 "arm64 x86_64" 出通用二进制
 here="$(cd "$(dirname "$0")" && pwd)"
-pkg="$here/../OrbitApp"; out="$here/../build"; app="$out/$APP_NAME.app"; dmg="$out/$APP_NAME.dmg"
+pkg="$here/../OrbitApp"; out="$here/../build"; app="$out/$APP_NAME.app"
 archflags=""; for a in $ARCHS; do archflags="$archflags --arch $a"; done
+# The .app keeps a stable name; the distributable DMG is versioned + arch-tagged.
+if [ "$(echo $ARCHS | wc -w)" -gt 1 ]; then archtag="universal"; else archtag="$ARCHS"; fi
+dmg="$out/$APP_NAME-v$VERSION-$archtag.dmg"   # filename carries the v-prefixed version (matches the git tag)
 echo "▶ swift build -c release ($ARCHS)"
 ( cd "$pkg" && swift build -c release $archflags )
 bin="$(cd "$pkg" && swift build -c release $archflags --show-bin-path)/OrbitApp"

@@ -1,13 +1,13 @@
 ---
 name: release
-description: Cut a release of the macOS client by creating and pushing a vX.Y.Z git tag, which triggers the macos-release GitHub Actions workflow that builds the signed + notarized Orbit.dmg. Use whenever someone wants to cut/ship a release, tag a version, or kick off a release build.
+description: Cut a release of the macOS client by creating and pushing a vX.Y.Z git tag, which triggers the macos-release GitHub Actions workflow that builds the signed + notarized Orbit DMG. Use whenever someone wants to cut/ship a release, tag a version, or kick off a release build.
 ---
 
 # Cut a macOS release
 
 A release is a `vX.Y.Z` git tag. Pushing it triggers
 `.github/workflows/macos-release.yml`, which signs + notarizes the macOS client
-and uploads `Orbit.dmg` as a build artifact. The tag version flows into the
+and uploads `Orbit-v<version>-arm64.dmg` as a build artifact. The tag version flows into the
 DMG's `CFBundleShortVersionString` (the workflow exports `VERSION` from the tag
 name), so the tag is the single source of truth for the release version.
 
@@ -40,7 +40,7 @@ name), so the tag is the single source of truth for the release version.
    gh run watch "$(gh run list --workflow macos-release.yml -L 1 --json databaseId -q '.[0].databaseId')"
    ```
 
-   When it's green, the signed + notarized `Orbit.dmg` is in the run's Artifacts.
+   When it's green, the signed + notarized DMG is in the run's Artifacts.
 
 ## Notes
 
