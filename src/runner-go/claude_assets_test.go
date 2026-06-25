@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"testing"
 )
@@ -66,5 +67,37 @@ func TestScanSlashAssetsScoping(t *testing.T) {
 				break
 			}
 		}
+	}
+}
+
+// Several agents can point at the same checkout (e.g. per-environment variants of one
+// repo). Each must surface that dir's assets under its own agentID — the dir is not
+// collapsed to whichever agent is scanned first.
+func TestScanSlashAssetsSharedWorkDir(t *testing.T) {
+	home, shared := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+
+	mkSkill(t, shared, "ch-query")
+	mkSkill(t, shared, "hive-query")
+
+	_, skills := scanSlashAssets([]assetRoot{
+		{base: shared, agentID: "eu"},
+		{base: shared, agentID: "sg"},
+	})
+
+	got := map[string][]string{}
+	for _, s := range skills {
+		got[s.Name] = append(got[s.Name], s.AgentID)
+	}
+	for _, ids := range got {
+		sort.Strings(ids)
+	}
+
+	want := map[string][]string{
+		"ch-query":   {"eu", "sg"},
+		"hive-query": {"eu", "sg"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("shared-workDir scoping:\n got  %v\n want %v", got, want)
 	}
 }
