@@ -1,5 +1,5 @@
 # Release workflow for the native macOS client: produces a distributable, **signed +
-# notarized + stapled** Orbit.dmg that opens on any Mac with no Gatekeeper warning.
+# notarized + stapled** DMG (Orbit-v<version>-arm64.dmg) that opens on any Mac with no warning.
 #
 # This is the release counterpart to macos-client.yml (which only build/tests). It does on a
 # throwaway runner exactly what scripts/build-dmg.sh does locally: rebuild the cert + notary
@@ -89,5 +89,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Orbit-dmg
-          path: src/macos/build/Orbit.dmg
+          path: src/macos/build/Orbit-*.dmg
           if-no-files-found: error
