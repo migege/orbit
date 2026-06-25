@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { App as AntApp, Drawer, Dropdown } from 'antd';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { App as AntApp, Drawer, Dropdown, Tooltip } from 'antd';
 import type { MenuProps } from 'antd';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { refreshSessionDiff } from '../api';
@@ -64,6 +64,20 @@ export function SessionOutputs({
   // open session changes so a switched-to session never inherits the previous one's open file.
   const [openFile, setOpenFile] = useState<string | null>(null);
   useEffect(() => setOpenFile(null), [detail?.id]);
+  // The merge/commit failure reason (+ a copyable manual-merge command) lives in the file panel,
+  // which is collapsed by default — so a failure can land unseen. Auto-expand the panel the moment
+  // the runner reports an error/conflict, revealing it without the user hunting. Keyed by the
+  // failure so it fires once per transition; the user can still collapse it afterward.
+  const failKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    const failed =
+      detail?.mergeStatus === 'error' ||
+      detail?.mergeStatus === 'conflict' ||
+      detail?.commitStatus === 'error';
+    const key = failed ? `${detail?.id}:${detail?.mergeStatus ?? ''}:${detail?.commitStatus ?? ''}` : null;
+    if (key && key !== failKeyRef.current) setOpen(true);
+    failKeyRef.current = key;
+  }, [detail?.id, detail?.mergeStatus, detail?.commitStatus]);
   const copy = (text: string) => {
     void navigator.clipboard?.writeText(text)?.then(
       () => message.success('Copied'),
@@ -157,6 +171,7 @@ export function SessionOutputs({
         {showMerge && (
           <MergeButton
             status={detail.mergeStatus}
+            mergeError={detail.mergeError}
             busy={merging}
             targets={detail.mergeTargets ?? []}
             mergeTarget={detail.mergeTarget}
@@ -245,6 +260,7 @@ export function SessionOutputs({
  *  hidden and the button behaves exactly as before. With no driver at all only the ✓ can show. */
 function MergeButton({
   status,
+  mergeError,
   busy,
   targets,
   mergeTarget,
@@ -254,6 +270,8 @@ function MergeButton({
   resolving,
 }: {
   status?: SessionDetail['mergeStatus'];
+  /** Why the last merge failed (for an 'error'); surfaced on the failed button's hover. */
+  mergeError?: string | null;
   busy?: boolean;
   /** Candidate target branches reported by the runner (empty for older runners). */
   targets: string[];
@@ -277,6 +295,14 @@ function MergeButton({
     );
   }
   const failed = status === 'conflict' || status === 'error';
+  // The reason a failed merge shows on hover: the runner's precondition message for an 'error'
+  // (e.g. "develop has uncommitted changes…"), or a fixed note for a 'conflict' (mirroring the
+  // panel — the raw git conflict dump isn't shown). Replaces the old generic "expand for details"
+  // title so the actual cause is visible without opening the panel.
+  const failureHint =
+    status === 'conflict'
+      ? 'Merge conflict — aborted, working tree left clean. Resolve it from the panel below.'
+      : mergeError || 'Merge failed — see the panel below.';
   // Resolve-in-session has the agent rebase the branch onto main and fix conflicts — meaningful
   // only for a real merge *conflict* whose target IS main/master. An 'error' outcome is a
   // precondition failure (a dirty main checkout, the target checked out elsewhere, … — see the
@@ -286,18 +312,28 @@ function MergeButton({
     status === 'conflict' && (!mergeTarget || mergeTarget === 'main' || mergeTarget === 'master');
   if (failed && onResolveInSession && resolvable) {
     return (
-      <button
-        type="button"
-        className="wt-merge-btn wt-merge-btn-failed"
-        disabled={resolving}
-        onClick={(e) => {
-          e.stopPropagation();
-          onResolveInSession();
-        }}
-        title="Resume the session and have its agent rebase the branch onto main and resolve the conflicts"
+      <Tooltip
+        placement="top"
+        title={
+          <>
+            {failureHint}
+            <br />
+            Resume the session to have its agent rebase onto main and resolve it.
+          </>
+        }
       >
-        {resolving ? 'Resuming…' : 'Resolve in session'}
-      </button>
+        <button
+          type="button"
+          className="wt-merge-btn wt-merge-btn-failed"
+          disabled={resolving}
+          onClick={(e) => {
+            e.stopPropagation();
+            onResolveInSession();
+          }}
+        >
+          {resolving ? 'Resuming…' : 'Resolve in session'}
+        </button>
+      </Tooltip>
     );
   }
   if (!onMerge) return null;
@@ -323,13 +359,22 @@ function MergeButton({
         e.stopPropagation();
         onMerge(primaryTarget);
       }}
-      title={failed ? 'Merge failed — expand the file list for details' : `Merge this branch into ${defaultTarget ?? 'main'}`}
+      title={failed ? undefined : `Merge this branch into ${defaultTarget ?? 'main'}`}
     >
       {primaryLabel}
     </button>
   );
+  // On failure, hover surfaces the real reason via an antd Tooltip (native title cleared above);
+  // otherwise the plain button with its native title is enough.
+  const mainBtnEl = failed ? (
+    <Tooltip title={failureHint} placement="top">
+      {mainBtn}
+    </Tooltip>
+  ) : (
+    mainBtn
+  );
   // Older runner (no reported targets) or mid-merge → the plain button, no caret.
-  if (!hasMenu) return mainBtn;
+  if (!hasMenu) return mainBtnEl;
 
   const items: MenuProps['items'] = targets.map((b) => ({
     key: b,
@@ -344,7 +389,7 @@ function MergeButton({
 
   return (
     <span className="wt-merge-split-wrap" onClick={(e) => e.stopPropagation()}>
-      {mainBtn}
+      {mainBtnEl}
       <Dropdown trigger={['click']} placement="topRight" menu={{ items }}>
         <button
           type="button"

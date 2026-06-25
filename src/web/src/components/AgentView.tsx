@@ -641,6 +641,34 @@ export function AgentView({ runner }: { runner: Runner }) {
           ? 5000
           : false,
   });
+  // A merge's outcome lands asynchronously (≤1 heartbeat after the click) — but the only place
+  // it surfaces is the worktree status bar, and only if the user is still on this session with the
+  // file panel expanded. Toast the landing (success or the failure reason) the moment it flips off
+  // 'pending', so it's noticed even after they look away. Tracked per session id so switching to an
+  // already-failed session doesn't re-fire — only a real pending→result transition toasts.
+  const prevMergeRef = useRef<{ id: string; status: string | null } | null>(null);
+  useEffect(() => {
+    const d = sessionDetailQ.data;
+    if (!d) return;
+    const prev = prevMergeRef.current;
+    const was = prev && prev.id === d.id ? prev.status : null;
+    prevMergeRef.current = { id: d.id, status: d.mergeStatus ?? null };
+    if (was !== 'pending' || !d.mergeStatus || d.mergeStatus === 'pending') return;
+    const target = d.mergeTarget || 'main';
+    if (d.mergeStatus === 'merged') {
+      message.success(`Merged into ${target} ✓`);
+    } else if (d.mergeStatus === 'conflict') {
+      message.error({
+        content: `Merge into ${target} hit a conflict — aborted, your branch is untouched. Resolve it from the status bar.`,
+        duration: 8,
+      });
+    } else {
+      message.error({
+        content: `Merge into ${target} failed: ${d.mergeError ?? 'see the status bar for details.'}`,
+        duration: 8,
+      });
+    }
+  }, [sessionDetailQ.data, message]);
   const live = selected ? !TERMINAL.includes(selected.status) : false;
   // An ended session can be revived (--resume claude's context) only if it actually
   // ran and its runner is online — the transcript lives on that machine's disk.
@@ -1710,6 +1738,14 @@ export function AgentView({ runner }: { runner: Runner }) {
                 <div className="session-main">
                   <div className="session-title-row">
                     <div className="session-title">{s.title}</div>
+                    {(s.mergeStatus === 'error' || s.mergeStatus === 'conflict') && (
+                      <Tooltip
+                        title={s.mergeStatus === 'conflict' ? 'Merge conflict — needs resolving' : 'Merge failed'}
+                        placement="top"
+                      >
+                        <span className="session-merge-badge">⚠</span>
+                      </Tooltip>
+                    )}
                     <span className="session-time">{fmtTime(s.lastTurnAt ?? s.createdAt)}</span>
                   </div>
                   {line ? (
