@@ -86,32 +86,16 @@ export function SessionOutputs({
   committing?: boolean;
 }) {
   const { message } = AntApp.useApp();
-  const [open, setOpen] = useState(false);
   // The changed file whose diff is shown in the drawer (null = drawer closed). Reset when the
   // open session changes so a switched-to session never inherits the previous one's open file.
   const [openFile, setOpenFile] = useState<string | null>(null);
   useEffect(() => setOpenFile(null), [detail?.id]);
-  // The merge/commit failure reason (+ a copyable manual-merge command) lives in the file panel,
-  // which is collapsed by default — so a failure can land unseen. Auto-expand the panel the moment
-  // the runner reports an error/conflict, revealing it without the user hunting. Keyed by the
-  // failure so it fires once per transition; the user can still collapse it afterward.
-  const failKeyRef = useRef<string | null>(null);
-  useEffect(() => {
-    const failed =
-      detail?.mergeStatus === 'error' ||
-      detail?.mergeStatus === 'conflict' ||
-      detail?.commitStatus === 'error';
-    const key = failed ? `${detail?.id}:${detail?.mergeStatus ?? ''}:${detail?.commitStatus ?? ''}` : null;
-    if (key && key !== failKeyRef.current) setOpen(true);
-    failKeyRef.current = key;
-  }, [detail?.id, detail?.mergeStatus, detail?.commitStatus]);
   const copy = (text: string) => {
     void navigator.clipboard?.writeText(text)?.then(
       () => message.success('Copied'),
       () => message.error('Copy failed'),
     );
   };
-  const toggle = () => setOpen((v) => !v);
 
   const iso = detail?.isolationStatus;
   if (!iso) return null;
@@ -143,6 +127,13 @@ export function SessionOutputs({
   if (files.length === 0) return null;
   const add = files.reduce((s, f) => s + Math.max(0, f.additions), 0);
   const del = files.reduce((s, f) => s + Math.max(0, f.deletions), 0);
+  // Clicking the bar opens the review drawer (its tree is the file browser now — no separate
+  // inline list) straight to the first viewable file, in the same order the tree shows them.
+  const navFiles = treeFiles(buildFileTree(files));
+  const firstFile = (navFiles.find((f) => f.additions >= 0 && f.deletions >= 0) ?? navFiles[0])?.path ?? null;
+  // A merge/commit failure has recovery info (reason + manual command) worth surfacing inline.
+  const failed =
+    detail.mergeStatus === 'conflict' || detail.mergeStatus === 'error' || detail.commitStatus === 'error';
 
   // Git-state-driven primary action. When the runner reports `worktreeDirty`, the bar shows
   // Commit while the worktree has uncommitted changes and Merge once it's clean. Older runners
@@ -161,11 +152,10 @@ export function SessionOutputs({
 
   return (
     <>
-    <div className={`wt-bar${open ? ' wt-open' : ''}`}>
-      {/* The whole row toggles the file list — the chevron is just an affordance. It stays a
-          plain div (not role=button) because it wraps the branch-copy and chevron buttons;
-          the chevron remains the keyboard-accessible toggle. */}
-      <div className="wt-row wt-row-toggle" onClick={toggle}>
+    <div className="wt-bar">
+      {/* Clicking the row opens the review drawer (whose tree is the file browser); the
+          branch-copy and action buttons stop propagation so they don't trigger it. */}
+      <div className="wt-row wt-row-toggle" onClick={() => firstFile && setOpenFile(firstFile)}>
         <button
           type="button"
           className="wt-branch"
@@ -213,52 +203,34 @@ export function SessionOutputs({
           className="wt-expand"
           onClick={(e) => {
             e.stopPropagation();
-            toggle();
+            if (firstFile) setOpenFile(firstFile);
           }}
-          aria-label={open ? 'Hide files' : 'Show files'}
+          aria-label="View diff"
+          title="View diff"
         >
-          {open ? '▾' : '▸'}
+          ›
         </button>
       </div>
-      {open && (
-        <div className="wt-files-panel">
-          {files.map((f) => (
-            <FileRow key={f.path} file={f} onClick={() => setOpenFile(f.path)} />
-          ))}
-          <div className="wt-merge">
-            {showCommit ? (
-              <div className="wt-merge-manual">
-                {detail.commitStatus === 'error' && (
-                  <span className="wt-merge-err" title={detail.commitError ?? undefined}>
-                    {detail.commitError || 'Commit failed'}
-                  </span>
-                )}
-                <span className="wt-merge-label">
-                  Uncommitted changes on {branch} — commit them to merge into main.
-                </span>
-              </div>
-            ) : showMerge ? (
-              <div className="wt-merge-manual">
-                {(detail.mergeStatus === 'conflict' || detail.mergeStatus === 'error') && (
-                  <span className="wt-merge-err" title={detail.mergeError ?? undefined}>
-                    {detail.mergeStatus === 'conflict'
-                      ? 'Merge conflict — aborted, working tree left clean. Resolve manually:'
-                      : detail.mergeError || 'Merge failed. Merge manually:'}
-                  </span>
-                )}
-                <span className="wt-merge-or">
-                  {detail.mergeStatus === 'merged' ? 'Merged ✓ · or by hand:' : 'Or merge manually:'}
-                  <code className="wt-merge-cmd" title="Copy" onClick={() => copy(manualMergeCmd)}>
-                    {manualMergeCmd}
-                  </code>
-                </span>
-              </div>
-            ) : turnActive ? (
-              <span className="wt-merge-label">Turn in progress — you can merge to main once it finishes.</span>
-            ) : (
-              <span className="wt-merge-label">Working changes (uncommitted) on {branch}</span>
-            )}
-          </div>
+      {failed && (
+        <div className="wt-merge wt-bar-fail">
+          {detail.commitStatus === 'error' ? (
+            <span className="wt-merge-err" title={detail.commitError ?? undefined}>
+              {detail.commitError || 'Commit failed — try again.'}
+            </span>
+          ) : (
+            <div className="wt-merge-manual">
+              <span className="wt-merge-err" title={detail.mergeError ?? undefined}>
+                {detail.mergeStatus === 'conflict'
+                  ? 'Merge conflict — aborted, working tree left clean. Resolve manually:'
+                  : detail.mergeError || 'Merge failed. Merge manually:'}
+              </span>
+              <span className="wt-merge-or">
+                <code className="wt-merge-cmd" title="Copy" onClick={() => copy(manualMergeCmd)}>
+                  {manualMergeCmd}
+                </code>
+              </span>
+            </div>
+          )}
         </div>
       )}
     </div>
