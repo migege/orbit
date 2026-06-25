@@ -1,0 +1,36 @@
+import Foundation
+
+/// One normalized event in a session's stream (mirrors `NormalizedRunEvent` in
+/// src/shared/src/events.ts). The runner assigns `seq`; the control plane persists durable
+/// events and replays them over SSE.
+public struct RunEvent: Codable, Equatable, Sendable {
+    /// Monotonic per-session sequence (0 for live-only nudges: deltas, approvals, bg output).
+    public let seq: Int
+    public let type: RunEventType
+    /// ISO-8601 timestamp from the runner.
+    public let ts: String?
+    /// conversation_turn.id that produced this event; absent for session-level events.
+    public let turnId: String?
+    /// Event-type-specific data.
+    public let payload: JSONValue
+
+    enum CodingKeys: String, CodingKey { case seq, type, ts, turnId, payload }
+
+    public init(seq: Int, type: RunEventType, ts: String? = nil, turnId: String? = nil, payload: JSONValue = .null) {
+        self.seq = seq
+        self.type = type
+        self.ts = ts
+        self.turnId = turnId
+        self.payload = payload
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        // Tolerant decoding: a missing/odd field never drops the whole event.
+        self.seq = (try? c.decode(Int.self, forKey: .seq)) ?? 0
+        self.type = (try? c.decode(RunEventType.self, forKey: .type)) ?? .unknown
+        self.ts = try? c.decodeIfPresent(String.self, forKey: .ts)
+        self.turnId = try? c.decodeIfPresent(String.self, forKey: .turnId)
+        self.payload = (try? c.decodeIfPresent(JSONValue.self, forKey: .payload)) ?? .null
+    }
+}
