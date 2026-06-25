@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -92,6 +94,142 @@ func TestBuildFilePatchesTruncatesOversize(t *testing.T) {
 	out := buildFilePatches(files, map[string]string{"big.txt": big})
 	if len(out) != 1 || !out[0].Truncated || out[0].Patch != "" {
 		t.Fatalf("oversize file should be marked truncated with no patch text, got %+v", out)
+	}
+}
+
+// mustGit runs a git command in dir and fails the test on error.
+func mustGit(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	out, err := git(dir, args...)
+	if err != nil {
+		t.Fatalf("git %s: %v (%s)", strings.Join(args, " "), err, gitStderr(err))
+	}
+	return out
+}
+
+// initRepo makes a temp git repo on `main` with a single base commit and returns its path.
+func initRepo(t *testing.T) string {
+	t.Helper()
+	repo := t.TempDir()
+	mustGit(t, repo, "init", "-b", "main")
+	mustGit(t, repo, "config", "user.email", "test@orbit")
+	mustGit(t, repo, "config", "user.name", "Test")
+	commitFile(t, repo, "base.txt", "base\n", "base")
+	return repo
+}
+
+// commitFile writes content to repo/name, stages it, and commits with msg.
+func commitFile(t *testing.T, repo, name, content, msg string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(repo, name), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustGit(t, repo, "add", ".")
+	mustGit(t, repo, "commit", "-m", msg)
+}
+
+// TestMergeToMainRebaseLinear: a branch forked before main advanced rebases onto main's tip,
+// leaving a linear history (no merge commit) without rewriting the session branch.
+func TestMergeToMainRebaseLinear(t *testing.T) {
+	t.Setenv("ORBIT_HOME", t.TempDir()) // throwaway worktree lands under a temp ORBIT_HOME
+	repo := initRepo(t)
+
+	mustGit(t, repo, "checkout", "-b", "orbit/feat")
+	commitFile(t, repo, "feat.txt", "feature\n", "feat work")
+	featBefore := mustGit(t, repo, "rev-parse", "orbit/feat")
+
+	mustGit(t, repo, "checkout", "main")
+	commitFile(t, repo, "other.txt", "other\n", "main advance") // main diverges from the fork point
+
+	out := mergeToMain(MergeCommand{WorkDir: repo, Branch: "orbit/feat", SessionID: "s1"})
+	if out.Status != "merged" {
+		t.Fatalf("expected merged, got %q (%s)", out.Status, out.Message)
+	}
+	if merges, _ := git(repo, "log", "--merges", "--format=%H", "main"); merges != "" {
+		t.Errorf("main should be linear, found merge commits:\n%s", merges)
+	}
+	if _, err := git(repo, "cat-file", "-e", "main:feat.txt"); err != nil {
+		t.Errorf("main should carry feat.txt after rebase: %v", err)
+	}
+	if _, err := git(repo, "cat-file", "-e", "main:other.txt"); err != nil {
+		t.Errorf("main should still carry its own advance (other.txt): %v", err)
+	}
+	if featAfter, _ := git(repo, "rev-parse", "orbit/feat"); featAfter != featBefore {
+		t.Errorf("session branch must not be rewritten: %s → %s", featBefore, featAfter)
+	}
+	if out.MergedSha == featBefore {
+		t.Errorf("rebased commit should have a new sha, got the original %s", featBefore)
+	}
+	if branchExists(repo, "orbit/_rebase-s1") {
+		t.Error("temp rebase branch should be cleaned up")
+	}
+}
+
+// TestMergeToMainRebaseConflict: a branch that edits the same lines as main's advance conflicts
+// on rebase; the attempt aborts cleanly, leaving main and the working tree untouched.
+func TestMergeToMainRebaseConflict(t *testing.T) {
+	t.Setenv("ORBIT_HOME", t.TempDir())
+	repo := initRepo(t)
+
+	mustGit(t, repo, "checkout", "-b", "orbit/feat")
+	commitFile(t, repo, "base.txt", "feature change\n", "feat edits base")
+
+	mustGit(t, repo, "checkout", "main")
+	commitFile(t, repo, "base.txt", "main change\n", "main edits base")
+	mainBefore := mustGit(t, repo, "rev-parse", "main")
+
+	out := mergeToMain(MergeCommand{WorkDir: repo, Branch: "orbit/feat", SessionID: "s2"})
+	if out.Status != "conflict" {
+		t.Fatalf("expected conflict, got %q (%s)", out.Status, out.Message)
+	}
+	if mainAfter, _ := git(repo, "rev-parse", "main"); mainAfter != mainBefore {
+		t.Errorf("main must be untouched on conflict: %s → %s", mainBefore, mainAfter)
+	}
+	if st, _ := git(repo, "status", "--porcelain"); st != "" {
+		t.Errorf("working tree should be clean after an aborted rebase, got:\n%s", st)
+	}
+	if branchExists(repo, "orbit/_rebase-s2") {
+		t.Error("temp rebase branch should be cleaned up after conflict")
+	}
+}
+
+// TestMergeToMainRebaseNonRootTarget: merging into a target that ISN'T the root checkout (here
+// `develop`, with root left on main) advances the target's ref directly, still linearly, and
+// never disturbs the root checkout.
+func TestMergeToMainRebaseNonRootTarget(t *testing.T) {
+	t.Setenv("ORBIT_HOME", t.TempDir())
+	repo := initRepo(t)
+
+	mustGit(t, repo, "checkout", "-b", "develop")
+	mustGit(t, repo, "checkout", "-b", "orbit/feat") // forks from develop
+	commitFile(t, repo, "feat.txt", "feature\n", "feat work")
+
+	mustGit(t, repo, "checkout", "develop")
+	commitFile(t, repo, "dev.txt", "dev\n", "develop advance") // diverges from feat's fork point
+
+	mustGit(t, repo, "checkout", "main") // root sits on main, NOT the target
+	rootHead := mustGit(t, repo, "rev-parse", "HEAD")
+
+	out := mergeToMain(MergeCommand{WorkDir: repo, Branch: "orbit/feat", TargetBranch: "develop", SessionID: "s3"})
+	if out.Status != "merged" {
+		t.Fatalf("expected merged, got %q (%s)", out.Status, out.Message)
+	}
+	if merges, _ := git(repo, "log", "--merges", "--format=%H", "develop"); merges != "" {
+		t.Errorf("develop should be linear, found merge commits:\n%s", merges)
+	}
+	for _, f := range []string{"feat.txt", "dev.txt"} {
+		if _, err := git(repo, "cat-file", "-e", "develop:"+f); err != nil {
+			t.Errorf("develop should carry %s after rebase: %v", f, err)
+		}
+	}
+	if cur, _ := git(repo, "rev-parse", "--abbrev-ref", "HEAD"); cur != "main" {
+		t.Errorf("root checkout must stay on main, got %q", cur)
+	}
+	if head, _ := git(repo, "rev-parse", "HEAD"); head != rootHead {
+		t.Errorf("root checkout (main) must be untouched: %s → %s", rootHead, head)
+	}
+	if st, _ := git(repo, "status", "--porcelain"); st != "" {
+		t.Errorf("root working tree should be clean, got:\n%s", st)
 	}
 }
 

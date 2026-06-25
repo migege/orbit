@@ -49,8 +49,8 @@ export function SessionOutputs({
    *  else master). The outcome surfaces via detail.mergeStatus/mergeError (parent polls). */
   onMergeToMain?: (target?: string) => void;
   merging?: boolean;
-  /** Provided by the parent; on a conflict/error, resumes the session so its agent merges main
-   *  in and resolves the conflicts (after which the branch merges clean). */
+  /** Provided by the parent; on a conflict/error, resumes the session so its agent rebases the
+   *  branch onto the latest main and resolves the conflicts (after which the merge fast-forwards). */
   onResolveInSession?: () => void;
   resolving?: boolean;
   /** Provided by the parent (owns the mutation); enables the "Commit" button shown while the
@@ -94,6 +94,9 @@ export function SessionOutputs({
   if (iso !== 'worktree' || !detail?.branch) return null;
 
   const branch = detail.branch;
+  // Faithful by-hand equivalent of the runner's rebase merge: replay the branch onto the target,
+  // then fast-forward the target to it — a linear history, no merge commit. Copyable fallback below.
+  const manualMergeCmd = `git rebase ${detail.mergeTarget || 'main'} ${branch} && git checkout ${detail.mergeTarget || 'main'} && git merge --ff-only ${branch}`;
   const files = detail.changedFiles ?? [];
   // A worktree with no diff has nothing actionable or informative to show — hide the bar entirely.
   if (files.length === 0) return null;
@@ -199,8 +202,8 @@ export function SessionOutputs({
                 )}
                 <span className="wt-merge-or">
                   {detail.mergeStatus === 'merged' ? 'Merged ✓ · or by hand:' : 'Or merge manually:'}
-                  <code className="wt-merge-cmd" title="Copy" onClick={() => copy(`git merge ${branch}`)}>
-                    git merge {branch}
+                  <code className="wt-merge-cmd" title="Copy" onClick={() => copy(manualMergeCmd)}>
+                    {manualMergeCmd}
                   </code>
                 </span>
               </div>
@@ -231,8 +234,8 @@ export function SessionOutputs({
  *  opens a dropdown of the repo's other branches (mergeTargets) to merge into instead. Drives
  *  off the server-reported mergeStatus: idle → the split button; pending → "Merging…"; merged →
  *  a ✓ chip (naming the target); conflict/error → "Resolve in session" (resume so the agent
- *  merges main in and fixes conflicts — offered only for a main/master target) or "Retry merge"
- *  (re-runs the same target). The failure detail + a copyable `git merge <branch>` fallback live
+ *  rebases the branch onto main and fixes conflicts — offered only for a main/master target) or
+ *  "Retry merge" (re-runs the same target). The failure detail + a copyable rebase fallback live
  *  in the expandable file panel below. With no reported targets (older runner) the caret is
  *  hidden and the button behaves exactly as before. With no driver at all only the ✓ can show. */
 function MergeButton({
@@ -269,7 +272,7 @@ function MergeButton({
     );
   }
   const failed = status === 'conflict' || status === 'error';
-  // Resolve-in-session has the agent merge main into the branch and fix conflicts — only
+  // Resolve-in-session has the agent rebase the branch onto main and fix conflicts — only
   // meaningful when the target IS main/master. For a conflict on some other target, fall
   // through to a plain "Retry merge" (+ the manual fallback in the panel below).
   const resolvable = !mergeTarget || mergeTarget === 'main' || mergeTarget === 'master';
@@ -283,7 +286,7 @@ function MergeButton({
           e.stopPropagation();
           onResolveInSession();
         }}
-        title="Resume the session and have its agent merge main in and resolve the conflicts"
+        title="Resume the session and have its agent rebase the branch onto main and resolve the conflicts"
       >
         {resolving ? 'Resuming…' : 'Resolve in session'}
       </button>

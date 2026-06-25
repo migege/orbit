@@ -474,18 +474,24 @@ type mergeOutcome struct {
 	Message   string
 }
 
-// mergeToMain merges a session's branch into a target branch on the runner's local repo.
-// The target is req.TargetBranch (the branch the user picked from the status bar's dropdown),
-// or auto-detected (main, else master) when empty. Two paths, both conservative:
+// mergeToMain brings a session's branch into a target branch on the runner's local repo by
+// REBASING the branch onto the target and fast-forwarding — so the result is a linear history
+// with no merge commit. The target is req.TargetBranch (the branch the user picked from the
+// status bar's dropdown), or auto-detected (main, else master) when empty.
+//
+// The branch's commits are replayed on a temp copy in a throwaway worktree, so the session's own
+// branch is never rewritten (a resumable session keeps its original commits). The target is then
+// advanced to the rebased result, two paths, both conservative:
 //   - target is the repo root's current checkout (the usual case for main — isolated sessions
-//     run in their own worktrees, so the root sits on main between runs): merge in place,
-//     guarding a clean tree so we never mix in unrelated work or leave a half-applied merge.
-//   - otherwise (a release/develop branch, or main when the root is on something else): merge
-//     through a THROWAWAY worktree, so the shared checkout is never disturbed. Fails cleanly
-//     if the target is checked out in another worktree.
-// Any precondition failure returns an "error" outcome with an actionable message; the UI keeps
-// a copyable `git merge` fallback. The session branch is never deleted. Serialized by mergeLock
-// so concurrent merges don't race on the repo.
+//     run in their own worktrees, so the root sits on main between runs): fast-forward in place,
+//     guarding a clean tree so we never clobber unrelated work.
+//   - otherwise (a release/develop branch, or main when the root is on something else): the
+//     target isn't checked out anywhere, so move its ref directly. Fails cleanly if the target
+//     is checked out in another worktree.
+// A rebase conflict returns a "conflict" outcome (aborted cleanly); any precondition failure
+// returns "error" with an actionable message; the UI keeps a copyable `git merge` fallback. The
+// session branch is never rewritten or deleted. Serialized by mergeLock so concurrent merges
+// don't race on the repo.
 func mergeToMain(req MergeCommand) mergeOutcome {
 	mergeLock.Lock()
 	defer mergeLock.Unlock()
@@ -516,53 +522,93 @@ func mergeToMain(req MergeCommand) mergeOutcome {
 		return mergeOutcome{Status: "error", Message: fmt.Sprintf("can't merge %q into itself", target)}
 	}
 
-	// Fast path: the target is already checked out at the repo root → merge in place.
+	// Decide how we'll advance the target after the rebase. If the repo root has the target checked
+	// out (usual for main), we fast-forward it in place and must guard a clean tree. Otherwise the
+	// target must not be checked out in any worktree, so we can move its ref directly.
+	ffAtRoot := false
 	if cur, _ := git(repoRoot, "rev-parse", "--abbrev-ref", "HEAD"); cur == target {
-		// Block on modified tracked files (a merge would mix them in / could clobber); untracked
-		// files are fine — git refuses only if the merge would overwrite one (caught below).
+		ffAtRoot = true
+		// Block on modified tracked files (a fast-forward could clobber them); untracked files are
+		// fine — git refuses only if the fast-forward would overwrite one (caught below).
 		if st, _ := git(repoRoot, "status", "--porcelain", "--untracked-files=no"); st != "" {
 			return mergeOutcome{Status: "error", Message: fmt.Sprintf("%s has uncommitted changes — commit/stash, or merge manually", target)}
 		}
-		return runMerge(repoRoot, req.Branch, target, req.SessionID)
+	} else if branchWorktree(repoRoot, target) != "" {
+		return mergeOutcome{Status: "error", Message: fmt.Sprintf("%q is checked out in another worktree — merge it there or pick another branch", target)}
 	}
 
-	// The target isn't the root checkout. Merge it through a throwaway worktree so the shared
-	// checkout stays put. `git worktree add` checks the target out there (advancing it via the
-	// merge) and fails if it's already checked out in another worktree.
-	tmp := filepath.Join(worktreesDir(), "_merge-"+req.SessionID)
-	_, _ = git(repoRoot, "worktree", "remove", "--force", tmp) // clear any crashed-merge leftover
+	return rebaseFastForward(repoRoot, req.Branch, target, req.SessionID, ffAtRoot)
+}
+
+// rebaseFastForward replays source's commits onto target and advances target to the result by
+// fast-forward, yielding a linear history with no merge commit. The replay runs on a temp branch
+// (a copy of source) in a throwaway worktree, so the session's own branch is left intact even if
+// it's checked out. ffAtRoot picks how target is advanced: in place at the repo root
+// (merge --ff-only) when it's the root checkout, else by moving its ref (branch -f) when it's
+// checked out nowhere — both strict fast-forwards, since the rebase put target underneath. On a
+// rebase conflict it aborts and reports "conflict". Inline identity so the rewritten commits
+// never fail on a runner with no git user.*.
+func rebaseFastForward(repoRoot, source, target, sessionID string, ffAtRoot bool) mergeOutcome {
+	tmpBranch := "orbit/_rebase-" + sessionID
+	tmp := filepath.Join(worktreesDir(), "_rebase-"+sessionID)
+	// Clear any leftover from a crashed prior attempt before staging fresh.
+	_, _ = git(repoRoot, "worktree", "remove", "--force", tmp)
 	_ = os.RemoveAll(tmp)
-	if _, err := git(repoRoot, "worktree", "add", tmp, target); err != nil {
-		msg := gitStderr(err)
-		if strings.Contains(msg, "already checked out") || strings.Contains(msg, "already used by worktree") {
-			return mergeOutcome{Status: "error", Message: fmt.Sprintf("%q is checked out in another worktree — merge it there or pick another branch", target)}
-		}
-		return mergeOutcome{Status: "error", Message: clip(fmt.Sprintf("could not check out %s: %s", target, msg), 1000)}
+	_, _ = git(repoRoot, "branch", "-D", tmpBranch)
+
+	// Temp branch = source's tip, checked out in the throwaway worktree. A fresh branch (not
+	// source) means the rebase here never moves the session's branch.
+	if _, err := git(repoRoot, "worktree", "add", "-b", tmpBranch, tmp, source); err != nil {
+		return mergeOutcome{Status: "error", Message: clip(fmt.Sprintf("could not stage rebase of %s: %s", source, gitStderr(err)), 1000)}
 	}
 	defer func() {
 		_, _ = git(repoRoot, "worktree", "remove", "--force", tmp)
 		_ = os.RemoveAll(tmp)
+		_, _ = git(repoRoot, "branch", "-D", tmpBranch)
 	}()
-	return runMerge(tmp, req.Branch, target, req.SessionID)
-}
 
-// runMerge merges source into the branch checked out at mergeDir (which IS target), reporting
-// the outcome. On a failure (almost always a conflict, given the clean-tree pre-checks) it
-// aborts so the working tree is left clean. Shared by mergeToMain's in-place and throwaway-
-// worktree paths. Inline identity so the merge commit never fails on a runner with no git user.*.
-func runMerge(mergeDir, source, target, sessionID string) mergeOutcome {
-	out, err := git(mergeDir,
+	// Replay the temp branch onto target. A conflict stops the rebase; abort so the worktree is
+	// left clean before we tear it down (git writes "CONFLICT ..." to stdout, returned as `out`).
+	if out, err := git(tmp,
 		"-c", "user.email=runner@orbit", "-c", "user.name=Orbit Runner",
-		"merge", "--no-edit", source)
-	if err != nil {
-		// git writes "CONFLICT ..." to stdout (returned as `out`); ExitError carries stderr.
+		"rebase", target); err != nil {
 		msg := strings.TrimSpace(out + "\n" + gitStderr(err))
-		_, _ = git(mergeDir, "merge", "--abort") // leave the working tree clean
+		_, _ = git(tmp, "rebase", "--abort")
 		return mergeOutcome{Status: "conflict", Message: clip(msg, 1000)}
 	}
-	sha, _ := git(mergeDir, "rev-parse", "HEAD")
-	logln(fmt.Sprintf("merged %s into %s (%s) for session %s", source, target, shortSha(sha), sessionID))
+
+	// Advance target to the rebased commits — a strict fast-forward (target is now an ancestor).
+	if ffAtRoot {
+		if out, err := git(repoRoot, "merge", "--ff-only", tmpBranch); err != nil {
+			return mergeOutcome{Status: "error", Message: clip(strings.TrimSpace(out+"\n"+gitStderr(err)), 1000)}
+		}
+	} else if _, err := git(repoRoot, "branch", "-f", target, tmpBranch); err != nil {
+		return mergeOutcome{Status: "error", Message: clip(fmt.Sprintf("could not advance %s: %s", target, gitStderr(err)), 1000)}
+	}
+
+	sha, _ := git(repoRoot, "rev-parse", target)
+	logln(fmt.Sprintf("rebased %s onto %s (%s) for session %s", source, target, shortSha(sha), sessionID))
 	return mergeOutcome{Status: "merged", MergedSha: sha}
+}
+
+// branchWorktree returns the path of the worktree that has `branch` checked out, or "" if none
+// does — used to refuse advancing a target that's checked out somewhere (we'd corrupt that
+// checkout). Best-effort: "" on any git error.
+func branchWorktree(repoRoot, branch string) string {
+	out, err := git(repoRoot, "worktree", "list", "--porcelain")
+	if err != nil {
+		return ""
+	}
+	want := "refs/heads/" + branch
+	path := ""
+	for _, line := range strings.Split(out, "\n") {
+		if p, ok := strings.CutPrefix(line, "worktree "); ok {
+			path = p
+		} else if ref, ok := strings.CutPrefix(line, "branch "); ok && ref == want {
+			return path
+		}
+	}
+	return ""
 }
 
 // commitOutcome is what commitWorktree reports: "committed" advanced the branch, "nochange"
