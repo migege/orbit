@@ -847,8 +847,28 @@ export class SessionsService {
   ) {
     const session = await this.prisma.session.findFirst({ where: { id, ownerId } });
     if (!session) throw new NotFoundException('session not found');
-    // Still live — a normal turn belongs on the running process, not a revive.
+    // Still live — a normal turn belongs on the running process, not a revive. But a
+    // "Resolve in session" rebase reaches resume() on a live session too: the bar offers it
+    // while the session is still AWAITING_INPUT, and its whole point is to clear the failed
+    // merge so the bar offers Merge afresh once the agent rebases. The revive path below does
+    // that for ended sessions (mergeStatus: null); mirror it here, since createTurn doesn't.
+    // Only a *settled* outcome is stale — leave an in-flight 'pending' for its runner-api
+    // *-result to land (those writes are guarded on status === 'pending', so clearing it here
+    // would silently drop the result).
     if (SessionsService.LIVE.includes(session.status) && !session.cancelRequestedAt) {
+      const clear: Prisma.SessionUpdateInput = {};
+      if (session.mergeStatus && session.mergeStatus !== 'pending') {
+        clear.mergeStatus = null;
+        clear.mergeError = null;
+        clear.mergedAt = null;
+      }
+      if (session.commitStatus && session.commitStatus !== 'pending') {
+        clear.commitStatus = null;
+        clear.commitError = null;
+      }
+      if (Object.keys(clear).length > 0) {
+        await this.prisma.session.update({ where: { id }, data: clear });
+      }
       return this.createTurn(ownerId, id, dto);
     }
     if (!SessionsService.TERMINAL.includes(session.status)) {

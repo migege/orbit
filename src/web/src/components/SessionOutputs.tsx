@@ -233,10 +233,11 @@ export function SessionOutputs({
  *  committed: the left segment merges into the default target (main, else master), and a caret
  *  opens a dropdown of the repo's other branches (mergeTargets) to merge into instead. Drives
  *  off the server-reported mergeStatus: idle → the split button; pending → "Merging…"; merged →
- *  a ✓ chip (naming the target); conflict/error → "Resolve in session" (resume so the agent
- *  rebases the branch onto main and fixes conflicts — offered only for a main/master target) or
- *  "Retry merge" (re-runs the same target). The failure detail + a copyable rebase fallback live
- *  in the expandable file panel below. With no reported targets (older runner) the caret is
+ *  a ✓ chip (naming the target); conflict → "Resolve in session" (resume so the agent rebases the
+ *  branch onto main and fixes the conflicts — offered only for a main/master target); error →
+ *  "Retry merge" (a precondition failure like a dirty main that a rebase can't fix — re-runs the
+ *  same target). The failure detail + a copyable rebase fallback live in the expandable file
+ *  panel below. With no reported targets (older runner) the caret is
  *  hidden and the button behaves exactly as before. With no driver at all only the ✓ can show. */
 function MergeButton({
   status,
@@ -272,10 +273,13 @@ function MergeButton({
     );
   }
   const failed = status === 'conflict' || status === 'error';
-  // Resolve-in-session has the agent rebase the branch onto main and fix conflicts — only
-  // meaningful when the target IS main/master. For a conflict on some other target, fall
-  // through to a plain "Retry merge" (+ the manual fallback in the panel below).
-  const resolvable = !mergeTarget || mergeTarget === 'main' || mergeTarget === 'master';
+  // Resolve-in-session has the agent rebase the branch onto main and fix conflicts — meaningful
+  // only for a real merge *conflict* whose target IS main/master. An 'error' outcome is a
+  // precondition failure (a dirty main checkout, the target checked out elsewhere, … — see the
+  // runner's mergeToMain) that a rebase can't fix; it, and a conflict on some other target, fall
+  // through to a plain "Retry merge" (+ the failure detail in the panel below).
+  const resolvable =
+    status === 'conflict' && (!mergeTarget || mergeTarget === 'main' || mergeTarget === 'master');
   if (failed && onResolveInSession && resolvable) {
     return (
       <button
