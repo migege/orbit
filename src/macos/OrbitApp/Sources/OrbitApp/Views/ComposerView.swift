@@ -88,6 +88,17 @@ struct ComposerView: View {
                             console.composerText = String(text.prefix(ComposerLogic.maxPromptChars))
                         }
                     }
+                    // Paste an image straight from the clipboard (e.g. a screenshot). Declaring
+                    // image content types means a text-only paste isn't claimed here and falls
+                    // through to the field's normal paste — mirrors the web composer's onPaste.
+                    .onPasteCommand(of: [.image]) { providers in
+                        for provider in providers where provider.canLoadObject(ofClass: NSImage.self) {
+                            provider.loadObject(ofClass: NSImage.self) { object, _ in
+                                guard let image = object as? NSImage, let png = image.orbitPNGData() else { return }
+                                Task { @MainActor in await console.attachPastedImage(pngData: png) }
+                            }
+                        }
+                    }
 
                 if console.state.status == .running {
                     Button { Task { await console.interrupt() } } label: {
@@ -242,6 +253,15 @@ struct ComposerView: View {
         if images { panel.allowedContentTypes = [.png, .jpeg, .webP, .gif] }
         guard panel.runModal() == .OK else { return }
         for url in panel.urls { Task { await console.attachFile(url: url) } }
+    }
+}
+
+private extension NSImage {
+    /// Re-encode to PNG. The clipboard commonly carries TIFF (or JPEG), neither of which the
+    /// server accepts as an inline image; PNG is in `Attachments.allowedImageTypes`.
+    func orbitPNGData() -> Data? {
+        guard let tiff = tiffRepresentation, let rep = NSBitmapImageRep(data: tiff) else { return nil }
+        return rep.representation(using: .png, properties: [:])
     }
 }
 

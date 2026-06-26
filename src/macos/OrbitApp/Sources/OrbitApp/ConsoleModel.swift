@@ -293,6 +293,17 @@ final class ConsoleModel {
         await attach(filename: url.lastPathComponent, mimeType: mime, data: data)
     }
 
+    /// Clipboard ⌘V of an image (e.g. a screenshot): the view normalizes it to PNG, then this
+    /// enforces the inline-image cap and uploads via the shared path. Mirrors the web composer's
+    /// `onPaste` handler, which swallows the paste only when it carries image data.
+    func attachPastedImage(pngData: Data) async {
+        if let reason = Attachments.rejectReason(mimeType: "image/png", byteCount: pngData.count) {
+            statusMessage = reason
+            return
+        }
+        await attach(filename: "pasted-image.png", mimeType: "image/png", data: pngData)
+    }
+
     func attach(filename: String, mimeType: String, data: Data) async {
         do {
             let id = try await api.uploadAttachment(sessionID: sessionID, filename: filename,
