@@ -55,12 +55,14 @@ final class ConsoleModel {
                 connected = true
                 for try await ev in stream.events(sessionID: sessionID, sinceSeq: reducer.state.maxSeq) {
                     reducer.apply(ev)
-                    state = reducer.state
+                    scheduleStatePublish()
                     attempt = 0
                 }
                 connected = false
+                publishStateNow()
                 try? await Task.sleep(nanoseconds: 300_000_000)
             } catch is CancellationError {
+                publishStateNow()
                 return
             } catch {
                 connected = false
@@ -70,6 +72,26 @@ final class ConsoleModel {
                 try? await Task.sleep(nanoseconds: UInt64(ms) * 1_000_000)
             }
         }
+    }
+
+    // Coalesce transcript publishes. A busy replay or live stream would otherwise copy the full
+    // state and re-render the whole transcript PER event (≈ O(N²) over the session), pegging the
+    // main actor — opening a busy session froze the app near 100% CPU. Events still fold into the
+    // reducer eagerly; the rendered snapshot is pushed to the view at most ~20×/sec.
+    private var publishScheduled = false
+    private func scheduleStatePublish() {
+        guard !publishScheduled else { return }
+        publishScheduled = true
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            guard let self else { return }
+            self.publishScheduled = false
+            self.state = self.reducer.state
+        }
+    }
+    private func publishStateNow() {
+        publishScheduled = false
+        state = reducer.state
     }
 
     // MARK: composer

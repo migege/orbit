@@ -57,8 +57,11 @@ public struct URLSessionEventStream: EventStreaming {
                         throw APIError.http(status: http.statusCode, body: nil)
                     }
                     var parser = SSEFrameParser()
-                    for try await line in bytes.lines {
-                        if let sse = parser.consume(line: line), let ev = SSEDecoding.runEvent(from: sse) {
+                    // Iterate raw bytes, not `bytes.lines`: SSE delimits events with a blank line
+                    // (`\n\n`), and `bytes.lines`' empty-line handling can swallow it, leaving the
+                    // stream connected but never dispatching a frame.
+                    for try await byte in bytes {
+                        if let sse = parser.consume(byte: byte), let ev = SSEDecoding.runEvent(from: sse) {
                             continuation.yield(ev)
                         }
                     }
