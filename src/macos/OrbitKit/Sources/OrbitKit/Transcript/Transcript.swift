@@ -4,7 +4,9 @@ import Foundation
 // tests and diffed cheaply by a SwiftUI view layer.
 
 /// One renderable row in the conversation.
-public enum TranscriptItem: Identifiable, Equatable, Sendable {
+/// `Codable` so a whole reducer snapshot can be persisted to disk and rehydrated (see
+/// `FileTranscriptStore`).
+public enum TranscriptItem: Identifiable, Equatable, Sendable, Codable {
     case user(UserBubble)
     case assistant(AssistantBubble)
     case thinking(ThinkingBlock)
@@ -24,7 +26,7 @@ public enum TranscriptItem: Identifiable, Equatable, Sendable {
     }
 }
 
-public struct UserBubble: Equatable, Sendable {
+public struct UserBubble: Equatable, Sendable, Codable {
     public let id: String
     public var text: String
     public var attachmentIds: [String]
@@ -33,7 +35,7 @@ public struct UserBubble: Equatable, Sendable {
     public var pending: Bool
 }
 
-public struct AssistantBubble: Equatable, Sendable {
+public struct AssistantBubble: Equatable, Sendable, Codable {
     public let id: String
     /// Finalized text (set by the durable `assistant` event or flushed at turn end).
     public var text: String
@@ -46,7 +48,7 @@ public struct AssistantBubble: Equatable, Sendable {
     public var displayText: String { text.isEmpty ? streamingText : text }
 }
 
-public struct ThinkingBlock: Equatable, Sendable {
+public struct ThinkingBlock: Equatable, Sendable, Codable {
     public let id: String
     public var text: String
     public var streamingText: String
@@ -54,13 +56,13 @@ public struct ThinkingBlock: Equatable, Sendable {
     public var displayText: String { text.isEmpty ? streamingText : text }
 }
 
-public enum ToolStatus: String, Equatable, Sendable {
+public enum ToolStatus: String, Equatable, Sendable, Codable {
     case running
     case ok
     case error
 }
 
-public struct ToolCard: Equatable, Sendable {
+public struct ToolCard: Equatable, Sendable, Codable {
     public let id: String        // toolUseId
     public var name: String
     public var input: JSONValue
@@ -69,7 +71,7 @@ public struct ToolCard: Equatable, Sendable {
 }
 
 /// A background shell the agent launched with Bash(run_in_background).
-public struct BackgroundProc: Equatable, Sendable, Identifiable {
+public struct BackgroundProc: Equatable, Sendable, Identifiable, Codable {
     public let id: String
     public var command: String?
     public var status: String    // running | completed | failed | killed
@@ -77,8 +79,8 @@ public struct BackgroundProc: Equatable, Sendable, Identifiable {
 }
 
 /// A live tool-permission / question / plan prompt awaiting a human decision.
-public struct PendingApproval: Equatable, Sendable, Identifiable {
-    public enum Kind: String, Sendable { case tool, question, plan }
+public struct PendingApproval: Equatable, Sendable, Identifiable, Codable {
+    public enum Kind: String, Sendable, Codable { case tool, question, plan }
     public let id: String
     public var kind: Kind
     public var toolName: String?

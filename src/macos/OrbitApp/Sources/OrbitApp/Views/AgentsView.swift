@@ -118,8 +118,8 @@ struct AgentDetailContent: View {
                 }
             }
             .navigationDestination(for: String.self) { sid in
-                if let baseURL = app.baseURL {
-                    ConsoleView(sessionID: sid, agentID: agent.id, baseURL: baseURL, tokenStore: app.tokenStore)
+                if let registry = app.consoleRegistry {
+                    ConsoleView(sessionID: sid, agentID: agent.id, registry: registry)
                 }
             }
         }

@@ -39,6 +39,9 @@ struct MainView: View {
             }
         }
         .task { model.startPolling() }
+        // Drive the debounced console mount off the list selection (covers arrow-key navigation,
+        // clicks, and a restored selection on appear).
+        .onChange(of: model.selectedSessionID, initial: true) { _, _ in model.scheduleConsoleActivate() }
         .sheet(isPresented: $showRunner) {
             if let url = model.baseURL {
                 RunnerControlPane(baseURL: url, tokenStore: model.tokenStore)
@@ -102,10 +105,10 @@ struct SectionDetail: View {
     var body: some View {
         switch section {
         case .active:
-            if let id = model.selectedSessionID, let baseURL = model.baseURL {
-                ConsoleView(sessionID: id, agentID: model.agentID(for: id),
-                            baseURL: baseURL, tokenStore: model.tokenStore)
-                    .id(id)   // rebuild (restart the stream) when the selection changes
+            if let id = model.activeConsoleSessionID, let registry = model.consoleRegistry {
+                // No `.id(id)`: the view persists across selection changes and swaps its stream via
+                // `.task(id:)`, reusing the warm cached console instead of rebuilding from scratch.
+                ConsoleView(sessionID: id, agentID: model.agentID(for: id), registry: registry)
             } else {
                 ContentUnavailableView("Select a session",
                                        systemImage: "bubble.left.and.bubble.right",

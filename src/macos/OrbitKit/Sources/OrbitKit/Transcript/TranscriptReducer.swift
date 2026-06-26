@@ -1,7 +1,7 @@
 import Foundation
 
 /// The folded transcript state a view renders.
-public struct TranscriptState: Equatable, Sendable {
+public struct TranscriptState: Equatable, Sendable, Codable {
     public var items: [TranscriptItem] = []
     public var pendingApprovals: [PendingApproval] = []
     public var background: [BackgroundProc] = []
@@ -20,7 +20,13 @@ public struct TranscriptState: Equatable, Sendable {
 ///  - `text_delta`/`thinking_delta` are animation only — appended to the open bubble,
 ///    never deduped, never advancing `maxSeq`;
 ///  - `approval_*` and `background_output` ride seq 0 and bypass dedup entirely.
-public struct TranscriptReducer: Sendable {
+///
+/// `Codable` so the entire reducer — including the dedup set, the open-bubble cursors, and the
+/// synthetic id counter — can be snapshotted to disk and rehydrated verbatim. Restoring the whole
+/// reducer (not just `state`) makes a resumed `?sinceSeq=maxSeq` stream behave bit-for-bit as if
+/// the reducer had never been torn down: no duplicate bubbles, no id collisions. The synthesized
+/// conformance is module-internal (only `FileTranscriptStore` round-trips it).
+public struct TranscriptReducer: Sendable, Codable {
     public private(set) var state = TranscriptState()
 
     private var seen = Set<Int>()

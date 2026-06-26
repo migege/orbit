@@ -1,18 +1,17 @@
 import SwiftUI
 import OrbitKit
 
-/// Read-only console for one session (Phase 1): opens the live SSE stream and renders the
-/// reduced transcript. No composer yet — that's Phase 2.
+/// Console for one session: renders the reduced transcript (resumed from the local store) and the
+/// interactive composer/approvals/worktree. The `ConsoleModel` is owned by `ConsoleRegistry`, not
+/// this view, so switching sessions reuses a warm, cached console instead of rebuilding one.
 struct ConsoleView: View {
     let sessionID: String
     var agentID: String? = nil
-    let baseURL: URL
-    let tokenStore: TokenStore
-    @State private var console: ConsoleModel?
+    let registry: ConsoleRegistry
 
     var body: some View {
         Group {
-            if let console {
+            if let console = registry.peek(sessionID) {
                 VStack(spacing: 0) {
                     WorktreeBar(console: console)
                     Divider()
@@ -35,10 +34,10 @@ struct ConsoleView: View {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .task {
-            let c = ConsoleModel(sessionID: sessionID, agentID: agentID, baseURL: baseURL, tokenStore: tokenStore)
-            console = c
-            await c.run()   // lives until this view's .task is cancelled (selection change / disappear)
+        // Restarts only when `sessionID` changes: cancels the previous session's stream (its state
+        // stays cached) and resumes this one from its persisted `maxSeq` — no full replay.
+        .task(id: sessionID) {
+            await registry.model(for: sessionID, agentID: agentID).run()
         }
     }
 }

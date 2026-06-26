@@ -52,7 +52,8 @@ final class ConsoleModel {
     private let stream: EventStreaming
     private let api: APIClient
 
-    init(sessionID: String, agentID: String? = nil, baseURL: URL, tokenStore: TokenStore) {
+    init(sessionID: String, agentID: String? = nil, baseURL: URL, tokenStore: TokenStore,
+         restoring reducer: TranscriptReducer? = nil) {
         self.sessionID = sessionID
         self.agentID = agentID
         self.api = APIClient(baseURL: baseURL, tokenStore: tokenStore)
@@ -61,7 +62,15 @@ final class ConsoleModel {
         #else
         self.stream = MockEventStream([])
         #endif
+        if let reducer {
+            self.reducer = reducer
+            self.state = reducer.state   // render the persisted transcript instantly, before SSE connects
+        }
     }
+
+    /// Snapshot the full reducer (state + dedup/cursor internals) for the local store. Restoring
+    /// it lets the resumed `?sinceSeq=maxSeq` stream continue verbatim — see `ConsoleRegistry`.
+    func snapshotReducer() -> TranscriptReducer { reducer }
 
     // MARK: live stream
 

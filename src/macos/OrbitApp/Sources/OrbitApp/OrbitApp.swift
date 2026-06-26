@@ -5,6 +5,7 @@ import OrbitKit
 struct OrbitApp: App {
     @State private var model = AppModel()
     @StateObject private var updater = UpdaterModel()
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
@@ -13,6 +14,10 @@ struct OrbitApp: App {
                 .frame(minWidth: 820, minHeight: 520)
                 .onOpenURL { url in
                     if let route = DeepLink.parse(url) { model.route(to: route) }
+                }
+                .onChange(of: scenePhase) { _, phase in
+                    // Checkpoint open transcripts when the app leaves the foreground.
+                    if phase != .active { model.consoleRegistry?.persistAll() }
                 }
                 .task {
                     model.bootstrap()
