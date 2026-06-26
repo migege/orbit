@@ -55,3 +55,19 @@ public struct EnrollmentTokenInfo: Codable, Equatable, Sendable {
 public struct OkResponse: Codable, Equatable, Sendable {
     public let ok: Bool?
 }
+
+/// One rate-limit window of Claude's subscription quota (mirrors shared `PlanUsageWindow`).
+public struct PlanUsageWindow: Codable, Equatable, Sendable {
+    public let utilization: Double   // 0…100
+    public let resetsAt: String?
+}
+
+/// Claude subscription quota for a runner's account — same numbers as Claude Code's `/usage`.
+/// Any window may be absent (plan lacks it, or the runner uses an API key / is too old).
+public struct PlanUsage: Codable, Equatable, Sendable {
+    public let fiveHour: PlanUsageWindow?
+    public let sevenDay: PlanUsageWindow?
+    public let sevenDayOpus: PlanUsageWindow?
+    public let sevenDaySonnet: PlanUsageWindow?
+    public let fetchedAt: String?
+}

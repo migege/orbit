@@ -48,6 +48,15 @@ public final class APIClient: @unchecked Sendable {
     public func updatePreferences(_ req: UpdatePreferencesRequest) async throws -> User {
         try await patch("users/me/preferences", body: req)
     }
+    public func changePassword(_ req: ChangePasswordRequest) async throws {
+        _ = try await postRaw("auth/change-password", body: req)
+    }
+
+    // MARK: admin (role-gated; non-admins get 403)
+    public func adminUsers() async throws -> [User] { try await get("admin/users") }
+    public func createUser(_ req: CreateUserRequest) async throws -> CreateUserResult { try await post("admin/users", body: req) }
+    public func setUserRole(_ id: String, role: String) async throws -> User { try await patch("admin/users/\(id)/role", body: UpdateRoleRequest(role: role)) }
+    public func deleteUser(_ id: String) async throws { try await deleteRaw("admin/users/\(id)") }
 
     // MARK: sessions
 

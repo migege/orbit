@@ -66,6 +66,10 @@ public struct Runner: Codable, Equatable, Sendable, Identifiable {
     // Reported on the GET /runners payload (renamed from availableSkills/availableCommands).
     public let skills: [SlashCommandInfo]?
     public let commands: [SlashCommandInfo]?
+    // List-view extras: live slot usage, last heartbeat, and Claude subscription quota.
+    public let activeSessions: Int?
+    public let lastHeartbeatAt: String?
+    public let planUsage: PlanUsage?
 }
 
 /// A session row (list + detail share this; detail carries the extra worktree/stat fields).

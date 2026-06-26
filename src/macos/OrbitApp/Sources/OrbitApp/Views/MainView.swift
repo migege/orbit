@@ -82,13 +82,13 @@ struct SectionContent: View {
         case .agents:
             AgentsListView()
         case .skills:
-            ComingSoon(section: .skills, note: "Skill directory (per-agent) — coming in batch E.")
+            SkillsView()
         case .runners:
-            ComingSoon(section: .runners, note: "Runner list, quota, enrollment — coming in batch E.")
+            RunnersListView()
         case .settings:
-            ComingSoon(section: .settings, note: "Preferences, account, theme — coming in batch E.")
+            SettingsView()
         case .admin:
-            ComingSoon(section: .admin, note: "User management — coming in batch E.")
+            AdminUsersView()
         }
     }
 }
@@ -114,9 +114,14 @@ struct SectionDetail: View {
             TaskDetailView()
         case .agents:
             AgentFormView()
-        default:
+        case .runners:
+            RunnerDetailView()
+        case .admin:
+            AdminUserDetailView()
+        case .skills, .settings:
+            // Single-pane sections render everything in the middle column.
             ContentUnavailableView(section.title, systemImage: section.systemImage,
-                                   description: Text("Open an item to see details here."))
+                                   description: Text("Browse \(section.title.lowercased()) in the list."))
         }
     }
 }

@@ -26,6 +26,7 @@ final class AppModel {
     var selectedTaskID: String?
     var selectedRunnerID: String?
     var selectedAgentID: String?
+    var selectedUserID: String?
     var menuSummary: MenuBarSummary = .empty
 
     let tokenStore: TokenStore
@@ -56,12 +57,38 @@ final class AppModel {
     /// Per-section shared stores (list + detail observe the same instance). Rebuilt per instance.
     private(set) var tasks: TasksModel?
     private(set) var agents: AgentsModel?
+    private(set) var runners: RunnersModel?
+    private(set) var admin: AdminModel?
 
     private func configure(_ url: URL) {
         baseURL = url
         api = APIClient(baseURL: url, tokenStore: tokenStore)
         tasks = TasksModel(baseURL: url, tokenStore: tokenStore)
         agents = AgentsModel(baseURL: url, tokenStore: tokenStore)
+        runners = RunnersModel(baseURL: url, tokenStore: tokenStore)
+        admin = AdminModel(baseURL: url, tokenStore: tokenStore)
+    }
+
+    // MARK: settings (preferences + password live on the user; no separate store needed)
+
+    func savePreferences(_ req: UpdatePreferencesRequest) async {
+        guard let api else { return }
+        do { user = try await api.updatePreferences(req) }
+        catch { errorText = "Couldn't save preferences." }
+    }
+
+    /// Returns nil on success, else a message. Wrong current password is a 400 (not a 401, so it
+    /// won't bounce the session).
+    func changePassword(current: String, new: String) async -> String? {
+        guard let api else { return "Not signed in." }
+        do {
+            try await api.changePassword(ChangePasswordRequest(currentPassword: current, newPassword: new))
+            return nil
+        } catch APIError.http(_, let body) {
+            return (body?.isEmpty == false ? body : "Couldn't change password.")
+        } catch {
+            return "Couldn't change password."
+        }
     }
 
     func login() async {
@@ -99,6 +126,7 @@ final class AppModel {
         selectedTaskID = nil
         selectedRunnerID = nil
         selectedAgentID = nil
+        selectedUserID = nil
         lastSnapshot = nil
         menuSummary = .empty
         updateDockBadge(nil)
