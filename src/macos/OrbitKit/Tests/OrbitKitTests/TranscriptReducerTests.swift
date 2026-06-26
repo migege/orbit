@@ -99,6 +99,22 @@ final class TranscriptReducerTests: XCTestCase {
         XCTAssertEqual(r.state.items[0].asUser?.pending, false)
     }
 
+    /// Real-world path: the runner's durable `user` event echoes the server `turnId` (top-level),
+    /// NOT `clientTurnId` in the payload. The optimistic bubble — tagged with that turnId from the
+    /// POST /turns response — must reconcile by turnId instead of duplicating. (Regression: macOS
+    /// previously matched only on the never-echoed clientTurnId, so every sent message doubled.)
+    func testOptimisticUserReconciledByServerTurnId() {
+        var r = TranscriptReducer()
+        r.addOptimisticUser(clientTurnId: "c9", text: "ask me a question")
+        r.setOptimisticTurnId(clientTurnId: "c9", turnId: "turn-77")   // from POST /turns response
+        XCTAssertEqual(r.state.items[0].asUser?.pending, true)
+
+        r.apply(RunEvent(seq: 10, type: .user, turnId: "turn-77",
+                         payload: .object(["text": .string("ask me a question")])))
+        XCTAssertEqual(r.state.items.count, 1, "must reconcile by server turnId, not duplicate")
+        XCTAssertEqual(r.state.items[0].asUser?.pending, false)
+    }
+
     func testTextDeltaWithoutDurableFinalizeStillRenders() {
         var r = TranscriptReducer()
         r.apply(RunEvent(seq: 0, type: .textDelta, payload: .object(["delta": .string("partial ")])))

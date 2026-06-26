@@ -292,7 +292,8 @@ final class ConsoleModel {
         let clientTurnId = UUID().uuidString
         let attachmentIds = pendingAttachments.map(\.id)
 
-        // Optimistic bubble; reconciled by the server's `user` event (same clientTurnId).
+        // Optimistic bubble; reconciled by the server's `user` event (matched by the turnId
+        // tagged below once POST returns — the runner echoes turnId, not clientTurnId).
         reducer.addOptimisticUser(clientTurnId: clientTurnId, text: text, attachmentIds: attachmentIds)
         state = reducer.state
         composerText = ""
@@ -301,8 +302,9 @@ final class ConsoleModel {
         sending = true
         defer { sending = false }
         do {
+            let accepted: TurnAccepted
             if ComposerLogic.shouldResume(status: sessionStatus) {
-                _ = try await api.resume(sessionID: sessionID,
+                accepted = try await api.resume(sessionID: sessionID,
                                          ResumeRequest(clientTurnId: clientTurnId, content: text,
                                                        kind: shell ? "shell" : "message",
                                                        model: modelID, permissionMode: permissionMode.rawValue,
@@ -312,9 +314,16 @@ final class ConsoleModel {
                 // re-resume a session that hasn't re-claimed yet.
                 serverStatus = nil
             } else {
-                _ = try await api.sendTurn(sessionID: sessionID,
+                accepted = try await api.sendTurn(sessionID: sessionID,
                                            ComposerLogic.makeTurn(clientTurnId: clientTurnId, text: text,
                                                                   shell: shell, attachmentIds: attachmentIds))
+            }
+            // Tag the optimistic bubble with the server's turnId so the durable `user` event
+            // reconciles it instead of appending a duplicate (the runner echoes turnId, not
+            // clientTurnId). The POST response always precedes that event — see setOptimisticTurnId.
+            if let tid = accepted.turnId {
+                reducer.setOptimisticTurnId(clientTurnId: clientTurnId, turnId: tid)
+                state = reducer.state
             }
         } catch {
             statusMessage = "Send failed — \(error)"

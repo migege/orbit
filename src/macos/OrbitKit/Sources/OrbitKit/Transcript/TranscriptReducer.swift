@@ -64,11 +64,25 @@ public struct TranscriptReducer: Sendable, Codable {
     }
 
     /// Show a user bubble immediately on send, before the server's `user` event echoes back.
-    /// Reconciled by `clientTurnId` when that durable event arrives.
+    /// Reconciled by the server `turnId` (tagged via `setOptimisticTurnId` once POST /turns
+    /// returns) — or by `clientTurnId` if the server ever echoes it — when that durable event arrives.
     public mutating func addOptimisticUser(clientTurnId: String, text: String, attachmentIds: [String] = []) {
         flushStreaming()
         state.items.append(.user(UserBubble(id: nextID(), text: text, attachmentIds: attachmentIds,
-                                            clientTurnId: clientTurnId, pending: true)))
+                                            clientTurnId: clientTurnId, turnId: nil, pending: true)))
+    }
+
+    /// Tag the optimistic bubble (found by its `clientTurnId`) with the server-assigned `turnId`
+    /// from the POST /turns (or /resume) response. The durable `user` event echoes `turnId`, not
+    /// `clientTurnId`, so without this tag it wouldn't reconcile and the bubble would duplicate.
+    /// No-op if the bubble was already reconciled (no longer pending) or never added.
+    public mutating func setOptimisticTurnId(clientTurnId: String, turnId: String) {
+        guard let i = state.items.firstIndex(where: {
+            if case .user(let b) = $0 { return b.clientTurnId == clientTurnId && b.pending }
+            return false
+        }), case .user(var b) = state.items[i] else { return }
+        b.turnId = turnId
+        state.items[i] = .user(b)
     }
 
     // MARK: - assistant / thinking streaming
@@ -176,8 +190,13 @@ public struct TranscriptReducer: Sendable, Codable {
         let cid = str(ev, "clientTurnId")
         let body = str(ev, "text") ?? str(ev, "content") ?? ""
         let atts = stringArray(ev.payload["attachmentIds"]) ?? []
-        if let cid, let i = state.items.firstIndex(where: {
-            if case .user(let b) = $0 { return b.clientTurnId == cid && b.pending }
+        // Reconcile a pending optimistic bubble: prefer the server's `clientTurnId` echo (if it
+        // ever sends one), else the server-assigned `turnId` we tagged onto the bubble from the
+        // POST response — the runner echoes `turnId`, not `clientTurnId` (web parity).
+        if let i = state.items.firstIndex(where: {
+            guard case .user(let b) = $0, b.pending else { return false }
+            if let cid, b.clientTurnId == cid { return true }
+            if let tid = ev.turnId, b.turnId == tid { return true }
             return false
         }) {
             if case .user(var b) = state.items[i] {       // reconcile optimistic bubble
@@ -187,7 +206,8 @@ public struct TranscriptReducer: Sendable, Codable {
             }
             return
         }
-        state.items.append(.user(UserBubble(id: nextID(), text: body, attachmentIds: atts, clientTurnId: cid, pending: false)))
+        state.items.append(.user(UserBubble(id: nextID(), text: body, attachmentIds: atts,
+                                            clientTurnId: cid, turnId: ev.turnId, pending: false)))
     }
 
     private mutating func appendInterrupt(seq: Int) {

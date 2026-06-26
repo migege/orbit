@@ -31,6 +31,10 @@ public struct UserBubble: Equatable, Sendable, Codable {
     public var text: String
     public var attachmentIds: [String]
     public var clientTurnId: String?
+    /// Server-assigned turn id, learned from the POST /turns (or /resume) response. The durable
+    /// `user` event echoes this on `ev.turnId` — not `clientTurnId` — so it's the key that
+    /// reconciles the optimistic bubble (web parity). Nil until that response lands.
+    public var turnId: String?
     /// Optimistically shown before the server's `user` event confirms it.
     public var pending: Bool
 }
