@@ -246,8 +246,8 @@ struct ToolCardView: View {
                     .padding(.horizontal, 5).padding(.vertical, 1)
                     .background(Color.gray.opacity(0.14), in: RoundedRectangle(cornerRadius: 4))
             }
-            Spacer(minLength: 4)
             status
+            Spacer(minLength: 0)
         }
         .contentShape(Rectangle())
         .onTapGesture {
