@@ -12,10 +12,9 @@ struct MainView: View {
     var body: some View {
         @Bindable var model = model
         NavigationSplitView {
-            SectionSidebar(selection: $model.selectedSection,
-                           isAdmin: model.user?.role == "ADMIN",
+            SectionSidebar(isAdmin: model.user?.role == "ADMIN",
                            needsYou: model.groups.needsYou.count)
-                .navigationSplitViewColumnWidth(min: 180, ideal: 210, max: 260)
+                .navigationSplitViewColumnWidth(min: 200, ideal: 230, max: 300)
         } content: {
             SectionContent(section: model.selectedSection, sessionSelection: $model.selectedSessionID)
                 .navigationSplitViewColumnWidth(min: 240, ideal: 300, max: 420)
@@ -50,22 +49,83 @@ struct MainView: View {
     }
 }
 
-/// The leftmost rail: top-level sections. Active carries the "needs you" badge; Admin is
-/// role-gated (mirrors the web). Section list + gating come from OrbitKit's `AppSection`.
+/// UI-only selection for the source-list sidebar: a top-level section, or — nested under the
+/// "Agents" row — a specific agent. (The web keeps the agent list in a middle column; on macOS we
+/// fold it into the sidebar so picking an agent goes straight to its detail, dropping a column.)
+enum SidebarSelection: Hashable {
+    case section(AppSection)
+    case agent(String)
+}
+
+/// The leftmost rail, now a source list: top-level sections, with "Agents" expandable to its
+/// runner-grouped agents (the list that used to live in the middle column). Active carries the
+/// "needs you" badge; Admin is role-gated. Section list + gating come from OrbitKit's `AppSection`.
 struct SectionSidebar: View {
-    @Binding var selection: AppSection
+    @Environment(AppModel.self) private var model
     let isAdmin: Bool
     let needsYou: Int
+    @State private var agentsExpanded = true
+
+    /// Bridge the two model fields (`selectedSection` + `selectedAgentID`) to the List's single
+    /// selection. The "Agents" parent only expands/collapses (it isn't tagged), so `.agents` is
+    /// reached by selecting an agent — which is also the only way it carries a detail.
+    private var selection: Binding<SidebarSelection?> {
+        Binding(
+            get: {
+                if model.selectedSection == .agents, let id = model.selectedAgentID { return .agent(id) }
+                return .section(model.selectedSection)
+            },
+            set: { value in
+                switch value {
+                case .section(let s):
+                    model.selectedSection = s
+                case .agent(let id):
+                    if model.selectedAgentID != id { model.selectedAgentSessionID = nil }
+                    model.selectedSection = .agents
+                    model.selectedAgentID = id
+                case nil:
+                    break
+                }
+            }
+        )
+    }
 
     var body: some View {
-        List(selection: $selection) {
+        // Touch the driving fields so Observation re-renders the rail (and re-reads `selection`)
+        // when the section/agent changes from outside the sidebar, e.g. a deep-link route.
+        _ = (model.selectedSection, model.selectedAgentID)
+        return List(selection: selection) {
             ForEach(AppSection.visible(isAdmin: isAdmin)) { section in
-                Label(section.title, systemImage: section.systemImage)
-                    .badge(section == .active ? needsYou : 0)   // .badge(0) renders nothing
-                    .tag(section)
+                if section == .agents {
+                    agentsDisclosure
+                } else {
+                    Label(section.title, systemImage: section.systemImage)
+                        .badge(section == .active ? needsYou : 0)   // .badge(0) renders nothing
+                        .tag(SidebarSelection.section(section))
+                }
             }
         }
         .navigationTitle("Orbit")
+        .task { await model.agents?.load() }
+    }
+
+    private var agentsDisclosure: some View {
+        DisclosureGroup(isExpanded: $agentsExpanded) {
+            if let agents = model.agents, !agents.items.isEmpty {
+                ForEach(agents.groups) { group in
+                    Text(agents.runnerLabel(group.runnerId))
+                        .font(.caption).foregroundStyle(.secondary)
+                    ForEach(group.agents) { a in
+                        AgentRowView(agent: a).tag(SidebarSelection.agent(a.id))
+                    }
+                }
+            } else {
+                Text(model.agents?.loading == true ? "Loading…" : "No agents")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        } label: {
+            Label(AppSection.agents.title, systemImage: AppSection.agents.systemImage)
+        }
     }
 }
 
@@ -83,7 +143,7 @@ struct SectionContent: View {
         case .tasks:
             TasksListView()
         case .agents:
-            AgentsListView()
+            AgentContentColumn()
         case .skills:
             SkillsView()
         case .runners:
@@ -117,7 +177,7 @@ struct SectionDetail: View {
         case .tasks:
             TaskDetailView()
         case .agents:
-            AgentDetailView()
+            AgentConsoleDetail()
         case .runners:
             RunnerDetailView()
         case .admin:

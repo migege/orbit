@@ -1,44 +1,18 @@
 import SwiftUI
 import OrbitKit
 
-// Batch D: the Agents page — list grouped by runner (middle column) + an edit form (right
-// column), reading the shared `AgentsModel` off `AppModel`. Grouping + effective-model logic
-// come from the verified OrbitKit `AgentListLogic`; pickers reuse `AgentDefaults`. SwiftUI here
-// is parse-checked only — verify on a Mac.
+// Batch D + Agents-in-sidebar refinement: the agent *list* (grouped by runner) now lives in the
+// sidebar source list (see `SectionSidebar`), folding away the old middle column. What remains
+// here is the selected agent's detail, split across the two right panes to mirror Active:
+//   • content column → the agent's sessions (Active/Completed/System) + a Settings form
+//   • detail column  → the live console for the session picked in the content column
+// Grouping + effective-model logic come from the verified OrbitKit `AgentListLogic`; pickers reuse
+// `AgentDefaults`. SwiftUI here is parse-checked only — verify on a Mac.
 //
 // IA note: the web edits agents *inside* the Runner detail page (an agent belongs to a runner);
-// this surfaces a flatter top-level Agents list. The form fields mirror the web's exactly.
+// this surfaces a flatter Agents nav whose items are the agents themselves.
 
-/// Middle column: agents grouped by runner; selection drives the edit form.
-struct AgentsListView: View {
-    @Environment(AppModel.self) private var model
-
-    var body: some View {
-        @Bindable var model = model
-        if let agents = model.agents {
-            List(selection: $model.selectedAgentID) {
-                ForEach(agents.groups) { group in
-                    Section(agents.runnerLabel(group.runnerId)) {
-                        ForEach(group.agents) { a in
-                            AgentRowView(agent: a).tag(a.id)
-                        }
-                    }
-                }
-            }
-            .overlay {
-                if agents.items.isEmpty {
-                    ContentUnavailableView(agents.loading ? "Loading…" : "No agents",
-                                           systemImage: "person.2")
-                }
-            }
-            .navigationTitle("Agents")
-            .task { await agents.load() }
-        } else {
-            ProgressView()
-        }
-    }
-}
-
+/// A row for an agent in the sidebar disclosure: name (+ disabled pill) over model · workDir.
 struct AgentRowView: View {
     let agent: Agent
     var body: some View {
@@ -59,26 +33,29 @@ struct AgentRowView: View {
     }
 }
 
-/// Right column: the selected agent's detail — a Sessions browser (Active/Completed/System,
-/// mirroring the web agent console) and the edit form, on a segmented switch.
-struct AgentDetailView: View {
-    @Environment(AppModel.self) private var model
+/// Content (middle) column for the Agents section: the selected agent's sessions + settings on a
+/// segmented switch. Selecting a session drives the console in the detail column.
+struct AgentContentColumn: View {
+    @Environment(AppModel.self) private var app
     var body: some View {
-        if let agents = model.agents, let id = model.selectedAgentID, let a = agents.agent(id) {
-            AgentDetailContent(agents: agents, agent: a).id(a.id)
+        @Bindable var app = app
+        if let agents = app.agents, let id = app.selectedAgentID, let a = agents.agent(id) {
+            AgentPanes(agents: agents, agent: a, selectedSessionID: $app.selectedAgentSessionID)
+                .id(a.id)
+                .navigationTitle(a.name)
         } else {
             ContentUnavailableView("Select an agent", systemImage: "person.2",
-                                   description: Text("Its sessions and settings appear here."))
+                                   description: Text("Pick an agent in the sidebar to see its sessions and settings."))
         }
     }
 }
 
 private enum AgentPane: String, CaseIterable { case sessions = "Sessions", settings = "Settings" }
 
-struct AgentDetailContent: View {
-    @Environment(AppModel.self) private var app
+struct AgentPanes: View {
     let agents: AgentsModel
     let agent: Agent
+    @Binding var selectedSessionID: String?
     @State private var pane: AgentPane = .sessions
     @State private var view: SessionView = .active
 
@@ -94,36 +71,46 @@ struct AgentDetailContent: View {
             case .settings: AgentFormContent(agents: agents, agent: agent)
             }
         }
-        .navigationTitle(agent.name)
     }
 
     private var sessionsPane: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                Picker("", selection: $view) {
-                    ForEach(SessionView.allCases) { Text($0.title).tag($0) }
-                }
-                .pickerStyle(.segmented).labelsHidden().padding(8)
-                List {
-                    ForEach(agents.agentSessions) { s in
-                        NavigationLink(value: s.id) { AgentSessionRow(session: s) }
-                    }
-                }
-                .overlay {
-                    if agents.agentSessions.isEmpty {
-                        ContentUnavailableView(
-                            agents.sessionsLoading ? "Loading…" : "No \(view.title.lowercased()) sessions",
-                            systemImage: "bubble.left.and.bubble.right")
-                    }
+        VStack(spacing: 0) {
+            Picker("", selection: $view) {
+                ForEach(SessionView.allCases) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.segmented).labelsHidden().padding(8)
+            List(selection: $selectedSessionID) {
+                ForEach(agents.agentSessions) { s in
+                    AgentSessionRow(session: s).tag(s.id)
                 }
             }
-            .navigationDestination(for: String.self) { sid in
-                if let registry = app.consoleRegistry {
-                    ConsoleView(sessionID: sid, agentID: agent.id, registry: registry)
+            .overlay {
+                if agents.agentSessions.isEmpty {
+                    ContentUnavailableView(
+                        agents.sessionsLoading ? "Loading…" : "No \(view.title.lowercased()) sessions",
+                        systemImage: "bubble.left.and.bubble.right")
                 }
             }
         }
-        .task(id: view) { await agents.loadSessions(agentID: agent.id, view: view) }
+        // Reload when either the agent or the view changes (one key so a fast switch coalesces).
+        .task(id: "\(agent.id)|\(view.rawValue)") {
+            await agents.loadSessions(agentID: agent.id, view: view)
+        }
+    }
+}
+
+/// Detail (right) column for the Agents section: the live console for the session selected in the
+/// content column — mirroring how Active renders ConsoleView in its detail pane.
+struct AgentConsoleDetail: View {
+    @Environment(AppModel.self) private var app
+    var body: some View {
+        if let sid = app.selectedAgentSessionID, let registry = app.consoleRegistry {
+            // No `.id(sid)`: reuse the warm cached console and swap streams via `.task(id:)`.
+            ConsoleView(sessionID: sid, agentID: app.agentID(for: sid), registry: registry)
+        } else {
+            ContentUnavailableView("Select a session", systemImage: "bubble.left.and.bubble.right",
+                                   description: Text("The agent's live transcript appears here."))
+        }
     }
 }
 
@@ -230,7 +217,6 @@ struct AgentFormContent: View {
             }
         }
         .formStyle(.grouped)
-        .navigationTitle(agent.name)
         .onAppear(perform: prefill)
     }
 

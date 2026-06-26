@@ -33,6 +33,7 @@ final class AppModel {
     var selectedTaskID: String?
     var selectedRunnerID: String?
     var selectedAgentID: String?
+    var selectedAgentSessionID: String?   // the agent session whose console fills the detail pane
     var selectedUserID: String?
     var menuSummary: MenuBarSummary = .empty
 
@@ -141,6 +142,7 @@ final class AppModel {
         selectedTaskID = nil
         selectedRunnerID = nil
         selectedAgentID = nil
+        selectedAgentSessionID = nil
         selectedUserID = nil
         lastSnapshot = nil
         menuSummary = .empty
