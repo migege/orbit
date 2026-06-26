@@ -15,7 +15,7 @@ struct ConsoleView: View {
                 VStack(spacing: 0) {
                     WorktreeBar(console: console)
                     Divider()
-                    TranscriptView(state: console.state, connected: console.connected)
+                    TranscriptView(console: console)
                     if let msg = console.statusMessage {
                         HStack {
                             Text(msg).font(.caption).foregroundStyle(.secondary).lineLimit(2)
@@ -43,26 +43,39 @@ struct ConsoleView: View {
 }
 
 struct TranscriptView: View {
-    let state: TranscriptState
-    let connected: Bool
+    let console: ConsoleModel
     private let bottomAnchor = "bottom-anchor"
+
+    // Maps the model's `nil` (= pinned to the bottom) to the bottom anchor's id and back. Because
+    // the anchor lives in the per-session model and this view persists across session switches,
+    // switching to a session you'd scrolled up in restores your place instead of yanking to the
+    // bottom; the value is `nil` only while you're at the latest message, so live content still
+    // follows there.
+    private var anchorBinding: Binding<String?> {
+        Binding(
+            get: { console.scrollAnchorID ?? bottomAnchor },
+            set: { console.scrollAnchorID = ($0 == bottomAnchor) ? nil : $0 }
+        )
+    }
 
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
-                    ForEach(state.items) { TranscriptItemView(item: $0) }
+                    ForEach(console.state.items) { TranscriptItemView(item: $0) }
                     Color.clear.frame(height: 1).id(bottomAnchor)
                 }
+                .scrollTargetLayout()
                 .padding()
             }
-            // Jump (don't animate) to the bottom on new items. An animated `scrollTo` animates the
-            // scroll offset, so the LazyVStack re-places its visible rows every frame; during an
-            // active turn items arrive faster than the animation completes, so it never settles and
-            // the whole transcript re-lays-out every frame — pegging the main thread at 100% in
-            // layout and freezing the UI on long sessions.
-            .onChange(of: state.items.count) {
-                proxy.scrollTo(bottomAnchor, anchor: .bottom)
+            // macOS 15+: `scrollPosition` restores each session's saved anchor on switch and keeps
+            // the bottom pinned (anchor: .bottom) as content streams — so already-read sessions are
+            // not re-scrolled. macOS 14 lacks the `anchor:` overload, so it falls back to the
+            // jump-to-bottom below (only while pinned).
+            .transcriptScrollPosition(anchorBinding)
+            .onChange(of: console.state.items.count) {
+                if #available(macOS 15.0, *) { return }            // handled by scrollPosition above
+                if console.scrollAnchorID == nil { proxy.scrollTo(bottomAnchor, anchor: .bottom) }
             }
         }
         .safeAreaInset(edge: .top, spacing: 0) { statusBar }
@@ -70,21 +83,34 @@ struct TranscriptView: View {
 
     private var statusBar: some View {
         HStack(spacing: 8) {
-            Circle().fill(connected ? .green : .orange).frame(width: 7, height: 7)
-            Text(state.status.rawValue.replacingOccurrences(of: "_", with: " ").capitalized)
+            Circle().fill(console.connected ? .green : .orange).frame(width: 7, height: 7)
+            Text(console.state.status.rawValue.replacingOccurrences(of: "_", with: " ").capitalized)
                 .font(.caption).foregroundStyle(.secondary)
             Spacer()
-            if !state.pendingApprovals.isEmpty {
-                Label("\(state.pendingApprovals.count) pending", systemImage: "hand.raised.fill")
+            if !console.state.pendingApprovals.isEmpty {
+                Label("\(console.state.pendingApprovals.count) pending", systemImage: "hand.raised.fill")
                     .font(.caption).foregroundStyle(.orange)
             }
-            if !state.background.isEmpty {
-                Label("\(state.background.count) background", systemImage: "gearshape.2")
+            if !console.state.background.isEmpty {
+                Label("\(console.state.background.count) background", systemImage: "gearshape.2")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
         .padding(.horizontal, 12).padding(.vertical, 6)
         .background(.bar)
+    }
+}
+
+private extension View {
+    /// Per-session bottom-anchored scroll position. Uses the `scrollPosition(id:anchor:)` overload,
+    /// gated to macOS 15+ so it compiles against the macOS 14 floor; on 14 it's a no-op and the
+    /// caller's `onChange` fallback keeps the bottom followed.
+    @ViewBuilder func transcriptScrollPosition(_ id: Binding<String?>) -> some View {
+        if #available(macOS 15.0, *) {
+            self.scrollPosition(id: id, anchor: .bottom)
+        } else {
+            self
+        }
     }
 }
 

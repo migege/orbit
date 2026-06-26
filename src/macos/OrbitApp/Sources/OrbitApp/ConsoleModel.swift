@@ -61,6 +61,12 @@ final class ConsoleModel {
 
     var statusMessage: String?
 
+    /// The transcript row the user is parked at, kept per session so switching consoles restores
+    /// their place instead of yanking to the bottom. `nil` means "pinned to the bottom" — the
+    /// default for a freshly opened session and whenever they're at the latest message, so live
+    /// content keeps following; a non-nil id means they scrolled up to read history.
+    var scrollAnchorID: String?
+
     private var reducer = TranscriptReducer()
     private let stream: EventStreaming
     private let api: APIClient
