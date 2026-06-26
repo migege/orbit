@@ -2794,8 +2794,20 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 10px;
+  margin-top: 6px;
   flex-wrap: wrap;
+}
+/* One quiet metadata strip: every footer control shares the same 12px secondary text.
+   AntD's borderless Selects otherwise render their value at 14px / colorText — a size
+   and a shade heavier than the static agent label and usage percent beside them — so
+   pull the selected value down to match. The disabled (non-editable) shade is left to
+   AntD so a read-only control still reads as read-only. */
+.composer-pills .ant-select-selection-item,
+.composer-pills .ant-select-selection-placeholder {
+  font-size: 12px;
+}
+.composer-pills .ant-select:not(.ant-select-disabled) .ant-select-selection-item {
+  color: var(--text-2);
 }
 /* Lightweight, borderless controls (Claude-style): text-only label, with a faint
    rounded background surfacing only on hover. The pill category is named via Tooltip. */
@@ -2821,8 +2833,8 @@ body {
 .composer-pill-static-label {
   padding: 0 8px 0 2px;
   line-height: 24px;
-  font-size: 13px;
-  font-weight: 500;
+  font-size: 12px;
+  font-weight: 400;
   color: var(--text-2);
 }
 /* Pushes Model + Effort to the right edge of the pill row, leaving Mode on the left. */
@@ -2854,7 +2866,7 @@ body {
   background: var(--warning-solid);
 }
 .composer-usage-pct {
-  font-size: 13px;
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
   color: var(--text-2);
 }
