@@ -1,6 +1,10 @@
 import SwiftUI
 import OrbitKit
 
+/// The app shell: a three-column split mirroring the web AppShell — a section rail (Active /
+/// Tasks / Agents / Skills / Runners / Settings / Admin), the selected section's list, and a
+/// detail pane. Only Active is wired to real views in batch B; the other sections are
+/// placeholders filled in by later batches (C Tasks, D Agents, E the rest).
 struct MainView: View {
     @Environment(AppModel.self) private var model
     @State private var showRunner = false
@@ -8,18 +12,15 @@ struct MainView: View {
     var body: some View {
         @Bindable var model = model
         NavigationSplitView {
-            ActiveSidebar(selection: $model.selectedSessionID)
+            SectionSidebar(selection: $model.selectedSection,
+                           isAdmin: model.user?.role == "ADMIN",
+                           needsYou: model.groups.needsYou.count)
+                .navigationSplitViewColumnWidth(min: 180, ideal: 210, max: 260)
+        } content: {
+            SectionContent(section: model.selectedSection, sessionSelection: $model.selectedSessionID)
                 .navigationSplitViewColumnWidth(min: 240, ideal: 300, max: 420)
-                .navigationTitle("Active")
         } detail: {
-            if let id = model.selectedSessionID, let baseURL = model.baseURL {
-                ConsoleView(sessionID: id, baseURL: baseURL, tokenStore: model.tokenStore)
-                    .id(id)   // rebuild (and restart the stream) when the selection changes
-            } else {
-                ContentUnavailableView("Select a session",
-                                       systemImage: "bubble.left.and.bubble.right",
-                                       description: Text("Live transcript appears here."))
-            }
+            SectionDetail(section: model.selectedSection)
         }
         .toolbar {
             ToolbarItem {
@@ -43,6 +44,89 @@ struct MainView: View {
                 RunnerControlPane(baseURL: url, tokenStore: model.tokenStore)
             }
         }
+    }
+}
+
+/// The leftmost rail: top-level sections. Active carries the "needs you" badge; Admin is
+/// role-gated (mirrors the web). Section list + gating come from OrbitKit's `AppSection`.
+struct SectionSidebar: View {
+    @Binding var selection: AppSection
+    let isAdmin: Bool
+    let needsYou: Int
+
+    var body: some View {
+        List(selection: $selection) {
+            ForEach(AppSection.visible(isAdmin: isAdmin)) { section in
+                Label(section.title, systemImage: section.systemImage)
+                    .badge(section == .active ? needsYou : 0)   // .badge(0) renders nothing
+                    .tag(section)
+            }
+        }
+        .navigationTitle("Orbit")
+    }
+}
+
+/// Middle column: the selected section's list. Active reuses the live session list; the rest
+/// are placeholders until their batch lands.
+struct SectionContent: View {
+    let section: AppSection
+    @Binding var sessionSelection: String?
+
+    var body: some View {
+        switch section {
+        case .active:
+            ActiveSidebar(selection: $sessionSelection)
+                .navigationTitle("Active")
+        case .tasks:
+            TasksListView()
+        case .agents:
+            AgentsListView()
+        case .skills:
+            ComingSoon(section: .skills, note: "Skill directory (per-agent) — coming in batch E.")
+        case .runners:
+            ComingSoon(section: .runners, note: "Runner list, quota, enrollment — coming in batch E.")
+        case .settings:
+            ComingSoon(section: .settings, note: "Preferences, account, theme — coming in batch E.")
+        case .admin:
+            ComingSoon(section: .admin, note: "User management — coming in batch E.")
+        }
+    }
+}
+
+/// Right column: detail for the selection. Active shows the live console (or a prompt to pick a
+/// session); other sections show a neutral placeholder until built out.
+struct SectionDetail: View {
+    let section: AppSection
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        switch section {
+        case .active:
+            if let id = model.selectedSessionID, let baseURL = model.baseURL {
+                ConsoleView(sessionID: id, baseURL: baseURL, tokenStore: model.tokenStore)
+                    .id(id)   // rebuild (restart the stream) when the selection changes
+            } else {
+                ContentUnavailableView("Select a session",
+                                       systemImage: "bubble.left.and.bubble.right",
+                                       description: Text("Live transcript appears here."))
+            }
+        case .tasks:
+            TaskDetailView()
+        case .agents:
+            AgentFormView()
+        default:
+            ContentUnavailableView(section.title, systemImage: section.systemImage,
+                                   description: Text("Open an item to see details here."))
+        }
+    }
+}
+
+struct ComingSoon: View {
+    let section: AppSection
+    let note: String
+    var body: some View {
+        ContentUnavailableView(section.title, systemImage: section.systemImage, description: Text(note))
+            .navigationTitle(section.title)
     }
 }
 

@@ -21,6 +21,11 @@ final class AppModel {
     var sessions: [Session] = []
     var groups: SessionGroups = .empty
     var selectedSessionID: String?
+    // Top-level nav: which AppShell section is showing, and the per-section selection.
+    var selectedSection: AppSection = .active
+    var selectedTaskID: String?
+    var selectedRunnerID: String?
+    var selectedAgentID: String?
     var menuSummary: MenuBarSummary = .empty
 
     let tokenStore: TokenStore
@@ -48,9 +53,15 @@ final class AppModel {
         }
     }
 
+    /// Per-section shared stores (list + detail observe the same instance). Rebuilt per instance.
+    private(set) var tasks: TasksModel?
+    private(set) var agents: AgentsModel?
+
     private func configure(_ url: URL) {
         baseURL = url
         api = APIClient(baseURL: url, tokenStore: tokenStore)
+        tasks = TasksModel(baseURL: url, tokenStore: tokenStore)
+        agents = AgentsModel(baseURL: url, tokenStore: tokenStore)
     }
 
     func login() async {
@@ -84,6 +95,10 @@ final class AppModel {
         sessions = []
         groups = .empty
         selectedSessionID = nil
+        selectedSection = .active
+        selectedTaskID = nil
+        selectedRunnerID = nil
+        selectedAgentID = nil
         lastSnapshot = nil
         menuSummary = .empty
         updateDockBadge(nil)
@@ -132,9 +147,12 @@ final class AppModel {
     // MARK: routing + notification intents
 
     func route(to route: Route) {
+        selectedSection = AppSection.forRoute(route)
         switch route {
+        case .active:          break
         case .session(let id): selectedSessionID = id
-        case .active, .task, .runner: break   // Phase 3 routes sessions; tasks/runners later
+        case .task(let id):    selectedTaskID = id
+        case .runner(let id):  selectedRunnerID = id
         }
     }
 
