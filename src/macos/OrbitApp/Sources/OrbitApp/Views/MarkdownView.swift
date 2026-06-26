@@ -61,6 +61,9 @@ private struct MarkdownBlockView: View {
         case .code(let language, let code):
             CodeBlockView(language: language, code: code)
 
+        case .table(let table):
+            MarkdownTableView(table: table)
+
         case .quote(let text):
             HStack(spacing: 8) {
                 RoundedRectangle(cornerRadius: 1.5).fill(Color.secondary.opacity(0.4)).frame(width: 3)
@@ -84,6 +87,54 @@ private struct MarkdownBlockView: View {
         case 2:  return .title3
         case 3:  return .headline
         default: return .body
+        }
+    }
+}
+
+/// A GFM table rendered as a bordered grid — the desktop analogue of the web `.md table`. The
+/// header row is bold over a faint fill; cells carry inline Markdown, honour per-column alignment,
+/// and wrap to fit the available width.
+private struct MarkdownTableView: View {
+    let table: MarkdownTable
+    private let border = Color.secondary.opacity(0.3)
+
+    var body: some View {
+        Grid(alignment: .topLeading, horizontalSpacing: 0, verticalSpacing: 0) {
+            GridRow {
+                ForEach(table.headers.indices, id: \.self) { c in
+                    cell(table.headers[c], column: c, header: true)
+                }
+            }
+            ForEach(table.rows.indices, id: \.self) { r in
+                GridRow {
+                    let row = table.rows[r]
+                    ForEach(table.headers.indices, id: \.self) { c in
+                        cell(c < row.count ? row[c] : "", column: c, header: false)
+                    }
+                }
+            }
+        }
+        .overlay(Rectangle().stroke(border, lineWidth: 1))
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func cell(_ text: String, column: Int, header: Bool) -> some View {
+        inlineMarkdown(text)
+            .font(.system(size: 13))
+            .fontWeight(header ? .bold : .regular)
+            .frame(maxWidth: .infinity, alignment: frameAlignment(column))
+            .padding(.vertical, 4)
+            .padding(.horizontal, 8)
+            .background(header ? Color.secondary.opacity(0.08) : Color.clear)
+            .overlay(Rectangle().stroke(border, lineWidth: 0.5))
+    }
+
+    private func frameAlignment(_ column: Int) -> Alignment {
+        switch column < table.alignments.count ? table.alignments[column] : .none {
+        case .center:      return .center
+        case .right:       return .trailing
+        case .left, .none: return .leading
         }
     }
 }

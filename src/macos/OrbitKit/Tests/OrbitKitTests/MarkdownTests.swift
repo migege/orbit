@@ -75,6 +75,54 @@ final class MarkdownTests: XCTestCase {
                        [.quote(text: "quoted line\nsecond")])
     }
 
+    func testGfmTableParsesIntoTableBlock() {
+        // The screenshot's failure mode: a GFM pipe table must become a .table block, not a
+        // paragraph of literal pipes. Cells carry inline source; multibyte (Chinese) is preserved.
+        let md = """
+        | app_id | status | 动作 |
+        |---|---|---|
+        | 55 | ready | 标记完成 |
+        | 303039 | pending | 评论 |
+        """
+        XCTAssertEqual(parseMarkdownBlocks(md), [
+            .table(MarkdownTable(
+                headers: ["app_id", "status", "动作"],
+                rows: [["55", "ready", "标记完成"], ["303039", "pending", "评论"]],
+                alignments: [.none, .none, .none]
+            )),
+        ])
+    }
+
+    func testTableColumnAlignments() {
+        let md = """
+        | L | C | R |
+        |:--|:--:|--:|
+        | 1 | 2 | 3 |
+        """
+        XCTAssertEqual(parseMarkdownBlocks(md), [
+            .table(MarkdownTable(
+                headers: ["L", "C", "R"],
+                rows: [["1", "2", "3"]],
+                alignments: [.left, .center, .right]
+            )),
+        ])
+    }
+
+    func testTableCellKeepsInlineMarkdown() {
+        let md = """
+        | name | note |
+        |---|---|
+        | **bold** | a `code` b |
+        """
+        XCTAssertEqual(parseMarkdownBlocks(md), [
+            .table(MarkdownTable(
+                headers: ["name", "note"],
+                rows: [["**bold**", "a `code` b"]],
+                alignments: [.none, .none]
+            )),
+        ])
+    }
+
     func testMixedDocumentLikeTheScreenshot() {
         let md = """
         ## Skill created: bytefinder
