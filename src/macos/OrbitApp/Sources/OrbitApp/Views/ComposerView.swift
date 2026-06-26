@@ -95,21 +95,47 @@ struct ComposerView: View {
                 .disabled(!console.canSend)
             }
 
+            // Footer controls, laid out like the web composer: permission mode on the left,
+            // then the agent identity · model · effort · plan-usage cluster on the right. A
+            // change on a live session is pushed immediately (applyConfig → PATCH /config).
             HStack(spacing: 8) {
-                Picker("", selection: $console.modelID) {
-                    ForEach(AgentDefaults.models) { Text($0.name).tag($0.id) }
-                }
-                .labelsHidden().fixedSize()
-
                 Picker("", selection: $console.permissionMode) {
                     ForEach(AgentDefaults.permissionModes, id: \.self) { Text(AgentDefaults.label($0)).tag($0) }
                 }
                 .labelsHidden().fixedSize()
+                .onChange(of: console.permissionMode) { _, m in
+                    Task { await console.applyConfig(permissionMode: m.rawValue) }
+                }
 
-                Spacer()
                 if console.availability == .queue {
                     Label("Will queue", systemImage: "tray.and.arrow.down")
                         .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                if let name = console.agentName {
+                    Text(name).foregroundStyle(.secondary).lineLimit(1)
+                }
+
+                Picker("", selection: $console.modelID) {
+                    ForEach(AgentDefaults.models) { Text($0.name).tag($0.id) }
+                }
+                .labelsHidden().fixedSize()
+                .onChange(of: console.modelID) { _, m in
+                    Task { await console.applyConfig(model: m) }
+                }
+
+                Picker("", selection: $console.effort) {
+                    ForEach(Effort.allCases) { Text($0.label).tag($0) }
+                }
+                .labelsHidden().fixedSize()
+                .onChange(of: console.effort) { _, e in
+                    Task { await console.applyConfig(effort: e.rawValue) }
+                }
+
+                if let usage = console.planUsage {
+                    PlanUsageIndicator(usage: usage)
                 }
             }
             .font(.caption)
@@ -210,4 +236,76 @@ struct ComposerView: View {
         guard panel.runModal() == .OK else { return }
         for url in panel.urls { Task { await console.attachFile(url: url) } }
     }
+}
+
+/// Compact plan-usage pill for the composer footer (mirrors web's PlanUsageIndicator): a mini
+/// 5-hour bar + percent; tapping opens a popover with every subscription window, like `/usage`.
+private struct PlanUsageIndicator: View {
+    let usage: PlanUsage
+    @State private var showDetail = false
+
+    var body: some View {
+        if let pct = usage.primaryPercent {
+            Button { showDetail.toggle() } label: {
+                HStack(spacing: 5) {
+                    UsageBar(percent: pct).frame(width: 26, height: 4)
+                    Text("\(pct)%").foregroundStyle(.secondary)
+                }
+            }
+            .buttonStyle(.plain)
+            .help("Plan usage \(pct)%")
+            .popover(isPresented: $showDetail, arrowEdge: .top) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Plan usage").font(.headline)
+                    ForEach(usage.rows) { row in
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text(row.label)
+                                Spacer()
+                                Text("\(row.percent)%").foregroundStyle(.secondary)
+                            }
+                            .font(.caption)
+                            UsageBar(percent: row.percent).frame(height: 5)
+                            if let reset = row.window.resetsAt.flatMap(formatReset) {
+                                Text("Resets \(reset)").font(.caption2).foregroundStyle(.tertiary)
+                            }
+                        }
+                    }
+                }
+                .padding(14)
+                .frame(width: 260)
+            }
+        }
+    }
+}
+
+/// A horizontal utilization gauge that fills its frame; turns amber past 90% (like the web bar).
+private struct UsageBar: View {
+    let percent: Int
+    private var fraction: CGFloat { CGFloat(min(100, max(0, percent))) / 100 }
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Capsule().fill(.quaternary)
+                Capsule().fill(percent >= 90 ? Color.orange : Color.accentColor)
+                    .frame(width: geo.size.width * fraction)
+            }
+        }
+    }
+}
+
+/// Best-effort format of an ISO-8601 reset timestamp → "Jun 26, 10:00 AM"; raw string on failure.
+private func formatReset(_ iso: String) -> String? {
+    let parser = ISO8601DateFormatter()
+    parser.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    var date = parser.date(from: iso)
+    if date == nil {   // some payloads omit fractional seconds
+        parser.formatOptions = [.withInternetDateTime]
+        date = parser.date(from: iso)
+    }
+    guard let date else { return iso }
+    let out = DateFormatter()
+    out.dateFormat = "MMM d, h:mm a"
+    return out.string(from: date)
 }

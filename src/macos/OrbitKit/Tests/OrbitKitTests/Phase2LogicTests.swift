@@ -119,6 +119,38 @@ final class Phase2LogicTests: XCTestCase {
         XCTAssertFalse(ComposerLogic.shouldResume(status: .awaitingInput))
     }
 
+    func testIsLive() {
+        // Live (config edits PATCH immediately) = the non-terminal set, the complement of shouldResume.
+        for s in [RunStatus.running, .pending, .awaitingInput, .interrupted] {
+            XCTAssertTrue(ComposerLogic.isLive(status: s), "\(s) should be live")
+        }
+        for s in [RunStatus.succeeded, .failed, .cancelled, .parked] {
+            XCTAssertFalse(ComposerLogic.isLive(status: s), "\(s) should not be live")
+        }
+    }
+
+    func testEffortLabelsAndWire() {
+        XCTAssertEqual(Effort.allCases, [.default, .low, .medium, .high, .xhigh, .max])
+        XCTAssertEqual(Effort.allCases.map(\.label),
+                       ["Default", "Low", "Medium", "High", "xHigh", "Max"])
+        XCTAssertNil(Effort.default.wire)              // Default omits --effort
+        XCTAssertEqual(Effort.max.wire, "max")
+        XCTAssertEqual(Effort.xhigh.rawValue, "xhigh") // wire/raw match the CLI value
+    }
+
+    func testPlanUsageRows() {
+        let u = PlanUsage(fiveHour: .init(utilization: 12.4, resetsAt: "2026-06-26T10:00:00Z"),
+                          sevenDay: nil,
+                          sevenDayOpus: .init(utilization: 91.6, resetsAt: nil),
+                          sevenDaySonnet: nil, fetchedAt: nil)
+        // Absent windows are skipped; present ones keep /usage order (5-hour first).
+        XCTAssertEqual(u.rows.map(\.key), ["fiveHour", "sevenDayOpus"])
+        XCTAssertEqual(u.rows.map(\.percent), [12, 92])
+        XCTAssertEqual(u.primaryPercent, 12)           // binding window = 5-hour
+        XCTAssertNil(PlanUsage(fiveHour: nil, sevenDay: nil, sevenDayOpus: nil,
+                               sevenDaySonnet: nil, fetchedAt: nil).primaryPercent)
+    }
+
     func testMakeTurn() {
         let msg = ComposerLogic.makeTurn(clientTurnId: "c1", text: "hi", shell: false, attachmentIds: [])
         XCTAssertEqual(msg.kind, "message")
@@ -216,5 +248,19 @@ final class Phase2LogicTests: XCTestCase {
         XCTAssertEqual(AgentDefaults.friendlyName("unknown-model"), "unknown-model")
         XCTAssertEqual(AgentDefaults.label(.bypass), "Bypass")
         XCTAssertEqual(AgentDefaults.defaultModelID, "claude-opus-4-8")
+    }
+
+    func testSessionDecodesStoredConfigAndResumeEncodesEffort() throws {
+        let json = #"{"id":"s1","status":"RUNNING","model":"claude-sonnet-4-6","permissionMode":"plan","effort":"high","agent":{"id":"a1","name":"claude"}}"#
+        let s = try JSONDecoder().decode(Session.self, from: Data(json.utf8))
+        XCTAssertEqual(s.model, "claude-sonnet-4-6")
+        XCTAssertEqual(s.permissionMode, "plan")
+        XCTAssertEqual(s.effort, "high")
+        XCTAssertEqual(s.agent?.name, "claude")
+
+        // Reviving carries effort; Default ("") would omit it via Effort.wire == nil.
+        let data = try JSONEncoder().encode(
+            ResumeRequest(clientTurnId: "c1", content: "go", model: "m", permissionMode: "auto", effort: "max"))
+        XCTAssertTrue(String(decoding: data, as: UTF8.self).contains("\"effort\":\"max\""))
     }
 }

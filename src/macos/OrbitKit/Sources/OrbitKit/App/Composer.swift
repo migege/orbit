@@ -29,6 +29,13 @@ public enum ComposerLogic {
         }
     }
 
+    /// True while the session is non-terminal (mirrors web's `!TERMINAL`): composer config
+    /// edits (model / permission / effort) apply immediately via PATCH /config. Terminal-but-
+    /// resumable sessions instead carry the local pick on the next resume.
+    public static func isLive(status: RunStatus) -> Bool {
+        !shouldResume(status: status)
+    }
+
     public static func makeTurn(clientTurnId: String, text: String, shell: Bool,
                                 attachmentIds: [String]) -> SessionTurnRequest {
         SessionTurnRequest(clientTurnId: clientTurnId,

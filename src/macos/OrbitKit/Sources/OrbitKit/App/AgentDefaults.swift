@@ -8,10 +8,21 @@ public struct ModelOption: Equatable, Sendable, Identifiable {
     public let name: String
 }
 
+/// Reasoning-effort levels offered in the composer, in the same order as web's EFFORT_OPTIONS.
+/// `.default` ("") omits `--effort` so the model picks its own.
 public enum Effort: String, CaseIterable, Sendable, Identifiable {
-    case low, medium, high
+    case `default` = ""
+    case low, medium, high, xhigh, max
     public var id: String { rawValue }
-    public var label: String { rawValue.capitalized }
+    public var label: String {
+        switch self {
+        case .default: return "Default"
+        case .xhigh:   return "xHigh"
+        default:       return rawValue.capitalized   // Low / Medium / High / Max
+        }
+    }
+    /// Wire value for a turn/resume request: nil = omit the field (same as Default).
+    public var wire: String? { self == .default ? nil : rawValue }
 }
 
 public enum AgentDefaults {

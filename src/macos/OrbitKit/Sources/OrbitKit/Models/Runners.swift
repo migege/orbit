@@ -71,3 +71,30 @@ public struct PlanUsage: Codable, Equatable, Sendable {
     public let sevenDaySonnet: PlanUsageWindow?
     public let fetchedAt: String?
 }
+
+/// One labelled window for the composer's plan-usage popover (mirrors web's PLAN_USAGE_ROWS).
+public struct PlanUsageRow: Equatable, Sendable, Identifiable {
+    public let key: String
+    public let label: String
+    public let window: PlanUsageWindow
+    public var id: String { key }
+    /// Utilization rounded to a whole percent (0…100).
+    public var percent: Int { Int(window.utilization.rounded()) }
+}
+
+public extension PlanUsage {
+    /// Present windows in Claude `/usage` order — the binding 5-hour window first, then weekly.
+    var rows: [PlanUsageRow] {
+        [("fiveHour", "5-hour limit", fiveHour),
+         ("sevenDay", "Weekly · all models", sevenDay),
+         ("sevenDayOpus", "Weekly · Opus", sevenDayOpus),
+         ("sevenDaySonnet", "Weekly · Sonnet", sevenDaySonnet)]
+            .compactMap { key, label, window in
+                window.map { PlanUsageRow(key: key, label: label, window: $0) }
+            }
+    }
+
+    /// The binding window's percent (5-hour when present, else the first available), or nil
+    /// when the runner reports no windows.
+    var primaryPercent: Int? { rows.first?.percent }
+}

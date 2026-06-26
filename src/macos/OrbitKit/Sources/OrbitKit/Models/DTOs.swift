@@ -82,9 +82,32 @@ public struct Session: Codable, Equatable, Sendable, Identifiable {
     public let pendingApprovals: Int?
     public let branch: String?
     public let updatedAt: String?
+    /// The session's stored config. A LIVE session's composer shows these (the server's
+    /// choice); before the session exists the pills reflect local picks instead.
+    public let model: String?
+    public let permissionMode: String?
+    public let effort: String?
     /// The owning agent, nested by the list/detail payloads (the flat `agentId` is NOT sent
     /// there, so per-agent grouping reads `agent.id`).
     public let agent: SessionAgentRef?
+
+    public init(id: String, title: String?, status: RunStatus, agentId: String?,
+                assignedRunnerId: String?, pendingApprovals: Int?, branch: String?,
+                updatedAt: String?, model: String? = nil, permissionMode: String? = nil,
+                effort: String? = nil, agent: SessionAgentRef? = nil) {
+        self.id = id
+        self.title = title
+        self.status = status
+        self.agentId = agentId
+        self.assignedRunnerId = assignedRunnerId
+        self.pendingApprovals = pendingApprovals
+        self.branch = branch
+        self.updatedAt = updatedAt
+        self.model = model
+        self.permissionMode = permissionMode
+        self.effort = effort
+        self.agent = agent
+    }
 }
 
 /// The agent nested on a session row (`{id, name, model}`).
@@ -203,13 +226,15 @@ public struct ResumeRequest: Codable, Sendable {
     public let kind: String?
     public let model: String?
     public let permissionMode: String?
+    public let effort: String?
     public init(clientTurnId: String, content: String, kind: String? = nil,
-                model: String? = nil, permissionMode: String? = nil) {
+                model: String? = nil, permissionMode: String? = nil, effort: String? = nil) {
         self.clientTurnId = clientTurnId
         self.content = content
         self.kind = kind
         self.model = model
         self.permissionMode = permissionMode
+        self.effort = effort
     }
 }
 

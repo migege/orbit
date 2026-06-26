@@ -32,10 +32,16 @@ final class ConsoleModel {
     var shellMode = false
     var modelID = AgentDefaults.defaultModelID
     var permissionMode: PermissionMode = .default
+    var effort: Effort = .default
     private(set) var pendingAttachments: [PendingAttachment] = []
     private(set) var sending = false
     /// Set while replying to a pending question via "Chat about this" (see send()).
     private(set) var replyContext: QuestionReply?
+
+    // Owning agent's name + the runner's Claude-subscription quota, shown in the composer
+    // footer (web parity); loaded once when the console opens (see loadContext).
+    private(set) var agentName: String?
+    private(set) var planUsage: PlanUsage?
 
     // `/` command & skill autocomplete (the `+` menu opens it scoped). `slashItems` is the
     // runner-reported set already narrowed to host-level + this session's agent (see loadSlashItems).
@@ -76,6 +82,7 @@ final class ConsoleModel {
 
     func run() async {
         Task { await loadSlashItems() }   // one-shot; concurrent with the stream connect
+        Task { await loadContext() }      // footer context: agent name / plan usage / live config
         // Durable approvals aren't in the replayed stream (the `approval_request` nudge rides
         // seq 0, live-only) — fetch them once on open so a prompt already pending (e.g. an
         // AskUserQuestion awaiting an answer) surfaces. Decoupled from the stream; cancels with run().
@@ -140,10 +147,61 @@ final class ConsoleModel {
 
     var availability: SendAvailability { ComposerLogic.availability(status: state.status) }
 
+    /// Non-terminal session → composer config edits apply immediately (see `applyConfig`).
+    var isLive: Bool { ComposerLogic.isLive(status: state.status) }
+
     var canSend: Bool {
         guard !composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !sending else { return false }
         if replyContext != nil { return true }   // a question reply always sends (deny+message)
         return availability != .blocked
+    }
+
+    // What we believe the server's stored config is — set on load, updated after each push.
+    // A picker's onChange fires even when loadContext adopts the server's value programmatically;
+    // without this the adopted value would echo straight back as a PATCH, and a live PATCH
+    // re-spawns claude (see SessionsService.updateConfig). So we only push genuine user edits.
+    private var syncedConfig: (model: String, permissionMode: String, effort: String)?
+
+    /// Load the footer context once: the owning agent's name + the runner's plan usage, and —
+    /// for a LIVE session — adopt its stored model/permission/effort so the pills show the
+    /// server's choice (matching web). A terminal session keeps the local picks for resume.
+    private func loadContext() async {
+        guard let s = try? await api.session(sessionID) else { return }
+        agentName = s.agent?.name
+        if ComposerLogic.isLive(status: s.status) {
+            if let m = s.model { modelID = m }
+            if let pm = s.permissionMode, let mode = PermissionMode(rawValue: pm) { permissionMode = mode }
+            if let ef = s.effort, let e = Effort(rawValue: ef) { effort = e }
+            syncedConfig = (modelID, permissionMode.rawValue, effort.rawValue)
+        }
+        // Plan usage rides the GET /runners list (there's no per-runner detail endpoint —
+        // the web reads it the same way), so fetch the list and pick this session's runner.
+        if let rid = s.assignedRunnerId,
+           let r = (try? await api.runners())?.first(where: { $0.id == rid }) {
+            planUsage = r.planUsage
+        }
+    }
+
+    /// A picker change on a LIVE session is pushed to the server immediately (PATCH /config,
+    /// like web's configMut); on a terminal/draft session the local value is kept and carried
+    /// by the next resume. Pass only the field that changed (effort uses its raw value so
+    /// Default sends "" to clear it). No-op when the value equals the synced server config —
+    /// that filters the programmatic adopt in `loadContext` from re-spawning the session.
+    func applyConfig(model: String? = nil, permissionMode: String? = nil, effort: String? = nil) async {
+        guard isLive else { return }
+        let changed = (model.map { $0 != syncedConfig?.model } ?? false)
+            || (permissionMode.map { $0 != syncedConfig?.permissionMode } ?? false)
+            || (effort.map { $0 != syncedConfig?.effort } ?? false)
+        guard changed else { return }
+        do {
+            try await api.updateConfig(sessionID: sessionID,
+                ConfigUpdateRequest(model: model, permissionMode: permissionMode, effort: effort))
+            if let s = syncedConfig {
+                syncedConfig = (model ?? s.model, permissionMode ?? s.permissionMode, effort ?? s.effort)
+            }
+        } catch {
+            statusMessage = "Couldn't apply change — \(error)"
+        }
     }
 
     // MARK: `/` autocomplete
@@ -202,7 +260,8 @@ final class ConsoleModel {
                 _ = try await api.resume(sessionID: sessionID,
                                          ResumeRequest(clientTurnId: clientTurnId, content: text,
                                                        kind: shellMode ? "shell" : "message",
-                                                       model: modelID, permissionMode: permissionMode.rawValue))
+                                                       model: modelID, permissionMode: permissionMode.rawValue,
+                                                       effort: effort.wire))
             } else {
                 _ = try await api.sendTurn(sessionID: sessionID,
                                            ComposerLogic.makeTurn(clientTurnId: clientTurnId, text: text,
