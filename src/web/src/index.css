@@ -1664,7 +1664,7 @@ body {
   display: flex;
   flex-direction: column;
   height: 100%;
-  padding: 24px var(--pane-gutter);
+  padding: 16px var(--pane-gutter);
 }
 .agent-header {
   display: flex;
