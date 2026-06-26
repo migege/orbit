@@ -4,7 +4,8 @@ import OrbitKit
 // Batch D + Agents-in-sidebar refinement: the agent *list* (grouped by runner) now lives in the
 // sidebar source list (see `SectionSidebar`), folding away the old middle column. What remains
 // here is the selected agent's detail, split across the two right panes to mirror Active:
-//   • content column → the agent's sessions (Active/Completed/System) + a Settings form
+//   • content column → the agent's sessions (Active/Completed/System); a toolbar gear opens the
+//                       agent's Settings form in a sheet
 //   • detail column  → the live console for the session picked in the content column
 // Grouping + effective-model logic come from the verified OrbitKit `AgentListLogic`; pickers reuse
 // `AgentDefaults`. SwiftUI here is parse-checked only — verify on a Mac.
@@ -33,8 +34,8 @@ struct AgentRowView: View {
     }
 }
 
-/// Content (middle) column for the Agents section: the selected agent's sessions + settings on a
-/// segmented switch. Selecting a session drives the console in the detail column.
+/// Content (middle) column for the Agents section: the selected agent's sessions, with a toolbar
+/// gear to edit the agent. Selecting a session drives the console in the detail column.
 struct AgentContentColumn: View {
     @Environment(AppModel.self) private var app
     var body: some View {
@@ -50,30 +51,14 @@ struct AgentContentColumn: View {
     }
 }
 
-private enum AgentPane: String, CaseIterable { case sessions = "Sessions", settings = "Settings" }
-
 struct AgentPanes: View {
     let agents: AgentsModel
     let agent: Agent
     @Binding var selectedSessionID: String?
-    @State private var pane: AgentPane = .sessions
     @State private var view: SessionView = .active
+    @State private var showSettings = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            Picker("", selection: $pane) {
-                ForEach(AgentPane.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-            }
-            .pickerStyle(.segmented).labelsHidden().padding(8)
-            Divider()
-            switch pane {
-            case .sessions: sessionsPane
-            case .settings: AgentFormContent(agents: agents, agent: agent)
-            }
-        }
-    }
-
-    private var sessionsPane: some View {
         VStack(spacing: 0) {
             Picker("", selection: $view) {
                 ForEach(SessionView.allCases) { Text($0.title).tag($0) }
@@ -96,6 +81,40 @@ struct AgentPanes: View {
         .task(id: "\(agent.id)|\(view.rawValue)") {
             await agents.loadSessions(agentID: agent.id, view: view)
         }
+        // The edit form moved off a Sessions/Settings segmented switch into this toolbar gear → sheet,
+        // leaving the content column to show only the session list.
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button { showSettings = true } label: {
+                    Label("Agent settings", systemImage: "gearshape")
+                }
+                .help("Edit this agent")
+            }
+        }
+        .sheet(isPresented: $showSettings) {
+            AgentSettingsSheet(agents: agents, agent: agent)
+        }
+    }
+}
+
+/// The agent edit form, presented as a sheet from the content column's toolbar gear (it used to be
+/// the "Settings" half of a Sessions/Settings segmented switch).
+struct AgentSettingsSheet: View {
+    let agents: AgentsModel
+    let agent: Agent
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            AgentFormContent(agents: agents, agent: agent)
+                .navigationTitle("\(agent.name) settings")
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { dismiss() }
+                    }
+                }
+        }
+        .frame(minWidth: 480, minHeight: 520)
     }
 }
 
