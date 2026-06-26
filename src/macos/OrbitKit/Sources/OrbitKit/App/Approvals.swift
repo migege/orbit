@@ -56,6 +56,54 @@ public enum Approvals {
         }
     }
 
+    // MARK: AskUserQuestion answers (picked options + free text)
+
+    /// A question is answered once it has a picked option OR non-empty typed text — claude's
+    /// AskUserQuestion always lets the user write their own answer instead of picking a listed one.
+    public static func isAnswered(question: String,
+                                  selections: [String: Set<String>],
+                                  custom: [String: String]) -> Bool {
+        if !(selections[question]?.isEmpty ?? true) { return true }
+        return !trimmed(custom[question]).isEmpty
+    }
+
+    /// All questions answered (and there is at least one) — gates Submit. Mirrors the web's
+    /// `complete = questions.length > 0 && questions.every(answered)`.
+    public static func allAnswered(_ questions: [AskQuestion],
+                                   selections: [String: Set<String>],
+                                   custom: [String: String]) -> Bool {
+        !questions.isEmpty && questions.allSatisfy {
+            isAnswered(question: $0.question, selections: selections, custom: custom)
+        }
+    }
+
+    /// Build the `answers` payload (question text → labels): the picked option labels plus any
+    /// trimmed free text the user typed (appended). Skips questions with neither. Mirrors the
+    /// web QuestionForm submit (single-select keeps option/text mutually exclusive in the UI).
+    public static func buildAnswers(_ questions: [AskQuestion],
+                                    selections: [String: Set<String>],
+                                    custom: [String: String]) -> [String: [String]] {
+        var answers: [String: [String]] = [:]
+        for q in questions {
+            var picks = Array(selections[q.question] ?? [])
+            let typed = trimmed(custom[q.question])
+            if !typed.isEmpty { picks.append(typed) }
+            if !q.question.isEmpty, !picks.isEmpty { answers[q.question] = picks }
+        }
+        return answers
+    }
+
+    /// The reply-chip label for "Chat about this": the first question's header, else its text.
+    public static func chatReplyLabel(_ questions: [AskQuestion]) -> String {
+        let first = questions.first
+        let header = trimmed(first?.header)
+        return header.isEmpty ? (first?.question ?? "") : header
+    }
+
+    private static func trimmed(_ s: String?) -> String {
+        (s ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     // MARK: remember-rule (allow + remember same kind)
 
     /// The session-scoped rule for "allow + remember", or nil when it doesn't apply:

@@ -71,6 +71,43 @@ final class Phase2LogicTests: XCTestCase {
         XCTAssertEqual(Approvals.kind(toolName: nil), .tool)
     }
 
+    // MARK: AskUserQuestion answers — picked options + free text
+
+    private func q(_ text: String, _ labels: [String], multi: Bool = false, header: String? = nil) -> AskQuestion {
+        AskQuestion(header: header, question: text,
+                    options: labels.map { AskOption(label: $0, description: nil) }, multiSelect: multi)
+    }
+
+    func testAnswersCombinePicksAndFreeText() {
+        let qs = [q("Q1", ["A", "B"]), q("Q2", ["X"], multi: true)]
+
+        // Nothing picked/typed → incomplete.
+        XCTAssertFalse(Approvals.allAnswered(qs, selections: [:], custom: [:]))
+
+        // Q1 picks an option; Q2 picks an option AND appends trimmed free text (multi-select).
+        let sel: [String: Set<String>] = ["Q1": ["A"], "Q2": ["X"]]
+        let custom = ["Q2": "  extra  "]
+        XCTAssertTrue(Approvals.allAnswered(qs, selections: sel, custom: custom))
+        let answers = Approvals.buildAnswers(qs, selections: sel, custom: custom)
+        XCTAssertEqual(answers["Q1"], ["A"])
+        XCTAssertEqual(Set(answers["Q2"] ?? []), ["X", "extra"])   // Set source → order-agnostic
+    }
+
+    func testFreeTextAloneAnswersAQuestion() {
+        let qs = [q("Q1", ["A"])]
+        XCTAssertTrue(Approvals.isAnswered(question: "Q1", selections: [:], custom: ["Q1": "typed"]))
+        XCTAssertEqual(Approvals.buildAnswers(qs, selections: [:], custom: ["Q1": "typed"])["Q1"], ["typed"])
+        // Whitespace-only text doesn't count, and a blank question is skipped from the payload.
+        XCTAssertFalse(Approvals.isAnswered(question: "Q1", selections: [:], custom: ["Q1": "   "]))
+        XCTAssertTrue(Approvals.buildAnswers(qs, selections: [:], custom: ["Q1": "   "]).isEmpty)
+    }
+
+    func testChatReplyLabel() {
+        XCTAssertEqual(Approvals.chatReplyLabel([q("Which?", [], header: "Auth method")]), "Auth method")
+        XCTAssertEqual(Approvals.chatReplyLabel([q("Which?", [])]), "Which?")   // no header → question
+        XCTAssertEqual(Approvals.chatReplyLabel([]), "")
+    }
+
     // MARK: composer gating
 
     func testSendAvailability() {

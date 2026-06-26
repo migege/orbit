@@ -8,6 +8,13 @@ struct PendingAttachment: Identifiable, Equatable, Sendable {
     let filename: String
 }
 
+/// Active "Chat about this" reply: the composer's next send resolves this pending question as a
+/// deny+message (claude reads it as in-turn feedback) instead of starting a fresh turn.
+struct QuestionReply: Equatable, Sendable {
+    let approvalID: String
+    let question: String
+}
+
 /// Drives one open session: the reconnecting SSE consume loop (folded through the verified
 /// `TranscriptReducer`) plus the interactive actions — send/queue/interrupt, tool approvals,
 /// and worktree commit/merge. All decision logic lives in OrbitKit (ComposerLogic / Approvals);
@@ -27,6 +34,8 @@ final class ConsoleModel {
     var permissionMode: PermissionMode = .default
     private(set) var pendingAttachments: [PendingAttachment] = []
     private(set) var sending = false
+    /// Set while replying to a pending question via "Chat about this" (see send()).
+    private(set) var replyContext: QuestionReply?
 
     // `/` command & skill autocomplete (the `+` menu opens it scoped). `slashItems` is the
     // runner-reported set already narrowed to host-level + this session's agent (see loadSlashItems).
@@ -101,11 +110,21 @@ final class ConsoleModel {
             guard let self else { return }
             self.publishScheduled = false
             self.state = self.reducer.state
+            self.reconcileReplyContext()
         }
     }
     private func publishStateNow() {
         publishScheduled = false
         state = reducer.state
+        reconcileReplyContext()
+    }
+
+    /// Drop the chat-reply context if its question was resolved another way (an option was picked,
+    /// or an SSE `approval_resolved` arrived) — mirrors the web clearing replyTo when it leaves.
+    private func reconcileReplyContext() {
+        if let r = replyContext, !state.pendingApprovals.contains(where: { $0.id == r.approvalID }) {
+            replyContext = nil
+        }
     }
 
     // MARK: composer
@@ -113,9 +132,9 @@ final class ConsoleModel {
     var availability: SendAvailability { ComposerLogic.availability(status: state.status) }
 
     var canSend: Bool {
-        !composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !sending
-            && availability != .blocked
+        guard !composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !sending else { return false }
+        if replyContext != nil { return true }   // a question reply always sends (deny+message)
+        return availability != .blocked
     }
 
     // MARK: `/` autocomplete
@@ -150,6 +169,14 @@ final class ConsoleModel {
     func send() async {
         let text = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !sending else { return }
+        // "Chat about this": resolve the pending question as a deny+message so claude reads the
+        // text as in-turn feedback and continues — not a fresh turn. (Mirrors the web reroute.)
+        if let reply = replyContext {
+            composerText = ""
+            replyContext = nil
+            await replyToQuestion(approvalID: reply.approvalID, text: text)
+            return
+        }
         let clientTurnId = UUID().uuidString
         let attachmentIds = pendingAttachments.map(\.id)
 
@@ -213,6 +240,29 @@ final class ConsoleModel {
     }
 
     // MARK: approvals
+
+    /// Begin a "Chat about this" reply to a pending question: the next composer send resolves it
+    /// as a deny+message instead of a fresh turn (see send()). The card stays until then.
+    func startChatReply(approvalID: String, question: String) {
+        replyContext = QuestionReply(approvalID: approvalID, question: question)
+    }
+
+    func cancelChatReply() { replyContext = nil }
+
+    /// Resolve a pending question conversationally (deny + the typed text → claude reads it as
+    /// in-turn feedback). Optimistic-removes the card; re-seeds from REST on failure.
+    private func replyToQuestion(approvalID: String, text: String) async {
+        sending = true
+        defer { sending = false }
+        reducer.removeApproval(id: approvalID)
+        publishStateNow()
+        let req = ApprovalDecisionRequest(behavior: .deny, message: text, answers: nil, rememberRule: nil)
+        do { try await api.decideApproval(sessionID: sessionID, approvalID: approvalID, req) }
+        catch {
+            statusMessage = "Reply failed"
+            await refreshApprovals()
+        }
+    }
 
     func decide(_ approval: PendingApproval, behavior: ApprovalBehavior,
                 answers: [String: [String]]? = nil, remember: Bool = false) async {

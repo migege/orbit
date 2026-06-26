@@ -15,8 +15,27 @@ struct ComposerView: View {
         return t != slashDismissed && !console.slashMatches.isEmpty
     }
 
+    private var placeholder: String {
+        if console.replyContext != nil { return "Type your reply to Claude…" }
+        return console.shellMode ? "Shell command…" : "Message…"
+    }
+
     var body: some View {
         VStack(spacing: 6) {
+            if let reply = console.replyContext {
+                HStack(spacing: 6) {
+                    Image(systemName: "bubble.left.and.bubble.right.fill").foregroundStyle(.blue)
+                    Text(reply.question.isEmpty ? "Replying to Claude’s question"
+                                                : "Replying to Claude’s question: \(reply.question)")
+                        .font(.caption).lineLimit(1)
+                    Spacer()
+                    Button { console.cancelChatReply() } label: { Image(systemName: "xmark.circle.fill") }
+                        .buttonStyle(.plain).foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 8).padding(.vertical, 4)
+                .background(.blue.opacity(0.1), in: Capsule())
+            }
+
             if !console.pendingAttachments.isEmpty {
                 HStack {
                     ForEach(console.pendingAttachments) { att in
@@ -45,8 +64,7 @@ struct ComposerView: View {
                 .toggleStyle(.button)
                 .help("Run as a shell command")
 
-                TextField(console.shellMode ? "Shell command…" : "Message…",
-                          text: $console.composerText, axis: .vertical)
+                TextField(placeholder, text: $console.composerText, axis: .vertical)
                     .textFieldStyle(.roundedBorder)
                     .lineLimit(1...6)
                     .focused($inputFocused)
@@ -62,6 +80,7 @@ struct ComposerView: View {
                         slashIndex = 0
                         if new == nil { console.slashScope = nil }
                     }
+                    .onChange(of: console.replyContext) { if console.replyContext != nil { inputFocused = true } }
 
                 if console.state.status == .running {
                     Button { Task { await console.interrupt() } } label: {

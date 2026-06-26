@@ -62,12 +62,13 @@ struct QuestionCard: View {
     let console: ConsoleModel
     let approval: PendingApproval
     @State private var selections: [String: Set<String>] = [:]
+    @State private var custom: [String: String] = [:]
 
     private var questions: [AskQuestion] {
         approval.input.map { Approvals.parseQuestions(from: $0) } ?? []
     }
     private var allAnswered: Bool {
-        questions.allSatisfy { !(selections[$0.question]?.isEmpty ?? true) }
+        Approvals.allAnswered(questions, selections: selections, custom: custom)
     }
 
     var body: some View {
@@ -94,14 +95,29 @@ struct QuestionCard: View {
                         }
                         .buttonStyle(.plain)
                     }
+                    // claude's AskUserQuestion always allows a free-typed answer, not just a listed option.
+                    TextField("Or type your own answer…", text: customBinding(q))
+                        .textFieldStyle(.roundedBorder).font(.callout)
                     if q.multiSelect {
                         Text("multi-select").font(.caption2).foregroundStyle(.secondary)
                     }
                 }
             }
-            Button("Submit") { Task { await submit() } }
-                .buttonStyle(.borderedProminent)
-                .disabled(!allAnswered)
+            HStack {
+                Button("Submit") { Task { await submit() } }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!allAnswered)
+                // Reply conversationally in the main composer instead of picking an option; the
+                // text rides back as a deny+message (handled by ConsoleModel.send).
+                Button {
+                    console.startChatReply(approvalID: approval.id,
+                                           question: Approvals.chatReplyLabel(questions))
+                } label: {
+                    Label("Chat about this", systemImage: "bubble.left.and.bubble.right")
+                }
+                .buttonStyle(.bordered)
+                Spacer()
+            }
         }
         .padding(10)
         .background(.blue.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
@@ -116,12 +132,25 @@ struct QuestionCard: View {
             if set.contains(label) { set.remove(label) } else { set.insert(label) }
         } else {
             set = [label]
+            custom[q.question] = ""           // single-select: a listed option and free text are exclusive
         }
         selections[q.question] = set
     }
+    /// Binding for a question's free-text field; for single-select, typing clears any picked option.
+    private func customBinding(_ q: AskQuestion) -> Binding<String> {
+        Binding(
+            get: { custom[q.question] ?? "" },
+            set: { value in
+                custom[q.question] = value
+                if !q.multiSelect, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    selections[q.question] = []
+                }
+            }
+        )
+    }
     private func submit() async {
-        let answers = selections.mapValues { Array($0) }
-        await console.decide(approval, behavior: .allow, answers: answers)
+        await console.decide(approval, behavior: .allow,
+                             answers: Approvals.buildAnswers(questions, selections: selections, custom: custom))
     }
 }
 
