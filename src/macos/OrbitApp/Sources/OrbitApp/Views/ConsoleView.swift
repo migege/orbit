@@ -56,8 +56,13 @@ struct TranscriptView: View {
                 }
                 .padding()
             }
+            // Jump (don't animate) to the bottom on new items. An animated `scrollTo` animates the
+            // scroll offset, so the LazyVStack re-places its visible rows every frame; during an
+            // active turn items arrive faster than the animation completes, so it never settles and
+            // the whole transcript re-lays-out every frame — pegging the main thread at 100% in
+            // layout and freezing the UI on long sessions.
             .onChange(of: state.items.count) {
-                withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(bottomAnchor, anchor: .bottom) }
+                proxy.scrollTo(bottomAnchor, anchor: .bottom)
             }
         }
         .safeAreaInset(edge: .top, spacing: 0) { statusBar }
