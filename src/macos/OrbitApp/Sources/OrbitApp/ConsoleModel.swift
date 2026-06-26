@@ -7,6 +7,7 @@ import OrbitKit
 struct PendingAttachment: Identifiable, Equatable, Sendable {
     let id: String
     let filename: String
+    let mimeType: String
     let byteCount: Int
     /// A small PNG thumbnail for an inline image, downsampled once at attach time so SwiftUI
     /// isn't re-decoding the full-resolution source on every body pass; nil for a non-image file.
@@ -74,11 +75,15 @@ final class ConsoleModel {
     private var reducer = TranscriptReducer()
     private let stream: EventStreaming
     private let api: APIClient
+    /// Shared image cache (owned by the registry) — seeded on send so the sent bubble shows its
+    /// image instantly, and read by the transcript's `ChatAttachmentImage`.
+    let attachments: AttachmentImageStore
 
     init(sessionID: String, agentID: String? = nil, baseURL: URL, tokenStore: TokenStore,
-         restoring reducer: TranscriptReducer? = nil) {
+         attachments: AttachmentImageStore, restoring reducer: TranscriptReducer? = nil) {
         self.sessionID = sessionID
         self.agentID = agentID
+        self.attachments = attachments
         self.api = APIClient(baseURL: baseURL, tokenStore: tokenStore)
         #if os(macOS)
         self.stream = URLSessionEventStream(baseURL: baseURL, token: { tokenStore.token(for: baseURL) })
@@ -291,10 +296,15 @@ final class ConsoleModel {
         }
         let clientTurnId = UUID().uuidString
         let attachmentIds = pendingAttachments.map(\.id)
+        // Carry mime/name onto the optimistic bubble so it can render image thumbnails / file chips
+        // immediately (the durable `user` event later supplies the authoritative refs).
+        let turnAttachments = pendingAttachments.map {
+            TurnAttachment(id: $0.id, mime: $0.mimeType, name: $0.filename)
+        }
 
         // Optimistic bubble; reconciled by the server's `user` event (matched by the turnId
         // tagged below once POST returns — the runner echoes turnId, not clientTurnId).
-        reducer.addOptimisticUser(clientTurnId: clientTurnId, text: text, attachmentIds: attachmentIds)
+        reducer.addOptimisticUser(clientTurnId: clientTurnId, text: text, attachments: turnAttachments)
         state = reducer.state
         composerText = ""
         pendingAttachments = []
@@ -369,7 +379,10 @@ final class ConsoleModel {
             // Inline images carry a downsampled thumbnail for the composer chip; other files show
             // as a name + size chip instead (web parity).
             let preview = Attachments.isInlineImage(mimeType: mimeType) ? composerThumbnail(from: data) : nil
-            pendingAttachments.append(PendingAttachment(id: id, filename: filename,
+            // Seed the shared cache with the full-resolution bytes so the sent bubble renders the
+            // image instantly (no fetch round-trip) once the turn is sent.
+            if Attachments.isInlineImage(mimeType: mimeType) { attachments.seed(id, data: data) }
+            pendingAttachments.append(PendingAttachment(id: id, filename: filename, mimeType: mimeType,
                                                         byteCount: data.count, previewImageData: preview))
         } catch {
             statusMessage = "Upload failed"

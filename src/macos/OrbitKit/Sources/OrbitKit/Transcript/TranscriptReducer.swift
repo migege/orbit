@@ -66,9 +66,10 @@ public struct TranscriptReducer: Sendable, Codable {
     /// Show a user bubble immediately on send, before the server's `user` event echoes back.
     /// Reconciled by the server `turnId` (tagged via `setOptimisticTurnId` once POST /turns
     /// returns) — or by `clientTurnId` if the server ever echoes it — when that durable event arrives.
-    public mutating func addOptimisticUser(clientTurnId: String, text: String, attachmentIds: [String] = []) {
+    public mutating func addOptimisticUser(clientTurnId: String, text: String,
+                                           attachments: [TurnAttachment] = []) {
         flushStreaming()
-        state.items.append(.user(UserBubble(id: nextID(), text: text, attachmentIds: attachmentIds,
+        state.items.append(.user(UserBubble(id: nextID(), text: text, attachments: attachments,
                                             clientTurnId: clientTurnId, turnId: nil, pending: true)))
     }
 
@@ -189,7 +190,10 @@ public struct TranscriptReducer: Sendable, Codable {
         flushStreaming()
         let cid = str(ev, "clientTurnId")
         let body = str(ev, "text") ?? str(ev, "content") ?? ""
-        let atts = stringArray(ev.payload["attachmentIds"]) ?? []
+        // The runner echoes `attachments` (an array of `{id, mime, name}`) on the durable user
+        // event, NOT `attachmentIds` — parse those so the bubble can render images / file chips
+        // after a reload (web reads the same field).
+        let atts = attachments(ev.payload["attachments"])
         // Reconcile a pending optimistic bubble: prefer the server's `clientTurnId` echo (if it
         // ever sends one), else the server-assigned `turnId` we tagged onto the bubble from the
         // POST response — the runner echoes `turnId`, not `clientTurnId` (web parity).
@@ -202,11 +206,13 @@ public struct TranscriptReducer: Sendable, Codable {
             if case .user(var b) = state.items[i] {       // reconcile optimistic bubble
                 b.pending = false
                 if !body.isEmpty { b.text = body }
+                if !atts.isEmpty { b.attachments = atts }   // durable refs carry mime; keep ids if absent
+                b.ts = ev.ts ?? b.ts
                 state.items[i] = .user(b)
             }
             return
         }
-        state.items.append(.user(UserBubble(id: nextID(), text: body, attachmentIds: atts,
+        state.items.append(.user(UserBubble(id: nextID(), text: body, attachments: atts, ts: ev.ts,
                                             clientTurnId: cid, turnId: ev.turnId, pending: false)))
     }
 
@@ -291,8 +297,14 @@ public struct TranscriptReducer: Sendable, Codable {
 
     private mutating func nextID() -> String { idSeq += 1; return "i\(idSeq)" }
     private func str(_ ev: RunEvent, _ key: String) -> String? { ev.payload[key]?.stringValue }
-    private func stringArray(_ v: JSONValue?) -> [String]? {
-        if case .array(let a)? = v { return a.compactMap { $0.stringValue } }
-        return nil
+    /// Parse the `user` event's `attachments` array (`[{id, mime, name}]`) into refs, dropping any
+    /// element without an `id`. Older runners may send `images` (id-only) instead — not handled
+    /// here since current runners always emit `attachments`.
+    private func attachments(_ v: JSONValue?) -> [TurnAttachment] {
+        guard case .array(let a)? = v else { return [] }
+        return a.compactMap { el in
+            guard let id = el["id"]?.stringValue else { return nil }
+            return TurnAttachment(id: id, mime: el["mime"]?.stringValue, name: el["name"]?.stringValue)
+        }
     }
 }

@@ -115,6 +115,51 @@ final class TranscriptReducerTests: XCTestCase {
         XCTAssertEqual(r.state.items[0].asUser?.pending, false)
     }
 
+    /// The durable `user` event carries `attachments` ([{id,mime,name}]) and a `ts` — both must
+    /// land on the bubble so it can render image thumbnails / file chips and a relative time
+    /// (web parity; the runner echoes `attachments`, not `attachmentIds`).
+    func testUserEventParsesAttachmentsAndTimestamp() {
+        var r = TranscriptReducer()
+        r.apply(RunEvent(seq: 7, type: .user, ts: "2026-06-26T10:00:00Z",
+                         payload: .object([
+                            "text": .string("look at this"),
+                            "attachments": .array([
+                                .object(["id": .string("att1"), "mime": .string("image/png"), "name": .string("a.png")]),
+                                .object(["id": .string("att2"), "mime": .string("application/pdf")]),
+                                .object(["mime": .string("image/png")]),   // no id → dropped
+                            ]),
+                         ])))
+        let bubble = r.state.items[0].asUser
+        XCTAssertEqual(bubble?.attachments.map(\.id), ["att1", "att2"])
+        XCTAssertEqual(bubble?.attachments.first?.mime, "image/png")
+        XCTAssertEqual(bubble?.attachments.first?.isImage, true)
+        XCTAssertEqual(bubble?.attachments.last?.isImage, false)   // application/pdf
+        XCTAssertEqual(bubble?.ts, "2026-06-26T10:00:00Z")
+    }
+
+    /// An optimistic image bubble (id-only, mime unknown) reconciles to the durable event, which
+    /// supplies the real mime + a timestamp — without duplicating the bubble.
+    func testOptimisticBubbleAdoptsDurableAttachmentsAndTs() {
+        var r = TranscriptReducer()
+        r.addOptimisticUser(clientTurnId: "c1", text: "see screenshot",
+                            attachments: [TurnAttachment(id: "att1")])
+        r.setOptimisticTurnId(clientTurnId: "c1", turnId: "t1")
+        XCTAssertNil(r.state.items[0].asUser?.attachments.first?.mime)
+        XCTAssertEqual(r.state.items[0].asUser?.attachments.first?.isImage, true)   // unknown mime ⇒ image
+
+        r.apply(RunEvent(seq: 9, type: .user, ts: "2026-06-26T12:00:00Z", turnId: "t1",
+                         payload: .object([
+                            "text": .string("see screenshot"),
+                            "attachments": .array([
+                                .object(["id": .string("att1"), "mime": .string("image/jpeg")]),
+                            ]),
+                         ])))
+        XCTAssertEqual(r.state.items.count, 1, "reconcile, not duplicate")
+        XCTAssertEqual(r.state.items[0].asUser?.pending, false)
+        XCTAssertEqual(r.state.items[0].asUser?.attachments.first?.mime, "image/jpeg")
+        XCTAssertEqual(r.state.items[0].asUser?.ts, "2026-06-26T12:00:00Z")
+    }
+
     func testTextDeltaWithoutDurableFinalizeStillRenders() {
         var r = TranscriptReducer()
         r.apply(RunEvent(seq: 0, type: .textDelta, payload: .object(["delta": .string("partial ")])))

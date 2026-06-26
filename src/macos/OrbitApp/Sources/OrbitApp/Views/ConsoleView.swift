@@ -30,6 +30,8 @@ struct ConsoleView: View {
                     ApprovalsView(console: console)
                     ComposerView(console: console)
                 }
+                // Image cache for user-turn attachments, read by `UserBubbleView` down the tree.
+                .environment(registry.attachments)
             } else {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -131,29 +133,133 @@ struct TranscriptItemView: View {
     }
 }
 
+/// Right-aligned user turn, mirroring web's `.chat-user-wrap`: any attachments (image thumbnails /
+/// file chips) above a tinted text bubble, then — revealed on hover — a meta row with a copy button
+/// and a relative timestamp. The meta row always occupies its height (only its opacity changes) so
+/// revealing it never shifts the message below.
 struct UserBubbleView: View {
     let bubble: UserBubble
     @State private var expanded = false
+    @State private var hovering = false
+    @State private var copied = false
     // Collapse a giant pasted bubble: one huge Text lays out synchronously and stalls the UI.
     private let truncateAt = 6000
+
+    private var images: [TurnAttachment] { bubble.attachments.filter(\.isImage) }
+    private var files: [TurnAttachment] { bubble.attachments.filter { !$0.isImage } }
+
     var body: some View {
         let long = bubble.text.count > truncateAt
         let shown = long && !expanded ? String(bubble.text.prefix(truncateAt)) : bubble.text
         HStack {
             Spacer(minLength: 60)
             VStack(alignment: .trailing, spacing: 3) {
-                Text(shown).textSelection(.enabled)
-                    .padding(.horizontal, 12).padding(.vertical, 8)
-                    .background(.tint.opacity(0.15), in: RoundedRectangle(cornerRadius: 12))
+                if !images.isEmpty {
+                    attachmentRow { ForEach(images) { ChatAttachmentImage(attachment: $0) } }
+                }
+                if !files.isEmpty {
+                    attachmentRow { ForEach(files) { ChatAttachmentFile(attachment: $0) } }
+                }
+                if !bubble.text.isEmpty {
+                    Text(shown).textSelection(.enabled)
+                        .padding(.horizontal, 12).padding(.vertical, 8)
+                        .background(.tint.opacity(0.15), in: RoundedRectangle(cornerRadius: 12))
+                }
                 if long {
                     Button(expanded ? "Show less" : "Show more") { expanded.toggle() }
                         .buttonStyle(.plain).font(.caption).foregroundStyle(.secondary)
                 }
+                meta
+            }
+            // Hover over the bubble column (not the full-width row) reveals the meta — web parity.
+            .onHover { hovering = $0 }
+        }
+    }
+
+    // Wrapping right-aligned row of attachment thumbnails / chips (web's `.chat-images`/`.chat-files`).
+    @ViewBuilder
+    private func attachmentRow<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        HStack(alignment: .top, spacing: 6) { content() }
+    }
+
+    // Copy + relative time, hidden until hover (web's `.chat-user-meta`). `Sending…` replaces the
+    // time while the turn is unconfirmed. Always laid out so revealing it doesn't move the bubble.
+    // An image-only turn (empty text) has nothing to copy, so the row is suppressed — web parity
+    // (`{node.text && <div className="chat-user-meta">…}`).
+    @ViewBuilder
+    private var meta: some View {
+        if !bubble.text.isEmpty || bubble.pending {
+            HStack(spacing: 6) {
+                if !bubble.text.isEmpty {
+                    Button { copy() } label: {
+                        Image(systemName: copied ? "checkmark" : "doc.on.doc").font(.caption2)
+                    }
+                    .buttonStyle(.plain).foregroundStyle(.secondary).help("Copy message")
+                }
                 if bubble.pending {
                     Text("Sending…").font(.caption2).foregroundStyle(.secondary)
+                } else if let ts = bubble.ts, let rel = RelativeTime.format(ts) {
+                    Text(rel).font(.caption2).foregroundStyle(.secondary)
                 }
             }
+            .frame(height: 16)
+            // `Sending…` should always show; the copy/time row only on hover (web parity).
+            .opacity(bubble.pending || hovering ? 1 : 0)
+            .allowsHitTesting(bubble.pending || hovering)
+            .animation(.easeOut(duration: 0.12), value: hovering)
         }
+    }
+
+    private func copy() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(bubble.text, forType: .string)
+        copied = true
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_600_000_000)
+            copied = false
+        }
+    }
+}
+
+/// A user-turn image attachment: fetched once via the shared cache and shown as a rounded thumbnail
+/// (web's `.chat-image`). Falls back to a file chip if the bytes don't decode as an image.
+struct ChatAttachmentImage: View {
+    let attachment: TurnAttachment
+    @Environment(AttachmentImageStore.self) private var store
+
+    var body: some View {
+        Group {
+            if let img = store.image(for: attachment.id) {
+                Image(nsImage: img)
+                    .resizable().scaledToFit()
+                    .frame(maxWidth: 220, maxHeight: 220)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(.primary.opacity(0.08)) }
+            } else if store.isNotImage(attachment.id) {
+                ChatAttachmentFile(attachment: attachment)   // not an image after all
+            } else {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(.quaternary)
+                    .frame(width: 120, height: 90)
+            }
+        }
+        .task(id: attachment.id) { await store.load(attachment.id) }
+    }
+}
+
+/// A non-image attachment: a name chip (web's `.chat-file`).
+struct ChatAttachmentFile: View {
+    let attachment: TurnAttachment
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "paperclip").foregroundStyle(.secondary)
+            Text(attachment.name ?? "file").lineLimit(1).truncationMode(.middle)
+        }
+        .font(.caption)
+        .padding(.vertical, 4).padding(.horizontal, 8)
+        .frame(maxWidth: 220, alignment: .leading)
+        .background(.gray.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
     }
 }
 

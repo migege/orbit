@@ -195,6 +195,12 @@ public final class APIClient: @unchecked Sendable {
         return try decoder.decode(AttachmentRef.self, from: respData).id
     }
 
+    /// Fetch an attachment's raw bytes (GET /attachments/:id). Bearer-guarded, so an `<img src>`
+    /// can't carry the token — the transcript fetches the blob and decodes it client-side.
+    public func downloadAttachment(_ id: String) async throws -> Data {
+        try await send(makeRequest("attachments/\(id)", method: "GET", body: Optional<Empty>.none))
+    }
+
     // MARK: - request plumbing
 
     private struct Empty: Codable {}

@@ -19,6 +19,9 @@ final class ConsoleRegistry {
     private let baseURL: URL
     private let tokenStore: TokenStore
     private let store: TranscriptPersisting
+    /// Shared image cache for user-turn attachments, injected into the transcript (one per instance
+    /// so a session switch doesn't re-fetch). Seeded on send for an instant sent-image preview.
+    let attachments: AttachmentImageStore
 
     private var models: [String: ConsoleModel] = [:]
     private var lru: LRUOrder
@@ -29,6 +32,7 @@ final class ConsoleRegistry {
         self.baseURL = baseURL
         self.tokenStore = tokenStore
         self.store = store
+        self.attachments = AttachmentImageStore(baseURL: baseURL, tokenStore: tokenStore)
         self.lru = LRUOrder(capacity: capacity)
     }
 
@@ -84,7 +88,7 @@ final class ConsoleRegistry {
         let restored = store.load(sessionID: sessionID)
         if let restored { savedSeq[sessionID] = restored.state.maxSeq }
         return ConsoleModel(sessionID: sessionID, agentID: agentID, baseURL: baseURL,
-                            tokenStore: tokenStore, restoring: restored)
+                            tokenStore: tokenStore, attachments: attachments, restoring: restored)
     }
 
     private func persist(_ sessionID: String, _ model: ConsoleModel) {

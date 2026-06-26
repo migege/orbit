@@ -20,8 +20,9 @@ public final class SessionStore: @unchecked Sendable {
         onChange?()
     }
 
-    public func addOptimisticUser(clientTurnId: String, text: String, attachmentIds: [String] = []) {
-        reducer.addOptimisticUser(clientTurnId: clientTurnId, text: text, attachmentIds: attachmentIds)
+    public func addOptimisticUser(clientTurnId: String, text: String,
+                                  attachments: [TurnAttachment] = []) {
+        reducer.addOptimisticUser(clientTurnId: clientTurnId, text: text, attachments: attachments)
         onChange?()
     }
 
