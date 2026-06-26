@@ -5,11 +5,14 @@ description: Cut a release of the macOS client by creating and pushing a vX.Y.Z 
 
 # Cut a macOS release
 
-A release is a `vX.Y.Z` git tag. Pushing it triggers
-`.github/workflows/macos-release.yml`, which signs + notarizes the macOS client
-and uploads `Orbit-v<version>-arm64.dmg` as a build artifact. The tag version flows into the
-DMG's `CFBundleShortVersionString` (the workflow exports `VERSION` from the tag
-name), so the tag is the single source of truth for the release version.
+A release is a git tag. Pushing it triggers `.github/workflows/macos-release.yml`,
+which signs + notarizes the macOS client, creates a GitHub Release with the DMG +
+`.zip`, and publishes the Sparkle auto-update appcast to GitHub Pages. The tag is
+the single source of truth for the version (the workflow exports `VERSION` from the
+tag name into `CFBundleShortVersionString` and the artifact filenames):
+
+- `vX.Y.Z` → **stable** channel (reaches everyone).
+- `vX.Y.Z-beta.N` → **beta** channel (only users who enabled "Receive beta updates").
 
 ## How to use
 
@@ -44,10 +47,9 @@ name), so the tag is the single source of truth for the release version.
 
 ## Notes
 
-- Only `X.Y.Z` is accepted (no prerelease suffix) so the version is valid as the
-  app's `CFBundleShortVersionString`.
-- The release secrets (`DEVID_CERT_*`, `APPLE_*`) must be configured for the
-  workflow to succeed — see the header of `.github/workflows/macos-release.yml`.
+- Accepted: `X.Y.Z` (stable) or `X.Y.Z-beta.N` (beta channel).
+- The release secrets (`DEVID_CERT_*`, `APPLE_*`, `SPARKLE_ED_PRIVATE_KEY`) must be
+  configured — see the header of `.github/workflows/macos-release.yml`.
 - To undo a tag pushed by mistake:
 
   ```bash

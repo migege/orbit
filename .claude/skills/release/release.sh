@@ -14,8 +14,9 @@ if [ -z "$ver" ]; then
   exit 1
 fi
 ver="${ver#v}"                                    # accept 0.2.0 or v0.2.0
-if ! printf '%s' "$ver" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-  echo "✗ version must be X.Y.Z (got '$ver')" >&2
+# X.Y.Z → stable channel (everyone); X.Y.Z-beta.N (any prerelease suffix) → beta channel.
+if ! printf '%s' "$ver" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+  echo "✗ version must be X.Y.Z or X.Y.Z-beta.N (got '$ver')" >&2
   exit 1
 fi
 tag="v$ver"

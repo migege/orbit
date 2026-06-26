@@ -5,7 +5,9 @@
 # throwaway runner exactly what scripts/build-dmg.sh does locally: rebuild the cert + notary
 # credentials into a temporary keychain, then run the script with Developer ID signing.
 #
-# Trigger: manual (workflow_dispatch) or pushing a v* tag. The .dmg lands in the run's Artifacts.
+# Trigger: workflow_dispatch (build only) or pushing a v* tag. A tag push additionally creates a
+# GitHub Release with the DMG + .zip and publishes the Sparkle appcast to GitHub Pages — the stable
+# channel for vX.Y.Z, the beta channel for prerelease tags like vX.Y.Z-beta.1.
 #
 # Required repo secrets (Settings → Secrets and variables → Actions):
 #   DEVID_CERT_P12_BASE64  base64 of the Developer ID Application cert+key exported as .p12
@@ -14,6 +16,7 @@
 #   APPLE_ID               Apple ID email used for notarization
 #   APPLE_TEAM_ID          Developer Team ID (e.g. S27N9A88JC)
 #   APPLE_APP_PASSWORD     app-specific password from appleid.apple.com
+#   SPARKLE_ED_PRIVATE_KEY EdDSA private key used to sign the Sparkle appcast
 name: macOS release (signed DMG)
 
 on:
@@ -29,6 +32,8 @@ jobs:
   dmg:
     name: Build signed + notarized DMG
     runs-on: macos-15
+    permissions:
+      contents: write          # create the GitHub Release + push the gh-pages appcast
     steps:
       - uses: actions/checkout@v4
 
@@ -89,5 +94,47 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Orbit-dmg
-          path: src/macos/build/Orbit-*.dmg
+          path: src/macos/build/Orbit-v*
           if-no-files-found: error
+
+      # ---- Release publishing (tag pushes only) --------------------------------------------------
+      - name: Create GitHub Release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          prerelease=""; case "$GITHUB_REF_NAME" in *-*) prerelease="--prerelease";; esac
+          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes $prerelease \
+            "src/macos/build/Orbit-v$ver-arm64.dmg" \
+            "src/macos/build/Orbit-v$ver-arm64.zip"
+
+      - name: Generate Sparkle appcast
+        if: github.ref_type == 'tag'
+        env:
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          # Prerelease tags (vX.Y.Z-…) publish to the beta channel; stable tags reach everyone.
+          channel=""; case "$GITHUB_REF_NAME" in *-*) channel="--channel beta";; esac
+          curl -fsSL -o "$RUNNER_TEMP/sparkle.tar.xz" \
+            https://github.com/sparkle-project/Sparkle/releases/download/2.9.3/Sparkle-2.9.3.tar.xz
+          mkdir -p "$RUNNER_TEMP/sparkle"; tar -xf "$RUNNER_TEMP/sparkle.tar.xz" -C "$RUNNER_TEMP/sparkle"
+          work="$RUNNER_TEMP/updates"; mkdir -p "$work/out"
+          cp "src/macos/build/Orbit-v$ver-arm64.zip" "$work/"
+          # Seed with the currently-published appcast so prior versions are preserved.
+          curl -fsSL -o "$work/appcast.xml" https://jianghailong-xy.github.io/orbit/appcast.xml || true
+          printf '%s' "$SPARKLE_ED_PRIVATE_KEY" | "$RUNNER_TEMP/sparkle/bin/generate_appcast" "$work" \
+            --ed-key-file - $channel \
+            --download-url-prefix "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/" \
+            --link "https://github.com/${GITHUB_REPOSITORY}" \
+            --maximum-versions 10
+          cp "$work/appcast.xml" "$work/out/appcast.xml"
+
+      - name: Publish appcast to GitHub Pages
+        if: github.ref_type == 'tag'
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ github.token }}
+          publish_dir: ${{ runner.temp }}/updates/out
+          keep_files: true
