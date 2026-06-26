@@ -27,6 +27,13 @@ final class ConsoleModel {
     private(set) var state = TranscriptState()
     private(set) var connected = false
 
+    // The session's lifecycle status per the server (REST). The SSE stream can't redeliver the
+    // terminal transition (its event is broadcast live-only, never in the replayed log), so the
+    // stream alone leaves an opened/reconnected ended session looking live. This is seeded on
+    // open and refreshed on each reconnect; the composer reconciles it with the stream status so
+    // a send to a dormant/finished session resumes instead of 409-ing on POST /turns.
+    private var serverStatus: RunStatus?
+
     // composer
     var composerText = ""
     var shellMode = false
@@ -99,6 +106,9 @@ final class ConsoleModel {
                 }
                 connected = false
                 publishStateNow()
+                // The stream closed — if the session ended during the drop, the terminal
+                // status broadcast was missed and won't be replayed, so refresh it from REST.
+                await refreshServerStatus()
                 try? await Task.sleep(nanoseconds: 300_000_000)
             } catch is CancellationError {
                 publishStateNow()
@@ -145,10 +155,14 @@ final class ConsoleModel {
 
     // MARK: composer
 
-    var availability: SendAvailability { ComposerLogic.availability(status: state.status) }
+    /// The status that drives send decisions: the stream status, upgraded to the server's
+    /// terminal status when the stream missed the (un-replayable) terminal transition.
+    var sessionStatus: RunStatus { ComposerLogic.reconcileStatus(stream: state.status, server: serverStatus) }
+
+    var availability: SendAvailability { ComposerLogic.availability(status: sessionStatus) }
 
     /// Non-terminal session → composer config edits apply immediately (see `applyConfig`).
-    var isLive: Bool { ComposerLogic.isLive(status: state.status) }
+    var isLive: Bool { ComposerLogic.isLive(status: sessionStatus) }
 
     var canSend: Bool {
         guard !composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !sending else { return false }
@@ -167,6 +181,7 @@ final class ConsoleModel {
     /// server's choice (matching web). A terminal session keeps the local picks for resume.
     private func loadContext() async {
         guard let s = try? await api.session(sessionID) else { return }
+        serverStatus = s.status
         agentName = s.agent?.name
         if ComposerLogic.isLive(status: s.status) {
             if let m = s.model { modelID = m }
@@ -180,6 +195,14 @@ final class ConsoleModel {
            let r = (try? await api.runners())?.first(where: { $0.id == rid }) {
             planUsage = r.planUsage
         }
+    }
+
+    /// Re-read just the authoritative lifecycle status from REST (lighter than loadContext).
+    /// The terminal transition is a live-only SSE broadcast absent from the replayed log, so
+    /// the stream alone can leave an ended session looking live; this lets the composer pick
+    /// resume over a doomed POST /turns. No-op on a transient fetch failure (keeps the last value).
+    private func refreshServerStatus() async {
+        if let s = try? await api.session(sessionID) { serverStatus = s.status }
     }
 
     /// A picker change on a LIVE session is pushed to the server immediately (PATCH /config,
@@ -256,12 +279,16 @@ final class ConsoleModel {
         sending = true
         defer { sending = false }
         do {
-            if ComposerLogic.shouldResume(status: state.status) {
+            if ComposerLogic.shouldResume(status: sessionStatus) {
                 _ = try await api.resume(sessionID: sessionID,
                                          ResumeRequest(clientTurnId: clientTurnId, content: text,
                                                        kind: shellMode ? "shell" : "message",
                                                        model: modelID, permissionMode: permissionMode.rawValue,
                                                        effort: effort.wire))
+                // The session is revived (back to PENDING/RUNNING); drop the stale terminal
+                // snapshot so the stream drives status again and a quick follow-up doesn't
+                // re-resume a session that hasn't re-claimed yet.
+                serverStatus = nil
             } else {
                 _ = try await api.sendTurn(sessionID: sessionID,
                                            ComposerLogic.makeTurn(clientTurnId: clientTurnId, text: text,

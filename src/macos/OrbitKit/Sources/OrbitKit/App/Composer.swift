@@ -34,6 +34,23 @@ public enum ComposerLogic {
         }
     }
 
+    /// Reconcile the stream-derived status with the server's REST status for the send decision.
+    ///
+    /// The SSE stream is authoritative for *live* transitions, but the *terminal* one
+    /// (SUCCEEDED / PARKED / CANCELLED / FAILED) is broadcast live-only — that event never lands
+    /// in the replayed durable log, so a client that opens (or reconnects to) an already-ended
+    /// session never learns it ended and keeps the last live status. POST /turns then 409s with
+    /// "the session has ended" instead of reviving via POST /resume. The REST status IS
+    /// authoritative for the lifecycle, so trust it when it says the session ended but the stream
+    /// still looks live. Only upgrades *toward* terminal: a stale terminal snapshot must never
+    /// override a freshly-live stream (e.g. right after a resume re-spawns the session).
+    public static func reconcileStatus(stream: RunStatus, server: RunStatus?) -> RunStatus {
+        guard let server, shouldResume(status: server), !shouldResume(status: stream) else {
+            return stream
+        }
+        return server
+    }
+
     /// True while the session is non-terminal (mirrors web's `!TERMINAL`): composer config
     /// edits (model / permission / effort) apply immediately via PATCH /config. Terminal-but-
     /// resumable sessions instead carry the local pick on the next resume.

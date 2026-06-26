@@ -119,6 +119,24 @@ final class Phase2LogicTests: XCTestCase {
         XCTAssertFalse(ComposerLogic.shouldResume(status: .awaitingInput))
     }
 
+    func testReconcileStatus() {
+        // The bug: the stream missed the (un-replayable) terminal broadcast and still looks
+        // live, but the server says the session ended — trust the server so the composer resumes
+        // instead of 409-ing on POST /turns.
+        XCTAssertEqual(ComposerLogic.reconcileStatus(stream: .awaitingInput, server: .parked), .parked)
+        XCTAssertEqual(ComposerLogic.reconcileStatus(stream: .running, server: .succeeded), .succeeded)
+        XCTAssertEqual(ComposerLogic.reconcileStatus(stream: .interrupted, server: .cancelled), .cancelled)
+        XCTAssertEqual(ComposerLogic.reconcileStatus(stream: .running, server: .parked), .parked)
+        // Only upgrades toward terminal: a stale terminal/non-terminal snapshot never overrides a
+        // freshly-live stream (e.g. a resume just re-spawned the session, so the server is PENDING).
+        XCTAssertEqual(ComposerLogic.reconcileStatus(stream: .running, server: .pending), .running)
+        XCTAssertEqual(ComposerLogic.reconcileStatus(stream: .awaitingInput, server: .running), .awaitingInput)
+        // No server status (not yet fetched) → keep the stream status verbatim.
+        XCTAssertEqual(ComposerLogic.reconcileStatus(stream: .awaitingInput, server: nil), .awaitingInput)
+        // Both terminal → the stream's own terminal value stands (no spurious change).
+        XCTAssertEqual(ComposerLogic.reconcileStatus(stream: .succeeded, server: .parked), .succeeded)
+    }
+
     func testIsLive() {
         // Live (config edits PATCH immediately) = the non-terminal set, the complement of shouldResume.
         for s in [RunStatus.running, .pending, .awaitingInput, .interrupted] {
