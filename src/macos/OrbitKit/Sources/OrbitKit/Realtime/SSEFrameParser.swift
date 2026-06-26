@@ -14,8 +14,26 @@ public struct SSEFrameParser: Sendable {
     private var dataLines: [String] = []
     private var event: String?
     private var lastID: String?
+    private var byteLine: [UInt8] = []
 
     public init() {}
+
+    /// Feed one raw byte from the network stream; returns a dispatched event when a line ends
+    /// (`\n`) and completes a frame (a blank line).
+    ///
+    /// This is the live-transport path. It splits lines on raw bytes itself rather than relying
+    /// on `URLSession.AsyncBytes.lines`, whose handling of the empty line in SSE's `\n\n` frame
+    /// delimiter is unreliable — if the blank line is swallowed, frames never dispatch and the
+    /// stream looks connected but silent. `consume(line:)` strips a trailing `\r`, so CRLF works.
+    public mutating func consume(byte: UInt8) -> SSEEvent? {
+        if byte == 0x0A {                                  // \n ends a line
+            let line = String(decoding: byteLine, as: UTF8.self)
+            byteLine.removeAll(keepingCapacity: true)
+            return consume(line: line)
+        }
+        byteLine.append(byte)
+        return nil
+    }
 
     /// Consume one line (without its trailing newline). Returns an event on dispatch (blank line).
     public mutating func consume(line rawLine: String) -> SSEEvent? {
