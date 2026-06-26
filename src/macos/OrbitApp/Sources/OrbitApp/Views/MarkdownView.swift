@@ -91,12 +91,14 @@ private struct MarkdownBlockView: View {
     }
 }
 
-/// A GFM table rendered as a bordered grid — the desktop analogue of the web `.md table`. The
-/// header row is bold over a faint fill; cells carry inline Markdown, honour per-column alignment,
-/// and wrap to fit the available width.
+/// A GFM table rendered as a rounded, bordered grid — the desktop analogue of the web `.md table`.
+/// The header row is semibold over a gray fill; cells carry inline Markdown, honour per-column
+/// alignment, and size each column to its content so the grid hugs its width instead of filling the
+/// pane. Wide tables overflow rather than wrap.
 private struct MarkdownTableView: View {
     let table: MarkdownTable
     private let border = Color.secondary.opacity(0.3)
+    private let cornerRadius: CGFloat = 6
 
     var body: some View {
         Grid(alignment: .topLeading, horizontalSpacing: 0, verticalSpacing: 0) {
@@ -114,19 +116,20 @@ private struct MarkdownTableView: View {
                 }
             }
         }
-        .overlay(Rectangle().stroke(border, lineWidth: 1))
-        .fixedSize(horizontal: false, vertical: true)
+        .fixedSize(horizontal: true, vertical: true)
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+        .overlay(RoundedRectangle(cornerRadius: cornerRadius).stroke(border, lineWidth: 1))
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func cell(_ text: String, column: Int, header: Bool) -> some View {
         inlineMarkdown(text)
             .font(.system(size: 13))
-            .fontWeight(header ? .bold : .regular)
+            .fontWeight(header ? .semibold : .regular)
             .frame(maxWidth: .infinity, alignment: frameAlignment(column))
             .padding(.vertical, 4)
             .padding(.horizontal, 8)
-            .background(header ? Color.secondary.opacity(0.08) : Color.clear)
+            .background(header ? Color.primary.opacity(0.06) : Color.clear)
             .overlay(Rectangle().stroke(border, lineWidth: 0.5))
     }
 
