@@ -154,49 +154,211 @@ struct ThinkingView: View {
     }
 }
 
+/// A tool call rendered to match the web transcript: a compact folded row (toned icon · name ·
+/// abbreviated path/summary · line-range badge · status) that expands to a semantic body (a `$`
+/// command, a red/green edit diff, a plan/prompt as prose, otherwise monospace output). The
+/// name→display mapping lives in `OrbitKit.ToolDisplay` so it stays in step with web and testable.
 struct ToolCardView: View {
     let card: ToolCard
-    @State private var expanded = false
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Image(systemName: icon).foregroundStyle(statusColor)
-                Text(card.name).font(.callout.bold())
-                if let summary {
-                    Text(summary).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1)
-                }
-                Spacer()
-                if card.status == .running { ProgressView().controlSize(.small) }
-            }
-            if let result = card.result, !result.isEmpty {
-                DisclosureGroup("Output", isExpanded: $expanded) {
-                    Text(result).font(.caption.monospaced()).textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            }
-        }
-        .padding(10)
-        .background(.gray.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+    private let d: ToolDisplay
+    @State private var expanded: Bool
+
+    init(card: ToolCard) {
+        self.card = card
+        let display = ToolDisplay.describe(name: card.name, input: card.input, status: card.status, id: card.id)
+        self.d = display
+        let hasResult = (card.result?.isEmpty == false)
+        _expanded = State(initialValue: display.autoOpen && (display.hasBody || hasResult))
     }
 
-    private var summary: String? {
-        card.input["command"]?.stringValue
-            ?? card.input["file_path"]?.stringValue
-            ?? card.input["path"]?.stringValue
-            ?? card.input["description"]?.stringValue
-    }
-    private var icon: String {
-        switch card.status {
-        case .running: return "hammer.fill"
-        case .ok:      return "checkmark.seal.fill"
-        case .error:   return "xmark.octagon.fill"
+    private var hasResult: Bool { card.result?.isEmpty == false }
+    private var hasDetail: Bool { d.hasBody || hasResult }
+    private var isOpen: Bool { expanded && hasDetail }
+
+    var body: some View {
+        // Folded rows read as a flowing, rail-marked list; once expanded the card regains a
+        // border + surface so its detail body stays visually grouped (mirrors web `.is-open`).
+        VStack(alignment: .leading, spacing: 6) {
+            row
+            if isOpen { detail }
+        }
+        .padding(.leading, 11)
+        .padding(.trailing, 10)
+        .padding(.vertical, 6)
+        .background(isOpen ? Color.gray.opacity(0.06) : Color.clear)
+        .overlay(alignment: .leading) { Rectangle().fill(d.tone.color).frame(width: 3) }
+        .clipShape(RoundedRectangle(cornerRadius: isOpen ? 8 : 0))
+        .overlay {
+            if isOpen { RoundedRectangle(cornerRadius: 8).stroke(Color.primary.opacity(0.12), lineWidth: 1) }
         }
     }
-    private var statusColor: Color {
+
+    private var row: some View {
+        HStack(spacing: 7) {
+            if hasDetail {
+                Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 9, weight: .semibold)).foregroundStyle(.tertiary)
+            }
+            Image(systemName: d.symbol)
+                .font(.system(size: 11)).foregroundStyle(d.tone.color)
+                .frame(width: 20, height: 20)
+                .background(d.tone.color.opacity(0.14), in: RoundedRectangle(cornerRadius: 5))
+            Text(d.label)
+                .font(.system(.caption, design: .monospaced).weight(.semibold))
+                .foregroundStyle(.primary)
+            summary
+            if let meta = d.meta {
+                Text(meta)
+                    .font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary)
+                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .background(Color.gray.opacity(0.14), in: RoundedRectangle(cornerRadius: 4))
+            }
+            Spacer(minLength: 4)
+            status
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard hasDetail else { return }
+            withAnimation(.easeOut(duration: 0.12)) { expanded.toggle() }
+        }
+    }
+
+    @ViewBuilder private var summary: some View {
+        if let p = d.path {
+            (Text(p.base).fontWeight(.semibold).foregroundColor(.primary)
+             + Text(p.dir.isEmpty ? "" : "  \(p.dir)").foregroundColor(.secondary))
+                .font(.system(size: 11, design: .monospaced))
+                .lineLimit(1).truncationMode(.middle)
+        } else if let s = d.summary, !s.isEmpty {
+            Text(s)
+                .font(d.summaryMono ? .system(size: 11, design: .monospaced) : .caption)
+                .foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
+        }
+    }
+
+    @ViewBuilder private var status: some View {
         switch card.status {
-        case .running: return .secondary
-        case .ok:      return .green
-        case .error:   return .red
+        case .running: ProgressView().controlSize(.small)
+        case .ok:      Image(systemName: "checkmark.circle.fill").font(.system(size: 12)).foregroundStyle(.green)
+        case .error:   Image(systemName: "xmark.circle.fill").font(.system(size: 12)).foregroundStyle(.red)
+        }
+    }
+
+    private var detail: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ToolBodyView(kind: d.body)
+            if let result = card.result, !result.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(card.status == .error ? "ERROR" : "OUTPUT")
+                        .font(.system(size: 9, weight: .semibold)).foregroundStyle(.tertiary)
+                    CollapsibleMono(text: result, isError: card.status == .error)
+                }
+            }
+        }
+    }
+}
+
+private extension ToolTone {
+    var color: Color {
+        switch self {
+        case .read:  return .blue
+        case .exec:  return .teal
+        case .write: return .orange
+        case .agent: return .purple
+        case .plain: return .secondary
+        }
+    }
+}
+
+/// The expandable detail under a tool row: a shell command, file content, a markdown plan/prompt,
+/// or a red/green edit diff.
+struct ToolBodyView: View {
+    let kind: ToolBody
+    var body: some View {
+        switch kind {
+        case .none:
+            EmptyView()
+        case .command(let cmd):
+            Text("$ \(cmd)")
+                .font(.system(size: 11.5, design: .monospaced)).textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(8)
+                .background(Color.gray.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+        case .code(let code):
+            CollapsibleMono(text: code, isError: false)
+        case .markdown(let md):
+            MarkdownView(source: md)
+                .font(.callout).textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        case .diff(let hunks):
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(Array(hunks.enumerated()), id: \.offset) { _, hunk in
+                    DiffHunkView(lines: hunk)
+                }
+            }
+        }
+    }
+}
+
+struct DiffHunkView: View {
+    let lines: [DiffLine]
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                DiffLineView(line: line)
+            }
+        }
+        .padding(.vertical, 3)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.gray.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
+    }
+}
+
+struct DiffLineView: View {
+    let line: DiffLine
+    var body: some View {
+        if line.kind == .gap {
+            Text("⋯ \(line.gapCount) unchanged \(line.gapCount == 1 ? "line" : "lines") ⋯")
+                .font(.system(size: 10.5, design: .monospaced)).foregroundStyle(.tertiary)
+                .padding(.horizontal, 8).padding(.vertical, 1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            HStack(alignment: .top, spacing: 6) {
+                Text(sign).font(.system(size: 11, design: .monospaced)).foregroundStyle(fg).frame(width: 7, alignment: .leading)
+                Text(line.text.isEmpty ? " " : line.text)
+                    .font(.system(size: 11, design: .monospaced)).foregroundStyle(fg)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.horizontal, 8).padding(.vertical, 1)
+            .background(bg)
+        }
+    }
+    private var sign: String { line.kind == .add ? "+" : line.kind == .del ? "-" : " " }
+    private var fg: Color { line.kind == .add ? .green : line.kind == .del ? .red : .secondary }
+    private var bg: Color { line.kind == .add ? Color.green.opacity(0.12) : line.kind == .del ? Color.red.opacity(0.12) : .clear }
+}
+
+/// Monospace text that collapses past a line threshold (Read/Bash output, file content) so one
+/// tool call can't flood the transcript — mirrors web's `Pre`.
+struct CollapsibleMono: View {
+    let text: String
+    var isError: Bool = false
+    @State private var open = false
+    private let threshold = 16
+    var body: some View {
+        let lines = text.components(separatedBy: "\n")
+        let hidden = max(0, lines.count - threshold)
+        let shown = (open || hidden == 0) ? text : lines.prefix(threshold).joined(separator: "\n")
+        VStack(alignment: .leading, spacing: 4) {
+            Text(shown)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(isError ? Color.red : Color.secondary)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if hidden > 0 {
+                Button(open ? "Show less" : "Show \(hidden) more lines") { open.toggle() }
+                    .buttonStyle(.plain).font(.caption2).foregroundStyle(.blue)
+            }
         }
     }
 }
