@@ -13,13 +13,21 @@ struct MarkdownView: View {
     let source: String
 
     var body: some View {
-        let blocks = parseMarkdownBlocks(source)
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(blocks.indices, id: \.self) { i in
-                MarkdownBlockView(block: blocks[i])
+        // Very large strings: skip block + inline Markdown parsing — both run synchronously on
+        // the main actor and stall the UI on huge replies. Plain text suffices at that size.
+        if source.count > 8000 {
+            Text(source)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            let blocks = parseMarkdownBlocks(source)
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(blocks.indices, id: \.self) { i in
+                    MarkdownBlockView(block: blocks[i])
+                }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

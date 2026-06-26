@@ -102,13 +102,22 @@ struct TranscriptItemView: View {
 
 struct UserBubbleView: View {
     let bubble: UserBubble
+    @State private var expanded = false
+    // Collapse a giant pasted bubble: one huge Text lays out synchronously and stalls the UI.
+    private let truncateAt = 6000
     var body: some View {
+        let long = bubble.text.count > truncateAt
+        let shown = long && !expanded ? String(bubble.text.prefix(truncateAt)) : bubble.text
         HStack {
             Spacer(minLength: 60)
             VStack(alignment: .trailing, spacing: 3) {
-                Text(bubble.text).textSelection(.enabled)
+                Text(shown).textSelection(.enabled)
                     .padding(.horizontal, 12).padding(.vertical, 8)
                     .background(.tint.opacity(0.15), in: RoundedRectangle(cornerRadius: 12))
+                if long {
+                    Button(expanded ? "Show less" : "Show more") { expanded.toggle() }
+                        .buttonStyle(.plain).font(.caption).foregroundStyle(.secondary)
+                }
                 if bubble.pending {
                     Text("Sending…").font(.caption2).foregroundStyle(.secondary)
                 }

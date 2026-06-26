@@ -59,6 +59,7 @@ import { AttachmentImage, ChatImage, StreamingMessage, Transcript, type TurnImag
 import { ApprovalPanel } from './ApprovalPanel';
 import type { Runner } from './TasksSidePanel';
 import type { PlanUsage } from '@orbit/shared';
+import { MAX_PROMPT_CHARS } from '@orbit/shared';
 
 interface RunEvent {
   seq: number;
@@ -2175,6 +2176,10 @@ export function AgentView({ runner }: { runner: Runner }) {
             ref={taRef}
             variant="borderless"
             autoSize={{ minRows: 1, maxRows: 6 }}
+            // Hard-cap input length: an oversized prompt freezes the composer (autoSize
+            // remeasures the whole value on every keystroke) and the transcript. Pasting past
+            // the cap truncates; very large content should go through Upload file instead.
+            maxLength={MAX_PROMPT_CHARS}
             placeholder={
               !runner.online
                 ? 'Runner offline'

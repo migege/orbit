@@ -242,6 +242,11 @@ function NodeView({ node, live }: { node: Node; live?: boolean }) {
   }
 }
 
+// Collapse a user bubble past this many characters: a pasted blob would otherwise lay out as
+// one giant pre-wrap node and stall the transcript. The composer caps input well above this;
+// resumed/old sessions can still carry big messages.
+const USER_BUBBLE_TRUNCATE = 6000;
+
 // User message bubble. Input is kept verbatim (pre-wrap), not Markdown-parsed, so a
 // literal '#' or '*' the user typed isn't reinterpreted. Any images sent with the turn
 // render above the text (an image-only turn has empty text) — prefer the local preview
@@ -251,6 +256,9 @@ function NodeView({ node, live }: { node: Node; live?: boolean }) {
 // the pointer can travel down onto it without dismissing it (CSS :hover hits ancestors).
 function UserBubble({ node }: { node: TextNode }) {
   const [copied, setCopied] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const longText = node.text.length > USER_BUBBLE_TRUNCATE;
+  const shownText = longText && !expanded ? node.text.slice(0, USER_BUBBLE_TRUNCATE) : node.text;
   const copy = () => {
     void navigator.clipboard?.writeText(node.text)?.catch(() => {});
     setCopied(true);
@@ -286,8 +294,15 @@ function UserBubble({ node }: { node: TextNode }) {
             ))}
           </div>
         )}
-        {node.text}
+        {shownText}
       </div>
+      {longText && (
+        <button className="chat-more" onClick={() => setExpanded((e) => !e)}>
+          {expanded
+            ? 'Show less'
+            : `Show ${(node.text.length - USER_BUBBLE_TRUNCATE).toLocaleString()} more characters`}
+        </button>
+      )}
       {node.text && (
         <div className="chat-user-meta">
           <button

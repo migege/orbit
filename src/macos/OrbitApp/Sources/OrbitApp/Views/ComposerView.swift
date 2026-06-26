@@ -81,6 +81,13 @@ struct ComposerView: View {
                         if new == nil { console.slashScope = nil }
                     }
                     .onChange(of: console.replyContext) { if console.replyContext != nil { inputFocused = true } }
+                    // Clamp input length: an oversized prompt freezes SwiftUI's synchronous
+                    // text layout. Pasting past the cap truncates; big content is a file upload.
+                    .onChange(of: console.composerText) { _, text in
+                        if text.count > ComposerLogic.maxPromptChars {
+                            console.composerText = String(text.prefix(ComposerLogic.maxPromptChars))
+                        }
+                    }
 
                 if console.state.status == .running {
                     Button { Task { await console.interrupt() } } label: {

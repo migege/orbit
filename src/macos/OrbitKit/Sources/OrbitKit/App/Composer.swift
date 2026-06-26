@@ -10,6 +10,11 @@ public enum SendAvailability: Equatable, Sendable {
 }
 
 public enum ComposerLogic {
+    /// Hard cap on a single prompt, in characters. An oversized message freezes SwiftUI's
+    /// synchronous text layout, so the composer clamps input to this and the server rejects
+    /// anything larger. Very large content belongs in an uploaded file, not a prompt.
+    public static let maxPromptChars = 50_000
+
     /// Map session status → send availability. Terminal statuses are `sendNow` because a send
     /// revives them via `--resume` (full context preserved).
     public static func availability(status: RunStatus) -> SendAvailability {

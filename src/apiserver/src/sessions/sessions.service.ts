@@ -12,6 +12,7 @@ import {
   ApprovalInfo,
   ApprovalStatus,
   FilePatch,
+  MAX_PROMPT_CHARS,
   RunEventType,
   SessionEndReason,
 } from '@orbit/shared';
@@ -20,6 +21,17 @@ import { QueueService } from '../queue/queue.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { CreateSessionDto, SessionConfigDto, SessionResumeDto, SessionTurnDto } from './dto';
 import { generateNaming } from './naming';
+
+// A single prompt / turn message past this size freezes the web & macOS clients (one giant
+// text node lays out synchronously on the main thread), so reject it here as the server-side
+// backstop to the composer's own client-side cap.
+function assertPromptSize(text: string, field: 'prompt' | 'message'): void {
+  if (text.length > MAX_PROMPT_CHARS) {
+    throw new BadRequestException(
+      `${field} is too long: ${text.length} characters (max ${MAX_PROMPT_CHARS})`,
+    );
+  }
+}
 
 @Injectable()
 export class SessionsService {
@@ -63,6 +75,7 @@ export class SessionsService {
     opts?: { source?: string; batch?: { id: string; maxConcurrent: number } },
   ) {
     if (!dto.prompt) throw new BadRequestException('prompt is required');
+    assertPromptSize(dto.prompt, 'prompt');
     // The session runs on a runner. Prefer an explicit pin; otherwise derive it from
     // the chosen agent's machine (agents belong to a runner) — picking an agent is
     // enough to know which machine + project dir to run in.
@@ -504,6 +517,7 @@ export class SessionsService {
 
   /** Enqueue a user message for a live or still-queued (PENDING) session. */
   async createTurn(ownerId: string, id: string, dto: SessionTurnDto) {
+    assertPromptSize(dto.content, 'message');
     const session = await this.getSendable(ownerId, id);
     const existing = await this.prisma.conversationTurn.findUnique({
       where: { sessionId_clientTurnId: { sessionId: id, clientTurnId: dto.clientTurnId } },
@@ -848,6 +862,7 @@ export class SessionsService {
     dto: SessionResumeDto,
     opts?: { batch?: { id: string; maxConcurrent: number } | null },
   ) {
+    assertPromptSize(dto.content, 'message');
     const session = await this.prisma.session.findFirst({ where: { id, ownerId } });
     if (!session) throw new NotFoundException('session not found');
     // Still live — a normal turn belongs on the running process, not a revive. But a
