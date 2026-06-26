@@ -111,6 +111,31 @@ final class ToolDisplayTests: XCTestCase {
         XCTAssertTrue(d.autoOpen)
     }
 
+    func testNumberedAssignsGutterLineNumbers() {
+        // ctx 'a' → (1,1); del 'b' → (2,nil); add 'B' → (nil,2); ctx 'c' → (3,3)
+        let hunk = [
+            DiffLine(kind: .ctx, text: "a"),
+            DiffLine(kind: .del, text: "b"),
+            DiffLine(kind: .add, text: "B"),
+            DiffLine(kind: .ctx, text: "c"),
+        ]
+        let n = ToolDisplay.numbered(hunk)
+        XCTAssertEqual(n.map(\.oldNumber), [1, 2, nil, 3])
+        XCTAssertEqual(n.map(\.newNumber), [1, nil, 2, 3])
+    }
+
+    func testNumberedGapAdvancesBothCounters() {
+        let hunk = [
+            DiffLine(kind: .ctx, text: "a"),
+            DiffLine(kind: .gap, text: "", gapCount: 5),
+            DiffLine(kind: .add, text: "z"),
+        ]
+        let n = ToolDisplay.numbered(hunk)
+        XCTAssertNil(n[1].oldNumber)                 // gap shows no number
+        XCTAssertEqual(n[2].newNumber, 7)            // 1 ctx + 5 skipped + this add
+        XCTAssertEqual(n[2].oldNumber, nil)
+    }
+
     func testCollapseContextInsertsGap() {
         let old = (1...20).map { "line \($0)" }.joined(separator: "\n")
         let new = old + "\nline 21"                 // single change at the end

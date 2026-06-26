@@ -279,11 +279,20 @@ struct ToolCardView: View {
         VStack(alignment: .leading, spacing: 8) {
             ToolBodyView(kind: d.body)
             if let result = card.result, !result.isEmpty {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(card.status == .error ? "ERROR" : "OUTPUT")
-                        .font(.system(size: 9, weight: .semibold)).foregroundStyle(.tertiary)
-                    CollapsibleMono(text: result, isError: card.status == .error)
+                let isErr = card.status == .error
+                // Mirrors web `.chat-result`: a tinted panel (red on error, neutral otherwise) with a
+                // small uppercase label. The output text itself stays muted even on error (only the
+                // panel + label carry the error colour) — matching web's muted `<Pre>`.
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(isErr ? "ERROR" : "OUTPUT")
+                        .font(.system(size: 9, weight: .semibold)).tracking(0.4)
+                        .foregroundStyle(isErr ? Color.red : Color.secondary)
+                    CollapsibleMono(text: result)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 9).padding(.vertical, 6)
+                .background(isErr ? Color.red.opacity(0.10) : Color.secondary.opacity(0.08),
+                            in: RoundedRectangle(cornerRadius: 6))
             }
         }
     }
@@ -310,13 +319,14 @@ struct ToolBodyView: View {
         case .none:
             EmptyView()
         case .command(let cmd):
-            Text("$ \(cmd)")
+            (Text("$ ").foregroundColor(.blue).fontWeight(.semibold) + Text(cmd))
                 .font(.system(size: 11.5, design: .monospaced)).textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(8)
-                .background(Color.gray.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+                .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+                .overlay { RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.18), lineWidth: 1) }
         case .code(let code):
-            CollapsibleMono(text: code, isError: false)
+            CollapsibleMono(text: code)
         case .markdown(let md):
             MarkdownView(source: md)
                 .font(.callout).textSelection(.enabled)
@@ -324,7 +334,7 @@ struct ToolBodyView: View {
         case .diff(let hunks):
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(Array(hunks.enumerated()), id: \.offset) { _, hunk in
-                    DiffHunkView(lines: hunk)
+                    DiffHunkView(lines: ToolDisplay.numbered(hunk))
                 }
             }
         }
@@ -332,37 +342,56 @@ struct ToolBodyView: View {
 }
 
 struct DiffHunkView: View {
-    let lines: [DiffLine]
+    let lines: [ToolDisplay.NumberedDiffLine]
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
-                DiffLineView(line: line)
+            ForEach(Array(lines.enumerated()), id: \.offset) { _, nl in
+                DiffLineView(nl: nl)
             }
         }
-        .padding(.vertical, 3)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.gray.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay { RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.2), lineWidth: 1) }
     }
 }
 
 struct DiffLineView: View {
-    let line: DiffLine
+    let nl: ToolDisplay.NumberedDiffLine
+    private var line: DiffLine { nl.line }
     var body: some View {
         if line.kind == .gap {
-            Text("⋯ \(line.gapCount) unchanged \(line.gapCount == 1 ? "line" : "lines") ⋯")
-                .font(.system(size: 10.5, design: .monospaced)).foregroundStyle(.tertiary)
-                .padding(.horizontal, 8).padding(.vertical, 1)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 0) {
+                gutterText("")
+                gutterText("")
+                Text("⋯ \(line.gapCount) unchanged \(line.gapCount == 1 ? "line" : "lines") ⋯")
+                    .font(.system(size: 10.5, design: .monospaced)).italic().foregroundStyle(.tertiary)
+                    .padding(.leading, 6)
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.secondary.opacity(0.06))
         } else {
-            HStack(alignment: .top, spacing: 6) {
-                Text(sign).font(.system(size: 11, design: .monospaced)).foregroundStyle(fg).frame(width: 7, alignment: .leading)
+            HStack(alignment: .top, spacing: 0) {
+                gutter(nl.oldNumber)
+                gutter(nl.newNumber)
+                Text(sign).font(.system(size: 11, design: .monospaced)).foregroundStyle(fg)
+                    .frame(width: 14, alignment: .center)
                 Text(line.text.isEmpty ? " " : line.text)
                     .font(.system(size: 11, design: .monospaced)).foregroundStyle(fg)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(.trailing, 6)
             }
-            .padding(.horizontal, 8).padding(.vertical, 1)
+            .padding(.vertical, 1)
             .background(bg)
         }
+    }
+    private func gutter(_ n: Int?) -> some View { gutterText(n.map(String.init) ?? "") }
+    private func gutterText(_ s: String) -> some View {
+        Text(s)
+            .font(.system(size: 10, design: .monospaced)).foregroundStyle(.tertiary)
+            .frame(width: 30, alignment: .trailing)
+            .padding(.vertical, 1)
+            .background(Color.secondary.opacity(0.06))
     }
     private var sign: String { line.kind == .add ? "+" : line.kind == .del ? "-" : " " }
     private var fg: Color { line.kind == .add ? .green : line.kind == .del ? .red : .secondary }
@@ -373,7 +402,6 @@ struct DiffLineView: View {
 /// tool call can't flood the transcript — mirrors web's `Pre`.
 struct CollapsibleMono: View {
     let text: String
-    var isError: Bool = false
     @State private var open = false
     private let threshold = 16
     var body: some View {
@@ -383,7 +411,7 @@ struct CollapsibleMono: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(shown)
                 .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(isError ? Color.red : Color.secondary)
+                .foregroundStyle(Color.secondary)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
             if hidden > 0 {

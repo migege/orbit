@@ -249,6 +249,35 @@ public struct ToolDisplay: Equatable, Sendable {
         return out
     }
 
+    /// A diff line paired with its hunk-relative gutter line numbers (mirrors web `Diff`'s oldNo/newNo).
+    /// Edit payloads carry no file offset, so these are hunk-local — just enough to keep both sides aligned.
+    public struct NumberedDiffLine: Equatable, Sendable {
+        public let line: DiffLine
+        public let oldNumber: Int?   // shown for context + deletions
+        public let newNumber: Int?   // shown for context + additions
+    }
+
+    /// Walk a hunk assigning running old/new line numbers; a `.gap` advances both counters but shows none.
+    public static func numbered(_ hunk: [DiffLine]) -> [NumberedDiffLine] {
+        var oldNo = 0, newNo = 0
+        return hunk.map { r in
+            switch r.kind {
+            case .gap:
+                oldNo += r.gapCount; newNo += r.gapCount
+                return NumberedDiffLine(line: r, oldNumber: nil, newNumber: nil)
+            case .ctx:
+                oldNo += 1; newNo += 1
+                return NumberedDiffLine(line: r, oldNumber: oldNo, newNumber: newNo)
+            case .del:
+                oldNo += 1
+                return NumberedDiffLine(line: r, oldNumber: oldNo, newNumber: nil)
+            case .add:
+                newNo += 1
+                return NumberedDiffLine(line: r, oldNumber: nil, newNumber: newNo)
+            }
+        }
+    }
+
     // MARK: - summary helpers
 
     private static func joinSummary(_ vals: [JSONValue?]) -> String? {
