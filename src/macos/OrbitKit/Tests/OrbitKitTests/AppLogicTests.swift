@@ -15,7 +15,7 @@ final class AppLogicTests: XCTestCase {
 
     private func session(_ id: String, _ status: RunStatus, approvals: Int = 0) -> Session {
         Session(id: id, title: id, status: status, agentId: nil, assignedRunnerId: nil,
-                pendingApprovals: approvals, branch: nil, updatedAt: nil)
+                pendingApprovals: approvals, branch: nil, updatedAt: nil, agent: nil)
     }
 
     func testActiveGroupingOrdersAndBuckets() {

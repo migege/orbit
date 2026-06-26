@@ -59,15 +59,100 @@ struct AgentRowView: View {
     }
 }
 
-/// Right column: the selected agent's edit form (or a prompt to pick one).
-struct AgentFormView: View {
+/// Right column: the selected agent's detail — a Sessions browser (Active/Completed/System,
+/// mirroring the web agent console) and the edit form, on a segmented switch.
+struct AgentDetailView: View {
     @Environment(AppModel.self) private var model
     var body: some View {
         if let agents = model.agents, let id = model.selectedAgentID, let a = agents.agent(id) {
-            AgentFormContent(agents: agents, agent: a).id(a.id)
+            AgentDetailContent(agents: agents, agent: a).id(a.id)
         } else {
             ContentUnavailableView("Select an agent", systemImage: "person.2",
-                                   description: Text("Edit an agent's model, instructions, and more here."))
+                                   description: Text("Its sessions and settings appear here."))
+        }
+    }
+}
+
+private enum AgentPane: String, CaseIterable { case sessions = "Sessions", settings = "Settings" }
+
+struct AgentDetailContent: View {
+    @Environment(AppModel.self) private var app
+    let agents: AgentsModel
+    let agent: Agent
+    @State private var pane: AgentPane = .sessions
+    @State private var view: SessionView = .active
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Picker("", selection: $pane) {
+                ForEach(AgentPane.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented).labelsHidden().padding(8)
+            Divider()
+            switch pane {
+            case .sessions: sessionsPane
+            case .settings: AgentFormContent(agents: agents, agent: agent)
+            }
+        }
+        .navigationTitle(agent.name)
+    }
+
+    private var sessionsPane: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                Picker("", selection: $view) {
+                    ForEach(SessionView.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented).labelsHidden().padding(8)
+                List {
+                    ForEach(agents.agentSessions) { s in
+                        NavigationLink(value: s.id) { AgentSessionRow(session: s) }
+                    }
+                }
+                .overlay {
+                    if agents.agentSessions.isEmpty {
+                        ContentUnavailableView(
+                            agents.sessionsLoading ? "Loading…" : "No \(view.title.lowercased()) sessions",
+                            systemImage: "bubble.left.and.bubble.right")
+                    }
+                }
+            }
+            .navigationDestination(for: String.self) { sid in
+                if let baseURL = app.baseURL {
+                    ConsoleView(sessionID: sid, baseURL: baseURL, tokenStore: app.tokenStore)
+                }
+            }
+        }
+        .task(id: view) { await agents.loadSessions(agentID: agent.id, view: view) }
+    }
+}
+
+struct AgentSessionRow: View {
+    let session: Session
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle().fill(color).frame(width: 6, height: 6)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(session.title ?? "Untitled session").lineLimit(1)
+                Text(session.status.rawValue.replacingOccurrences(of: "_", with: " ").capitalized)
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            if let n = session.pendingApprovals, n > 0 {
+                Text("\(n)").font(.caption2.bold())
+                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .background(.orange, in: Capsule()).foregroundStyle(.white)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+    private var color: Color {
+        switch session.status {
+        case .running:       return .blue
+        case .awaitingInput: return .orange
+        case .succeeded:     return .green
+        case .failed:        return .red
+        default:             return .secondary
         }
     }
 }

@@ -82,6 +82,16 @@ public struct Session: Codable, Equatable, Sendable, Identifiable {
     public let pendingApprovals: Int?
     public let branch: String?
     public let updatedAt: String?
+    /// The owning agent, nested by the list/detail payloads (the flat `agentId` is NOT sent
+    /// there, so per-agent grouping reads `agent.id`).
+    public let agent: SessionAgentRef?
+}
+
+/// The agent nested on a session row (`{id, name, model}`).
+public struct SessionAgentRef: Codable, Equatable, Sendable, Identifiable {
+    public let id: String
+    public let name: String?
+    public let model: String?
 }
 
 /// POST /sessions/:id/turns — send a user message or raw shell command.

@@ -13,6 +13,10 @@ final class AgentsModel {
     private(set) var loading = false
     var errorText: String?
 
+    // The selected agent's sessions for the current Active/Completed/System view.
+    private(set) var agentSessions: [Session] = []
+    private(set) var sessionsLoading = false
+
     private let api: APIClient
 
     init(baseURL: URL, tokenStore: TokenStore) {
@@ -50,6 +54,17 @@ final class AgentsModel {
     func delete(_ id: String) async {
         do { try await api.deleteAgent(id); await load() }
         catch { errorText = friendly(error) }
+    }
+
+    /// Load one agent's sessions for a view. The list endpoint filters by view only, so narrow to
+    /// the agent client-side (the payload nests `agent.id`), mirroring the web agent console.
+    func loadSessions(agentID: String, view: SessionView) async {
+        sessionsLoading = true
+        defer { sessionsLoading = false }
+        do {
+            let all = try await api.listSessions(view: view.queryValue)
+            agentSessions = SessionFilter.forAgent(all, agentID: agentID)
+        } catch { errorText = friendly(error) }
     }
 
     private func friendly(_ error: Error) -> String {

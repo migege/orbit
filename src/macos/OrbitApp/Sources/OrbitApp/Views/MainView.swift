@@ -113,7 +113,7 @@ struct SectionDetail: View {
         case .tasks:
             TaskDetailView()
         case .agents:
-            AgentFormView()
+            AgentDetailView()
         case .runners:
             RunnerDetailView()
         case .admin:

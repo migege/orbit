@@ -5,7 +5,7 @@ final class Phase3LogicTests: XCTestCase {
 
     private func session(_ id: String, _ status: RunStatus, approvals: Int = 0, title: String? = nil) -> Session {
         Session(id: id, title: title ?? id, status: status, agentId: nil, assignedRunnerId: nil,
-                pendingApprovals: approvals, branch: nil, updatedAt: nil)
+                pendingApprovals: approvals, branch: nil, updatedAt: nil, agent: nil)
     }
 
     // MARK: deep links
