@@ -14,7 +14,7 @@ dmg="$out/$APP_NAME-v$VERSION-$archtag.dmg"   # filename carries the v-prefixed 
 zip="$out/$APP_NAME-v$VERSION-$archtag.zip"   # zipped .app = Sparkle update-channel payload
 # Sparkle auto-update config; injected into Info.plist only when SU_PUBLIC_ED_KEY is set (release).
 SU_FEED_URL="${SU_FEED_URL:-https://jianghailong-xy.github.io/orbit/appcast.xml}"
-SU_PUBLIC_ED_KEY="${SU_PUBLIC_ED_KEY:-}"
+SU_PUBLIC_ED_KEY="${SU_PUBLIC_ED_KEY:-8huUODCPnWSupH+g30/RWaCGOCeRzRY/oAlShNuIzm4=}"   # EdDSA public key (not secret)
 echo "▶ swift build -c release ($ARCHS)"
 ( cd "$pkg" && swift build -c release $archflags )
 bin="$(cd "$pkg" && swift build -c release $archflags --show-bin-path)/OrbitApp"
