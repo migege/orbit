@@ -643,6 +643,11 @@ func mergeToMain(req MergeCommand) mergeOutcome {
 // checked out nowhere — both strict fast-forwards, since the rebase put target underneath. On a
 // rebase conflict it aborts and reports "conflict". Inline identity so the rewritten commits
 // never fail on a runner with no git user.*.
+//
+// When origin tracks target, it pushes the rebased result to origin/<target> BEFORE advancing the
+// local branch, so the local target only ever moves to what origin already accepted — local merges
+// can't pile up unpushed and silently diverge from origin. A concurrent push that beats ours is
+// rejected (non-fast-forward); we re-sync to the new origin tip and replay, up to mergePushAttempts.
 func rebaseFastForward(repoRoot, source, target, sessionID string, ffAtRoot bool) mergeOutcome {
 	tmpBranch := "orbit/_rebase-" + sessionID
 	tmp := filepath.Join(worktreesDir(), "_rebase-"+sessionID)
@@ -662,14 +667,44 @@ func rebaseFastForward(repoRoot, source, target, sessionID string, ffAtRoot bool
 		_, _ = git(repoRoot, "branch", "-D", tmpBranch)
 	}()
 
-	// Replay the temp branch onto target. A conflict stops the rebase; abort so the worktree is
-	// left clean before we tear it down (git writes "CONFLICT ..." to stdout, returned as `out`).
-	if out, err := git(tmp,
-		"-c", "user.email=runner@orbit", "-c", "user.name=Orbit Runner",
-		"rebase", target); err != nil {
-		msg := strings.TrimSpace(out + "\n" + gitStderr(err))
-		_, _ = git(tmp, "rebase", "--abort")
-		return mergeOutcome{Status: "conflict", Message: clip(msg, 1000)}
+	pushToOrigin := originTracks(repoRoot, target)
+
+	// Replay the temp branch onto target and, when origin tracks target, push the result so
+	// origin/<target> advances in lockstep. A push that origin rejects (it moved under us) is
+	// retried: re-sync the local target to the new tip and replay onto it. The loop ends on a clean
+	// push, a local-only target (nothing to push), a rebase conflict, or a divergence we can't fix.
+	for attempt := 0; ; attempt++ {
+		// A conflict stops the rebase; abort so the worktree is left clean before we tear it down
+		// (git writes "CONFLICT ..." to stdout, returned as `out`).
+		if out, err := git(tmp,
+			"-c", "user.email=runner@orbit", "-c", "user.name=Orbit Runner",
+			"rebase", target); err != nil {
+			msg := strings.TrimSpace(out + "\n" + gitStderr(err))
+			_, _ = git(tmp, "rebase", "--abort")
+			return mergeOutcome{Status: "conflict", Message: clip(msg, 1000)}
+		}
+		if !pushToOrigin {
+			break // local-only target (or no origin): nothing to push.
+		}
+		// Push the rebased commits, fast-forwarding origin/<target> (target == origin/<target> after
+		// the reconcile, so origin is an ancestor of the rebased tip unless it just moved).
+		out, err := git(tmp, "push", "origin", "HEAD:refs/heads/"+target)
+		if err == nil {
+			break
+		}
+		combined := strings.TrimSpace(out + "\n" + gitStderr(err))
+		if !isNonFastForward(combined) {
+			// Auth/network/other — origin untouched, local target not yet advanced. Surface it.
+			return mergeOutcome{Status: "error", Message: clip(fmt.Sprintf("could not push %s to origin: %s", target, combined), 1000)}
+		}
+		if attempt+1 >= mergePushAttempts {
+			return mergeOutcome{Status: "error", Message: fmt.Sprintf("origin/%s kept advancing during the merge — retry", target)}
+		}
+		// Origin advanced under us. Fast-forward the local target to the new origin tip (or surface
+		// a genuine divergence) so the next iteration replays onto the up-to-date base.
+		if oc := reconcileTargetWithOrigin(repoRoot, target); oc != nil {
+			return *oc
+		}
 	}
 
 	// Advance target to the rebased commits — a strict fast-forward (target is now an ancestor).
@@ -684,6 +719,30 @@ func rebaseFastForward(repoRoot, source, target, sessionID string, ffAtRoot bool
 	sha, _ := git(repoRoot, "rev-parse", target)
 	logln(fmt.Sprintf("rebased %s onto %s (%s) for session %s", source, target, shortSha(sha), sessionID))
 	return mergeOutcome{Status: "merged", MergedSha: sha}
+}
+
+// mergePushAttempts bounds how many times a merge re-syncs and re-pushes when a concurrent push to
+// origin keeps beating ours — enough to absorb a racing writer, not an infinite loop.
+const mergePushAttempts = 3
+
+// originTracks reports whether the repo has an 'origin' remote that already carries <target>, i.e.
+// a successful merge should push the advance back to origin/<target>. False for local-init repos
+// (no origin) and for branches that live only locally — both keep the merge local-only.
+func originTracks(repoRoot, target string) bool {
+	if _, err := git(repoRoot, "remote", "get-url", "origin"); err != nil {
+		return false
+	}
+	_, err := git(repoRoot, "rev-parse", "--verify", "--quiet", "origin/"+target)
+	return err == nil
+}
+
+// isNonFastForward reports whether a failed `git push` was rejected because origin moved ahead (the
+// retryable case), versus an auth/network/other failure that retrying won't fix.
+func isNonFastForward(pushOutput string) bool {
+	s := strings.ToLower(pushOutput)
+	return strings.Contains(s, "non-fast-forward") ||
+		strings.Contains(s, "fetch first") ||
+		strings.Contains(s, "[rejected]")
 }
 
 // reconcileTargetWithOrigin fast-forwards the local target branch to origin/<target> before a

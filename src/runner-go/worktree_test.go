@@ -405,6 +405,71 @@ func TestMergeToMainDivergedLocalTargetErrors(t *testing.T) {
 	}
 }
 
+// TestMergeToMainPushesResultToOrigin: a clean merge pushes the rebased result back to
+// origin/<target>, so origin and local main stay in lockstep — local merges never pile up unpushed
+// (the state that eventually diverges from origin and blocks the next merge).
+func TestMergeToMainPushesResultToOrigin(t *testing.T) {
+	t.Setenv("ORBIT_HOME", t.TempDir())
+	repo := initRepo(t)
+	bare := addOriginBare(t, repo)
+
+	mustGit(t, repo, "checkout", "-b", "orbit/feat")
+	commitFile(t, repo, "feat.txt", "feature\n", "feat work")
+	mustGit(t, repo, "checkout", "main")
+
+	out := mergeToMain(MergeCommand{WorkDir: repo, Branch: "orbit/feat", SessionID: "s7"})
+	if out.Status != "merged" {
+		t.Fatalf("expected merged, got %q (%s)", out.Status, out.Message)
+	}
+	localMain := mustGit(t, repo, "rev-parse", "main")
+	originMain := mustGit(t, bare, "rev-parse", "main")
+	if localMain != originMain {
+		t.Errorf("origin/main should match local main after merge: local %s, origin %s", localMain, originMain)
+	}
+	if out.MergedSha != localMain {
+		t.Errorf("MergedSha %s should equal local main %s", out.MergedSha, localMain)
+	}
+	if _, err := git(bare, "cat-file", "-e", "main:feat.txt"); err != nil {
+		t.Errorf("origin/main should carry the merged file: %v", err)
+	}
+}
+
+// TestMergeToMainNoOriginStaysLocal: with no 'origin' remote the merge still advances local main
+// and reports merged — the push is skipped, not an error.
+func TestMergeToMainNoOriginStaysLocal(t *testing.T) {
+	t.Setenv("ORBIT_HOME", t.TempDir())
+	repo := initRepo(t)
+
+	mustGit(t, repo, "checkout", "-b", "orbit/feat")
+	commitFile(t, repo, "feat.txt", "feature\n", "feat work")
+	mustGit(t, repo, "checkout", "main")
+
+	out := mergeToMain(MergeCommand{WorkDir: repo, Branch: "orbit/feat", SessionID: "s8"})
+	if out.Status != "merged" {
+		t.Fatalf("expected merged with no origin, got %q (%s)", out.Status, out.Message)
+	}
+	if _, err := git(repo, "cat-file", "-e", "main:feat.txt"); err != nil {
+		t.Errorf("local main should carry the merged file: %v", err)
+	}
+}
+
+// TestIsNonFastForward: only origin-moved rejections are retryable; auth/network/empty output is not.
+func TestIsNonFastForward(t *testing.T) {
+	rejected := "To github.com:o/r.git\n ! [rejected]        main -> main (non-fast-forward)\nerror: failed to push some refs\nhint: Updates were rejected because the remote contains work; fetch first"
+	if !isNonFastForward(rejected) {
+		t.Errorf("rejected push should classify as non-fast-forward: %q", rejected)
+	}
+	for _, other := range []string{
+		"fatal: Authentication failed for 'https://github.com/o/r.git'",
+		"ssh: connect to host github.com port 22: Connection timed out",
+		"",
+	} {
+		if isNonFastForward(other) {
+			t.Errorf("non-rejection output should not classify as non-fast-forward: %q", other)
+		}
+	}
+}
+
 // TestParkCheckpointRoundTrip: a park finalize (checkpoint=true) commits the in-progress work
 // tagged with the park trailer, and a later resume (uncommitParkCheckpoint) soft-resets it back
 // to an uncommitted working tree with content intact — leaving no checkpoint commit in history.
