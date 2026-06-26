@@ -77,9 +77,18 @@ struct AgentPanes: View {
                 }
             }
         }
-        // Reload when either the agent or the view changes (one key so a fast switch coalesces).
+        // Reload when either the agent or the view changes (one key so a fast switch coalesces),
+        // then poll every 4s — the same cadence as the Active sidebar — so external changes (new
+        // sessions, status transitions made from the web) show up without reopening the agent.
+        // The task is bound to this pane's lifetime: switching agent/view cancels and restarts it,
+        // and leaving the Sessions pane stops the poll.
         .task(id: "\(agent.id)|\(view.rawValue)") {
-            await agents.loadSessions(agentID: agent.id, view: view)
+            await agents.loadSessions(agentID: agent.id, view: view, reset: true)
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                if Task.isCancelled { break }
+                await agents.loadSessions(agentID: agent.id, view: view)
+            }
         }
         // The edit form moved off a Sessions/Settings segmented switch into this toolbar gear → sheet,
         // leaving the content column to show only the session list.

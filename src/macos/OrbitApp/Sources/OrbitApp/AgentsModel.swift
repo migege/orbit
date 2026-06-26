@@ -58,8 +58,15 @@ final class AgentsModel {
 
     /// Load one agent's sessions for a view. The list endpoint filters by view only, so narrow to
     /// the agent client-side (the payload nests `agent.id`), mirroring the web agent console.
-    func loadSessions(agentID: String, view: SessionView) async {
-        sessionsLoading = true
+    ///
+    /// `reset` distinguishes the first fetch (after an agent/view switch) from a background poll:
+    /// the first fetch clears the stale list and shows "Loading…"; polls refresh silently so a list
+    /// that legitimately has no sessions doesn't flash the spinner every tick.
+    func loadSessions(agentID: String, view: SessionView, reset: Bool = false) async {
+        if reset {
+            agentSessions = []
+            sessionsLoading = true
+        }
         defer { sessionsLoading = false }
         do {
             let all = try await api.listSessions(view: view.queryValue)
