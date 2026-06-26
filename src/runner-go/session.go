@@ -298,6 +298,14 @@ func runSessionProcess(ctx context.Context, shutdownCtx context.Context, t *Tran
 	} else {
 		args = append(args, "--resume", job.SessionUUID)
 	}
+	// Uploaded attachments land in the session's uploads dir, which is OUTSIDE execDir so they
+	// stay out of git (see writeUpload). Add it as an explicit working dir so claude can read
+	// them without a per-read permission prompt; created up front so the flag points at an
+	// existing dir even before the first upload arrives.
+	upDir := uploadsDir(job.SessionID)
+	if err := os.MkdirAll(upDir, 0o755); err == nil {
+		args = append(args, "--add-dir", upDir)
+	}
 
 	procCtx, procCancel := context.WithCancel(ctx)
 	defer procCancel()
@@ -398,8 +406,9 @@ func runSessionProcess(ctx context.Context, shutdownCtx context.Context, t *Tran
 				}
 				// Build the claude user message by dispatching each attachment on its MIME
 				// type: images and PDFs are inlined as base64 content blocks; anything else is
-				// written into the worktree for claude to read with its tools (its path is
-				// announced in the text below). The runner fetches each blob (runner-scoped); a
+				// written to the session's uploads dir outside the worktree for claude to read
+				// with its tools (its path is announced in the text below, kept out of git so it
+				// isn't auto-committed or merged). The runner fetches each blob (runner-scoped); a
 				// fetch/write failure drops just that one so the turn still goes through rather
 				// than stalling. attRefs (id+mime+name) ride on the `user` event so the web can
 				// render the attachments (image thumbnails / file chips) after a reload.
@@ -435,12 +444,12 @@ func runSessionProcess(ctx context.Context, shutdownCtx context.Context, t *Tran
 							},
 						})
 					default:
-						rel, werr := writeUpload(execDir, att.FileName, att.ID, data)
+						abs, werr := writeUpload(job.SessionID, att.FileName, att.ID, data)
 						if werr != nil {
 							logln("attachment write failed for", job.SessionID, att.ID+":", werr)
 							continue
 						}
-						writtenPaths = append(writtenPaths, rel)
+						writtenPaths = append(writtenPaths, abs)
 					}
 					attRefs = append(attRefs, map[string]interface{}{"id": att.ID, "mime": att.MimeType, "name": att.FileName})
 				}
@@ -451,10 +460,11 @@ func runSessionProcess(ctx context.Context, shutdownCtx context.Context, t *Tran
 					feedText = strings.Join(pendingShellCtx, "\n") + "\n\n" + resp.Content
 					pendingShellCtx = nil
 				}
-				// Tell claude where the written-to-disk uploads landed, so it reads them with
-				// its tools instead of expecting inline content it never received.
+				// Tell claude where the written-to-disk uploads landed (absolute paths outside
+				// the worktree), so it reads them with its tools instead of expecting inline
+				// content it never received.
 				if len(writtenPaths) > 0 {
-					note := fmt.Sprintf("[The user uploaded %d file(s) to the working directory: %s - read or process them with your tools as needed.]",
+					note := fmt.Sprintf("[The user uploaded %d file(s), saved at: %s - read or process them with your tools as needed.]",
 						len(writtenPaths), strings.Join(writtenPaths, ", "))
 					if feedText != "" {
 						feedText = note + "\n\n" + feedText
@@ -711,22 +721,23 @@ func runSessionProcess(ctx context.Context, shutdownCtx context.Context, t *Tran
 	return stFailed, false, false // unexpected exit -> respawn with --resume
 }
 
-const uploadsDirName = "orbit-uploads"
-
-// writeUpload saves a non-image/-PDF attachment into the session worktree under a fixed
-// uploads dir, returning the worktree-relative path to hand to claude. The name is reduced
-// to its base (no path traversal) and falls back to the attachment id when unusable.
-func writeUpload(execDir, name, id string, data []byte) (string, error) {
+// writeUpload saves a non-image/-PDF attachment into the session's uploads dir, which lives
+// OUTSIDE the git worktree (see uploadsDir) so attachments are never swept into the session's
+// auto-commit, surfaced in the live diff, or merged to main. Returns the ABSOLUTE path to hand
+// to claude. The name is reduced to its base (no path traversal) and falls back to the
+// attachment id when unusable.
+func writeUpload(sessionID, name, id string, data []byte) (string, error) {
 	base := filepath.Base(strings.TrimSpace(name))
 	if base == "." || base == ".." || base == string(filepath.Separator) || base == "" {
 		base = id
 	}
-	dir := filepath.Join(execDir, uploadsDirName)
+	dir := uploadsDir(sessionID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(filepath.Join(dir, base), data, 0o644); err != nil {
+	p := filepath.Join(dir, base)
+	if err := os.WriteFile(p, data, 0o644); err != nil {
 		return "", err
 	}
-	return filepath.Join(uploadsDirName, base), nil
+	return p, nil
 }

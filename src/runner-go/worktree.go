@@ -160,6 +160,14 @@ func worktreesDir() string {
 	return d
 }
 
+// uploadsRootDir holds per-session attachment scratch (writeUpload), a sibling of worktreesDir
+// kept outside any repo so uploads are never swept into a session's git history. Reaped by
+// gcUploads when the session is no longer live.
+func uploadsRootDir() string { return filepath.Join(machineHome(), "uploads") }
+
+// uploadsDir is one session's attachment scratch dir.
+func uploadsDir(sessionID string) string { return filepath.Join(uploadsRootDir(), sessionID) }
+
 func baseRefName(sessionID string) string { return "refs/orbit-base/" + sessionID }
 
 func shortSha(sha string) string {
@@ -406,8 +414,11 @@ func worktreeIsDirty(wt *Worktree) bool {
 func parseNumstat(numOut, statusOut string) []ChangedFile {
 	statusBy := map[string]string{}
 	for _, line := range strings.Split(statusOut, "\n") {
-		f := strings.Fields(line)
-		if len(f) >= 2 && len(f[0]) > 0 {
+		// `--name-status` is tab-delimited: "<status>\t<path>" (rename/copy add a trailing
+		// "\t<newpath>"). Split on tab, not whitespace, so filenames containing spaces aren't
+		// truncated and mis-keyed — which silently dropped them to the default "M".
+		f := strings.Split(line, "\t")
+		if len(f) >= 2 && f[0] != "" {
 			statusBy[f[len(f)-1]] = string(f[0][0])
 		}
 	}
@@ -938,5 +949,22 @@ func gcWorktrees(live map[string]bool) {
 		}
 		_ = os.RemoveAll(path)
 		logln("gc: removed orphan worktree dir", e.Name())
+	}
+}
+
+// gcUploads removes per-session attachment scratch dirs (writeUpload) whose session is no
+// longer live, mirroring gcWorktrees. Uploads live outside the worktree, so they get their own
+// sweep — otherwise a crashed or never-resumed session would leak its uploads forever.
+func gcUploads(live map[string]bool) {
+	entries, err := os.ReadDir(uploadsRootDir())
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if !e.IsDir() || live[e.Name()] {
+			continue
+		}
+		_ = os.RemoveAll(filepath.Join(uploadsRootDir(), e.Name()))
+		logln("gc: removed orphan uploads dir", e.Name())
 	}
 }

@@ -64,6 +64,24 @@ func TestSplitPatchEmpty(t *testing.T) {
 	}
 }
 
+// A filename with spaces must keep its real status (here "A") rather than falling back to the
+// default "M": both --numstat and --name-status are tab-delimited, so parseNumstat must split
+// on tab, not whitespace, to key them together.
+func TestParseNumstatSpacedFilename(t *testing.T) {
+	num := "6012\t0\tSample of Orbit.txt\n5\t2\tsrc/a b.swift"
+	status := "A\tSample of Orbit.txt\nM\tsrc/a b.swift"
+	got := parseNumstat(num, status)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 files, got %d: %+v", len(got), got)
+	}
+	if got[0].Path != "Sample of Orbit.txt" || got[0].Status != "A" || got[0].Additions != 6012 {
+		t.Errorf("spaced add row wrong: %+v", got[0])
+	}
+	if got[1].Path != "src/a b.swift" || got[1].Status != "M" {
+		t.Errorf("spaced modify row wrong: %+v", got[1])
+	}
+}
+
 func TestBuildFilePatches(t *testing.T) {
 	byPath := splitPatch(sampleDiff)
 	files := []ChangedFile{

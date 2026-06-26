@@ -290,6 +290,7 @@ func runLoop(cfg *RunnerConfig) {
 	}
 	mu.Unlock()
 	gcWorktrees(liveSet)
+	gcUploads(liveSet)
 
 	for loopCtx.Err() == nil {
 		mu.Lock()
