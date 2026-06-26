@@ -78,7 +78,7 @@ final class AgentsModel {
         defer { sessionsLoading = false }
         do {
             let all = try await api.listSessions(view: view.queryValue)
-            agentSessions = SessionFilter.forAgent(all, agentID: agentID)
+            agentSessions = SessionFilter.forAgent(all, agentID: agentID, view: view)
         } catch { errorText = friendly(error) }
     }
 

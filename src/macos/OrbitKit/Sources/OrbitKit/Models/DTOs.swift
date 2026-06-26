@@ -87,6 +87,15 @@ public struct Session: Codable, Equatable, Sendable, Identifiable {
     public let model: String?
     public let permissionMode: String?
     public let effort: String?
+    /// How the session was created: "user" (default) or "system" (auto-created, e.g. a
+    /// task-execution session). The Active query returns both; the Agent console hides system
+    /// sessions from its Active tab and gives them a dedicated System tab — see `SessionFilter`.
+    public let source: String?
+    /// The list row's second-line preview, built by `SessionLine`: the (server-truncated) last
+    /// assistant reply, the tool currently in flight, and the live background-shell count.
+    public let lastAssistantText: String?
+    public let lastToolUse: String?
+    public let runningBgCount: Int?
     /// The owning agent, nested by the list/detail payloads (the flat `agentId` is NOT sent
     /// there, so per-agent grouping reads `agent.id`).
     public let agent: SessionAgentRef?
@@ -94,7 +103,8 @@ public struct Session: Codable, Equatable, Sendable, Identifiable {
     public init(id: String, title: String?, status: RunStatus, agentId: String?,
                 assignedRunnerId: String?, pendingApprovals: Int?, branch: String?,
                 updatedAt: String?, model: String? = nil, permissionMode: String? = nil,
-                effort: String? = nil, agent: SessionAgentRef? = nil) {
+                effort: String? = nil, source: String? = nil, lastAssistantText: String? = nil,
+                lastToolUse: String? = nil, runningBgCount: Int? = nil, agent: SessionAgentRef? = nil) {
         self.id = id
         self.title = title
         self.status = status
@@ -106,6 +116,10 @@ public struct Session: Codable, Equatable, Sendable, Identifiable {
         self.model = model
         self.permissionMode = permissionMode
         self.effort = effort
+        self.source = source
+        self.lastAssistantText = lastAssistantText
+        self.lastToolUse = lastToolUse
+        self.runningBgCount = runningBgCount
         self.agent = agent
     }
 }

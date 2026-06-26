@@ -29,4 +29,15 @@ public enum SessionFilter {
     public static func forAgent(_ sessions: [Session], agentID: String) -> [Session] {
         sessions.filter { $0.agent?.id == agentID }
     }
+
+    /// Sessions belonging to one agent, scoped for a specific Agent-console tab — mirrors the web
+    /// Agent console. The `active` query returns auto-created (`source == "system"`) sessions for
+    /// slot accounting and deep-link resolution, but they get their own System tab, so they're
+    /// hidden from the Active list. Completed/System views keep what the server returned (the
+    /// System query is already `source == "system"` server-side).
+    public static func forAgent(_ sessions: [Session], agentID: String, view: SessionView) -> [Session] {
+        let scoped = forAgent(sessions, agentID: agentID)
+        guard view == .active else { return scoped }
+        return scoped.filter { $0.source != "system" }
+    }
 }

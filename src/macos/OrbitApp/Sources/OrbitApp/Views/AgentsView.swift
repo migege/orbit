@@ -304,13 +304,18 @@ struct NewSessionView: View {
 
 struct AgentSessionRow: View {
     let session: Session
+    // Second line: the last-reply / live-state preview (mirrors the web Agent console). Rows here
+    // are always openable (macOS has no Trash tab), so `live: true` — matching web's `openable`.
+    private var line: SessionLine? { SessionLine.make(for: session, live: true) }
+
     var body: some View {
         HStack(spacing: 8) {
             Circle().fill(color).frame(width: 6, height: 6)
             VStack(alignment: .leading, spacing: 2) {
                 Text(session.title ?? "Untitled session").lineLimit(1)
-                Text(session.status.rawValue.replacingOccurrences(of: "_", with: " ").capitalized)
-                    .font(.caption).foregroundStyle(.secondary)
+                if let line {
+                    Text(line.text).font(.caption).foregroundStyle(lineColor(line.tone)).lineLimit(1)
+                }
             }
             Spacer()
             if let n = session.pendingApprovals, n > 0 {
@@ -328,6 +333,13 @@ struct AgentSessionRow: View {
         case .succeeded:     return .green
         case .failed:        return .red
         default:             return .secondary
+        }
+    }
+    private func lineColor(_ tone: SessionLine.Tone) -> Color {
+        switch tone {
+        case .preview, .queued: return .secondary
+        case .running:          return .blue
+        case .approval:         return .orange
         }
     }
 }
