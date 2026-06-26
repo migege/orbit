@@ -1,0 +1,59 @@
+import SwiftUI
+import OrbitKit
+
+@main
+struct OrbitApp: App {
+    @State private var model = AppModel()
+    @StateObject private var updater = UpdaterModel()
+    @Environment(\.scenePhase) private var scenePhase
+
+    var body: some Scene {
+        WindowGroup {
+            RootView()
+                .environment(model)
+                .frame(minWidth: 820, minHeight: 520)
+                .onOpenURL { url in
+                    if let route = DeepLink.parse(url) { model.route(to: route) }
+                }
+                .onChange(of: scenePhase) { _, phase in
+                    // Checkpoint open transcripts when the app leaves the foreground.
+                    if phase != .active { model.consoleRegistry?.persistAll() }
+                }
+                .task {
+                    model.bootstrap()
+                    HotKeyManager.register { HotKeyManager.summonApp() }   // ⌥Space summons Orbit
+                }
+        }
+        .defaultSize(width: 1100, height: 720)
+        // Standard "Check for Updates…" in the app menu (right after "About Orbit").
+        .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") { updater.checkForUpdates() }
+                    .disabled(!updater.canCheckForUpdates)
+            }
+        }
+
+        // Always-present menu-bar item: glanceable summary + quick jump into "needs you".
+        MenuBarExtra {
+            MenuBarContent().environment(model).environmentObject(updater)
+        } label: {
+            if let badge = model.menuSummary.badge {
+                Label(badge, systemImage: "circle.hexagongrid.fill")
+            } else {
+                Image(systemName: "circle.hexagongrid")
+            }
+        }
+        .menuBarExtraStyle(.window)
+    }
+}
+
+struct RootView: View {
+    @Environment(AppModel.self) private var model
+    var body: some View {
+        if model.signedIn {
+            MainView()
+        } else {
+            LoginView()
+        }
+    }
+}

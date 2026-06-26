@@ -35,10 +35,16 @@ func scanSlashAssets(roots []assetRoot) (commands, skills []SlashCommandInfo) {
 			return
 		}
 		dir := filepath.Join(expandTilde(base), ".claude")
-		if seenRoot[dir] {
+		// Dedup by (dir, agentID), not dir alone: several agents can share one checkout
+		// (e.g. per-environment variants of the same repo), and each must surface that
+		// dir's assets under its own id — collapsing by dir would hand them to whichever
+		// agent is scanned first and hide the rest. A dir shared with a host root also
+		// re-scans as host-level, but dedupScoped drops the agent copy (name host-claimed).
+		key := dir + "\x00" + agentID
+		if seenRoot[key] {
 			return
 		}
-		seenRoot[dir] = true
+		seenRoot[key] = true
 		scan = append(scan, assetRoot{base: dir, agentID: agentID})
 	}
 	// All host-level roots (the user's ~/.claude + the runner's default dir) before any

@@ -7,18 +7,24 @@ import { api } from '../api';
 
 type OS = 'macOS' | 'Linux' | 'Windows';
 
-// Commands target whatever origin this UI is served from, so a self-hosted deployment
-// works without baking any domain into the build: the install script downloads from
-// (and the runner registers against) the same host the operator opened the UI on.
-function installCmds(origin: string): Record<OS, string> {
-  // Only the install line differs per OS; everything else is identical.
+// install.sh, the runner binaries (/dl) and the API are all served from the deployment's own
+// origin, and both the binary's defaultServer and install.sh's BASE_URL are baked to that
+// origin at build time (see src/web/Dockerfile + build-binaries.sh). So the commands need no
+// --server / ORBIT_BASE_URL override wherever this is deployed. __PUBLIC_ORIGIN__ is that
+// origin, injected at build time from the PUBLIC_ORIGIN env (.env → web build arg).
+declare const __PUBLIC_ORIGIN__: string;
+
+// Only the install line differs per OS; everything else is identical.
+function buildCommands(origin: string): { install: Record<OS, string>; register: string } {
   return {
-    macOS: `curl -fsSL ${origin}/install.sh | ORBIT_BASE_URL=${origin} bash`,
-    Linux: `curl -fsSL ${origin}/install.sh | ORBIT_BASE_URL=${origin} bash`,
-    Windows: `$env:ORBIT_BASE_URL='${origin}'; irm ${origin}/install.ps1 | iex`,
+    install: {
+      macOS: `curl -fsSL ${origin}/install.sh | bash`,
+      Linux: `curl -fsSL ${origin}/install.sh | bash`,
+      Windows: `irm ${origin}/install.ps1 | iex`,
+    },
+    register: 'orbit register',
   };
 }
-const registerCmd = (origin: string) => `orbit register --server ${origin}`;
 
 interface Runner {
   id: string;
@@ -80,11 +86,7 @@ export function RunnerRegisterGuide() {
   const navigate = useNavigate();
   const [os, setOs] = useState<OS>('macOS');
   const [copied, setCopied] = useState<string | null>(null);
-
-  // Derive the install/register commands from this page's own origin (see installCmds).
-  const origin = window.location.origin;
-  const installCmd = installCmds(origin)[os];
-  const registerCommand = registerCmd(origin);
+  const { install: installCmd, register: registerCmd } = buildCommands(__PUBLIC_ORIGIN__);
 
   const copy = (key: string, text: string) => {
     void navigator.clipboard?.writeText(text)?.catch(() => {});
@@ -147,9 +149,9 @@ export function RunnerRegisterGuide() {
           desc="Installs the orbit CLI on this machine."
         >
           <CommandBox
-            cmd={installCmd}
+            cmd={installCmd[os]}
             copied={copied === 'install'}
-            onCopy={() => copy('install', installCmd)}
+            onCopy={() => copy('install', installCmd[os])}
           />
         </Step>
 
@@ -161,9 +163,9 @@ export function RunnerRegisterGuide() {
           desc="Opens your browser to confirm this machine belongs to you."
         >
           <CommandBox
-            cmd={registerCommand}
+            cmd={registerCmd}
             copied={copied === 'register'}
-            onCopy={() => copy('register', registerCommand)}
+            onCopy={() => copy('register', registerCmd)}
           />
         </Step>
 

@@ -20,7 +20,7 @@ import { Base62UuidPipe } from '../common/base62-uuid.pipe';
 import { AuthUser, CurrentUser } from '../common/current-user.decorator';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
-import { CreateSessionDto, SessionConfigDto, SessionResumeDto, SessionTurnDto } from './dto';
+import { CreateSessionDto, MergeToMainDto, SessionConfigDto, SessionResumeDto, SessionTurnDto } from './dto';
 import { SessionsService } from './sessions.service';
 
 @UseGuards(JwtAuthGuard)
@@ -49,6 +49,21 @@ export class SessionsController {
   @Get(':id')
   get(@CurrentUser() user: AuthUser, @Param('id', Base62UuidPipe) id: string) {
     return this.sessions.get(user.userId, id);
+  }
+
+  // Per-file unified diffs for this session's worktree changes, fetched on demand when a
+  // file's diff is opened (kept off the session payload — see SessionsService.getDiff).
+  @Get(':id/diff')
+  diff(@CurrentUser() user: AuthUser, @Param('id', Base62UuidPipe) id: string) {
+    return this.sessions.getDiff(user.userId, id);
+  }
+
+  // Ask the live runner to recompute the worktree diff now, so an opened file whose stored
+  // patch lagged the live worktree (the heartbeat refreshes the file list but not the patch
+  // text) gets its diff. No-op for a non-live session — see requestDiffRefresh.
+  @Post(':id/diff/refresh')
+  refreshDiff(@CurrentUser() user: AuthUser, @Param('id', Base62UuidPipe) id: string) {
+    return this.sessions.requestDiffRefresh(user.userId, id);
   }
 
   @Post(':id/turns')
@@ -104,6 +119,23 @@ export class SessionsController {
   @Post(':id/end')
   end(@CurrentUser() user: AuthUser, @Param('id', Base62UuidPipe) id: string) {
     return this.sessions.end(user.userId, id);
+  }
+
+  /** Ask the runner that ran this session to merge its worktree branch into a target branch
+   *  (body.targetBranch; omitted → the runner auto-detects main, else master). */
+  @Post(':id/merge')
+  mergeToMain(
+    @CurrentUser() user: AuthUser,
+    @Param('id', Base62UuidPipe) id: string,
+    @Body() dto: MergeToMainDto,
+  ) {
+    return this.sessions.mergeToMain(user.userId, id, dto?.targetBranch);
+  }
+
+  /** Ask the runner to commit this live session's uncommitted worktree changes onto its branch. */
+  @Post(':id/commit')
+  commitWorktree(@CurrentUser() user: AuthUser, @Param('id', Base62UuidPipe) id: string) {
+    return this.sessions.commitWorktree(user.userId, id);
   }
 
   @Post(':id/archive')

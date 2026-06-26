@@ -160,6 +160,33 @@ export interface RunnerHeartbeatRequest {
    *  OAuth usage endpoint. Absent when the runner authenticates with an API key
    *  (no OAuth creds) or is too old to report it. */
   planUsage?: PlanUsage;
+  /** Live worktree state for each session this runner is currently running, so the
+   *  composer's status bar appears mid-turn — not just after a turn completes. Absent
+   *  from older runners (the bar then waits for the first turn-complete as before). */
+  sessions?: SessionLiveState[];
+}
+
+/** One running session's live worktree diff, reported on the heartbeat while a turn is
+ *  still in flight (cf. TurnCompleteRequest, which carries the same at turn boundaries). */
+export interface SessionLiveState {
+  sessionId: string;
+  /** What the runner did: 'worktree' | 'shared-nogit'. */
+  isolationStatus: string;
+  /** The worktree's current uncommitted diff vs base; empty when nothing changed yet. */
+  changedFiles: ChangedFile[];
+  /** Whether the worktree has uncommitted changes right now (`git status` non-empty). Drives
+   *  the status bar's primary action: dirty → Commit, clean-but-ahead → Merge. Absent from
+   *  older runners (the bar then falls back to the session lifecycle). */
+  worktreeDirty?: boolean;
+  /** The repo's candidate merge-target branches (local refs/heads minus Orbit's own orbit/*
+   *  session branches), so the status bar's "Merge to…" dropdown can offer targets besides
+   *  main. Absent from older runners (the dropdown then offers only the auto-detected default). */
+  mergeTargets?: string[];
+  /** Whether the branch tip is already an ancestor of the repo's default merge target (main,
+   *  else master) — i.e. the work already landed there. Drives the bar's "✓ In main" chip in
+   *  place of a redundant Merge button. Always sent (false when not), so the server can clear a
+   *  stale true; absent only from older runners (the bar keeps its mergeStatus behavior). */
+  branchMerged?: boolean;
 }
 
 export interface RunnerHeartbeatResponse {
@@ -169,6 +196,37 @@ export interface RunnerHeartbeatResponse {
    *  adopts this live on each heartbeat, so a UI/API change to it takes effect within
    *  one heartbeat without restarting the runner. */
   maxConcurrent: number;
+  /** Branch merges the user requested from the UI for sessions this runner ran. The
+   *  runner merges each session's branch into main on its local repo and reports the
+   *  outcome back via POST /runner/sessions/:id/merge-result. Absent on older control
+   *  planes (older runners ignore the field → the merge stays pending). */
+  mergeRequests?: MergeCommand[];
+  /** Commits the user requested for live sessions this runner is running: commit the
+   *  worktree's uncommitted changes onto its branch, then POST the outcome via
+   *  /runner/sessions/:id/commit-result. Absent on older control planes. */
+  commitRequests?: CommitCommand[];
+}
+
+/** Control plane → runner: merge one session's worktree branch into a target branch. */
+export interface MergeCommand {
+  sessionId: string;
+  /** The session's worktree branch, e.g. orbit/<slug>-<hash>. */
+  branch: string;
+  /** The session agent's workDir; the runner resolves the repo root from it. */
+  workDir: string;
+  /** The branch to merge INTO. Absent/empty → the runner auto-detects main, else master
+   *  (the original behavior). Set when the user picked a non-default target from the
+   *  status bar's branch dropdown. */
+  targetBranch?: string;
+}
+
+/** Control plane → runner: commit a live session's uncommitted worktree changes onto its
+ *  branch. The runner locates the checkout from the session id (its per-session worktree
+ *  dir); `branch` is for logging only. */
+export interface CommitCommand {
+  sessionId: string;
+  /** The session's worktree branch, e.g. orbit/<slug>-<hash>. */
+  branch: string;
 }
 
 // ─────────────────────────── Interactive sessions (Route B) ───────────────────────────
@@ -271,15 +329,23 @@ export interface ApprovalDecisionResponse {
 // 'reload' carries no user text: it tells the runner the session's model /
 // permission-mode changed, so it should re-spawn claude with --resume + the new
 // flags (full context preserved). The new config rides in the turn's `content` JSON.
-export type ConversationTurnKind = 'message' | 'interrupt' | 'end' | 'reload' | 'shell';
+// 'diff' is a fire-and-forget control turn (no text, no claude): it asks the runner to
+// recompute the live worktree diff and push it back, so an opened file's diff reflects
+// the current worktree even when the stored snapshot lagged (the heartbeat refreshes the
+// file list but not the patch text — see SessionDiffResultRequest).
+export type ConversationTurnKind = 'message' | 'interrupt' | 'end' | 'reload' | 'shell' | 'diff';
 
-/** An image attachment as handed to the runner on the inbox: the id to fetch its bytes
- *  with (runner-scoped `GET /runner/sessions/:id/attachments/:attId`) plus its MIME type,
- *  so the runner can build the claude `image` content block (base64) without a second
- *  round-trip for the type. The bytes themselves never travel inline — only this ref does. */
+/** An attachment as handed to the runner on the inbox: the id to fetch its bytes with
+ *  (runner-scoped `GET /runner/sessions/:id/attachments/:attId`), its MIME type, and the
+ *  original filename. The runner dispatches on the type — `image/*` → image block,
+ *  `application/pdf` → document block, anything else → written to the worktree under
+ *  `fileName`. The bytes themselves never travel inline — only this ref does. */
 export interface TurnAttachment {
   id: string;
   mimeType: string;
+  /** Original upload filename; the runner names a written-to-disk upload with it. Absent
+   *  for pasted images (inlined as image blocks, never written). */
+  fileName?: string;
 }
 
 /** Browser → control plane: enqueue a user turn for a live interactive session. */
@@ -351,6 +417,19 @@ export interface TurnCompleteRequest {
   costUsd?: number;
   usage?: TokenUsage;
   modelUsage?: Record<string, ModelUsage>;
+  // ── Live worktree state (so the composer's status bar updates each turn) ──
+  /** What the runner did: 'worktree' | 'shared-nogit'. */
+  isolationStatus?: string;
+  /** The worktree's current diff vs base (uncommitted), refreshed each turn. */
+  changedFiles?: ChangedFile[];
+  /** Per-file unified diffs (capped) for the same uncommitted state, for on-demand viewing. */
+  changedDiff?: FilePatch[];
+  /** Whether the worktree has uncommitted changes (drives Commit vs Merge in the bar). */
+  worktreeDirty?: boolean;
+  /** Whether the branch already landed in the default merge target (see SessionLiveState). The
+   *  turn-end snapshot an idle session shows until its next turn, so a branch merged out-of-band
+   *  is reflected here. Always sent (false when not); absent only from older runners. */
+  branchMerged?: boolean;
 }
 
 /** One file changed by a worktree-isolated session, as a compact diff summary the runner
@@ -361,6 +440,17 @@ export interface ChangedFile {
   additions: number;
   deletions: number;
   status: string;
+}
+
+/** One changed file's full unified-diff text (git diff vs base), reported by the runner
+ *  alongside the ChangedFile stats so the web can show a file's diff on demand. `patch` is
+ *  absent for binary/omitted files; `truncated` marks a diff dropped for exceeding the size
+ *  cap (the web shows a "too large to preview" placeholder). Stored server-side in a side
+ *  table (SessionDiff) and fetched only when a file is opened — never on the session payload. */
+export interface FilePatch {
+  path: string;
+  patch?: string;
+  truncated?: boolean;
 }
 
 /**
@@ -387,6 +477,49 @@ export interface SessionCompleteRequest {
   baseSha?: string;
   /** Per-file diff summary of the branch vs its base; empty when nothing changed. */
   changedFiles?: ChangedFile[];
+  /** Per-file unified diffs (capped) of the committed branch vs base, for on-demand viewing. */
+  changedDiff?: FilePatch[];
   /** What the runner did: 'worktree' (isolated) | 'shared-nogit' (no git → shared dir). */
   isolationStatus?: string;
+  /** The repo's candidate merge-target branches at completion (see SessionLiveState.mergeTargets),
+   *  so the ended session's "Merge to…" dropdown is populated. */
+  mergeTargets?: string[];
+}
+
+/**
+ * Runner → control plane: the outcome of a {@link MergeCommand}. `merged` advanced main
+ * (mergedSha is the new HEAD); `conflict` means the merge was aborted cleanly; `error`
+ * means a precondition failed (workDir not on a clean main, branch missing, …). `message`
+ * carries git's stderr / the precondition for the UI.
+ */
+export interface SessionMergeResultRequest {
+  status: 'merged' | 'conflict' | 'error';
+  mergedSha?: string;
+  message?: string;
+}
+
+/**
+ * Runner → control plane: the outcome of a {@link CommitCommand}. `committed` advanced the
+ * branch (the worktree is now clean); `nochange` means there was nothing to commit; `error`
+ * means the commit failed (no worktree, git error). `message` carries git's stderr.
+ */
+export interface SessionCommitResultRequest {
+  status: 'committed' | 'nochange' | 'error';
+  message?: string;
+}
+
+/**
+ * Runner → control plane: a freshly recomputed live worktree diff, pushed in response to a
+ * 'diff' inbox control turn (the web opened a file whose stored patch lagged the worktree).
+ * Mirrors the live fields of {@link TurnCompleteRequest}: the server overwrites the session's
+ * `changedFiles` and the SessionDiff side-table `patches` so list and diff are consistent
+ * again, fixing the "No diff to preview" gap for files added/changed since the last turn end.
+ */
+export interface SessionDiffResultRequest {
+  changedFiles?: ChangedFile[];
+  changedDiff?: FilePatch[];
+  worktreeDirty?: boolean;
+  /** Whether the branch already landed in the default merge target (see SessionLiveState).
+   *  Recomputed with the diff, so opening the diff drawer refreshes it for an idle session. */
+  branchMerged?: boolean;
 }

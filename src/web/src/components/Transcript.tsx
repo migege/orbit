@@ -16,6 +16,7 @@ import {
   GlobalOutlined,
   LoadingOutlined,
   MinusCircleOutlined,
+  PaperClipOutlined,
   PartitionOutlined,
   QuestionCircleOutlined,
   RightOutlined,
@@ -69,11 +70,15 @@ type TextNode = {
   kind: 'user' | 'assistant' | 'thinking';
   seq: number;
   text: string;
+  // Wall-clock of the source event — carried for user turns to show a relative
+  // timestamp ("1w ago") under the bubble.
+  ts?: string;
   // Local previews of images the composer just sent (object URLs, shown instantly).
   images?: TurnImage[];
-  // Durable refs from the persisted `user` event — fetched on demand so a turn's images
-  // survive a reload (and show on the seeded first turn, which has no local preview).
-  imageRefs?: { id: string }[];
+  // Durable refs from the persisted `user` event — fetched on demand so a turn's
+  // attachments survive a reload (and show on the seeded first turn, which has no local
+  // preview). Images render inline; non-image files render as a downloadable chip.
+  attachmentRefs?: { id: string; mime?: string; name?: string }[];
 };
 type ResultNode = { kind: 'result'; seq: number; content: any; isError?: boolean };
 type MarkerNode = { kind: 'divider' | 'interrupt'; seq: number };
@@ -107,16 +112,29 @@ function buildNodes(events: RunEvent[], turnImages?: Record<string, TurnImage[]>
         // no local preview (after a reload, or the server-seeded first turn). An image-only
         // turn has empty text, so still render a bubble when there are images for it.
         const imgs = ev.turnId ? turnImages?.[ev.turnId] : undefined;
-        const refs: { id: string }[] | undefined = Array.isArray(p.images)
-          ? p.images.filter((im: any) => im && typeof im.id === 'string').map((im: any) => ({ id: String(im.id) }))
-          : undefined;
+        // New events echo `attachments` (id+mime+name, any type); older ones echo `images`
+        // (id only, all images). Carry mime/name through so the bubble can tell an inline
+        // image from a downloadable file.
+        const rawRefs: any[] | undefined = Array.isArray(p.attachments)
+          ? p.attachments
+          : Array.isArray(p.images)
+            ? p.images
+            : undefined;
+        const refs = rawRefs
+          ?.filter((a) => a && typeof a.id === 'string')
+          .map((a) => ({
+            id: String(a.id),
+            mime: typeof a.mime === 'string' ? a.mime : undefined,
+            name: typeof a.name === 'string' ? a.name : undefined,
+          }));
         if (p.text || (imgs && imgs.length) || (refs && refs.length)) {
           into(parent).push({
             kind: 'user',
             seq: ev.seq,
             text: p.text ? String(p.text) : '',
+            ts: ev.ts,
             images: imgs,
-            imageRefs: refs,
+            attachmentRefs: refs,
           });
         }
         break;
@@ -224,50 +242,101 @@ function NodeView({ node, live }: { node: Node; live?: boolean }) {
   }
 }
 
+// Collapse a user bubble past this many characters: a pasted blob would otherwise lay out as
+// one giant pre-wrap node and stall the transcript. The composer caps input well above this;
+// resumed/old sessions can still carry big messages.
+const USER_BUBBLE_TRUNCATE = 6000;
+
 // User message bubble. Input is kept verbatim (pre-wrap), not Markdown-parsed, so a
 // literal '#' or '*' the user typed isn't reinterpreted. Any images sent with the turn
 // render above the text (an image-only turn has empty text) — prefer the local preview
-// (instant), falling back to the durable refs when there's none. A copy button fades in
-// on hover (only when the turn has text) to lift the message text back out to the clipboard.
+// (instant), falling back to the durable refs when there's none. Below the bubble a
+// right-aligned meta row (copy button · relative time) fades in on hover, like Claude;
+// it's absolutely positioned so it never adds height, and lives inside the hover wrap so
+// the pointer can travel down onto it without dismissing it (CSS :hover hits ancestors).
 function UserBubble({ node }: { node: TextNode }) {
   const [copied, setCopied] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const longText = node.text.length > USER_BUBBLE_TRUNCATE;
+  const shownText = longText && !expanded ? node.text.slice(0, USER_BUBBLE_TRUNCATE) : node.text;
   const copy = () => {
     void navigator.clipboard?.writeText(node.text)?.catch(() => {});
     setCopied(true);
     setTimeout(() => setCopied(false), 1600);
   };
+  // Inline images come from the instant local previews when present, else from durable refs
+  // (fetched on demand); non-image files always render as a downloadable chip.
+  const localImgs = node.images && node.images.length ? node.images : undefined;
+  const refs = node.attachmentRefs ?? [];
+  const imgRefs = localImgs ? [] : refs.filter((r) => !r.mime || r.mime.startsWith('image/'));
+  const fileRefs = refs.filter((r) => r.mime && !r.mime.startsWith('image/'));
   return (
-    <div className="chat-msg chat-user" data-seq={node.seq}>
-      {node.images && node.images.length > 0 ? (
-        <div className="chat-images">
-          {node.images.map((im, i) => (
-            <ChatImage key={i} src={im.url} />
-          ))}
-        </div>
-      ) : (
-        node.imageRefs &&
-        node.imageRefs.length > 0 && (
+    <div className="chat-user-wrap">
+      <div className="chat-msg chat-user" data-seq={node.seq}>
+        {localImgs && (
           <div className="chat-images">
-            {node.imageRefs.map((r) => (
+            {localImgs.map((im, i) => (
+              <ChatImage key={i} src={im.url} />
+            ))}
+          </div>
+        )}
+        {imgRefs.length > 0 && (
+          <div className="chat-images">
+            {imgRefs.map((r) => (
               <AttachmentImage key={r.id} id={r.id} />
             ))}
           </div>
-        )
-      )}
-      {node.text}
-      {node.text && (
-        <button
-          type="button"
-          className="chat-copy"
-          onClick={copy}
-          title={copied ? 'Copied' : 'Copy message'}
-          aria-label={copied ? 'Copied' : 'Copy message'}
-        >
-          {copied ? <CheckOutlined /> : <CopyOutlined />}
+        )}
+        {fileRefs.length > 0 && (
+          <div className="chat-files">
+            {fileRefs.map((r) => (
+              <AttachmentFile key={r.id} id={r.id} name={r.name} />
+            ))}
+          </div>
+        )}
+        {shownText}
+      </div>
+      {longText && (
+        <button className="chat-more" onClick={() => setExpanded((e) => !e)}>
+          {expanded
+            ? 'Show less'
+            : `Show ${(node.text.length - USER_BUBBLE_TRUNCATE).toLocaleString()} more characters`}
         </button>
+      )}
+      {node.text && (
+        <div className="chat-user-meta">
+          <button
+            type="button"
+            className="chat-copy"
+            onClick={copy}
+            title={copied ? 'Copied' : 'Copy message'}
+            aria-label={copied ? 'Copied' : 'Copy message'}
+          >
+            {copied ? <CheckOutlined /> : <CopyOutlined />}
+          </button>
+          {node.ts && <span className="chat-time">{relTime(node.ts)}</span>}
+        </div>
       )}
     </div>
   );
+}
+
+// Relative timestamp under a user bubble ("just now", "5m ago", "3h ago", "2d ago",
+// "1w ago"); older than ~4 weeks falls back to a short absolute month/day.
+function relTime(iso: string): string {
+  const t = new Date(iso).getTime();
+  if (!Number.isFinite(t)) return '';
+  const diff = Date.now() - t;
+  const min = 60_000;
+  const hour = 60 * min;
+  const day = 24 * hour;
+  const week = 7 * day;
+  if (diff < min) return 'just now';
+  if (diff < hour) return `${Math.floor(diff / min)}m ago`;
+  if (diff < day) return `${Math.floor(diff / hour)}h ago`;
+  if (diff < week) return `${Math.floor(diff / day)}d ago`;
+  if (diff < 4 * week) return `${Math.floor(diff / week)}w ago`;
+  return new Date(t).toLocaleDateString([], { month: 'numeric', day: 'numeric' });
 }
 
 // Renders a past turn's image from its attachment id. The download endpoint is
@@ -297,6 +366,38 @@ export function AttachmentImage({ id }: { id: string }) {
   return <ChatImage src={url} />;
 }
 
+// A non-image file the user sent: a chip that downloads the blob on click (the download
+// endpoint is bearer-guarded, so a plain <a href> would 401 — fetch with the token, then
+// trigger a download from the object URL). The bytes are fetched only when clicked.
+export function AttachmentFile({ id, name }: { id: string; name?: string }) {
+  const [busy, setBusy] = useState(false);
+  const label = name || 'file';
+  const download = async (): Promise<void> => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const objUrl = await fetchAttachmentObjectUrl(id);
+      const a = document.createElement('a');
+      a.href = objUrl;
+      a.download = label;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(objUrl), 10_000);
+    } catch {
+      /* leave the chip in place so the user can retry */
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <button type="button" className="chat-file" onClick={download} title={`Download ${label}`}>
+      {busy ? <LoadingOutlined spin /> : <PaperClipOutlined />}
+      <span className="chat-file-name">{label}</span>
+    </button>
+  );
+}
+
 // A user-sent image: click to open AntD's full-screen preview (zoom/rotate, ESC to close).
 // The displayed src is already the full-resolution image (just CSS-constrained to 220px),
 // so the lightbox shows it at native size with no extra fetch. The hover mask is the
@@ -324,10 +425,44 @@ export function ChatImage({ src }: { src: string }) {
 // react-markdown AST isn't re-parsed for messages that didn't change.
 // `highlight` is off while streaming — re-highlighting the whole doc on every chunk
 // is the expensive part, and code isn't complete mid-stream anyway.
+// A fenced code block rendered with a hover copy button pinned to its top-right corner. The
+// block itself is the hover area and the button sits inside it, so the pointer never leaves on
+// the way over. Copy reads the rendered <pre>'s textContent — highlight.js spans flatten back
+// to exactly the raw code, so "copy this whole HTML and save as a file" gets clean source.
+function CodeBlock({ children }: any) {
+  const preRef = useRef<HTMLPreElement>(null);
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    const text = preRef.current?.textContent ?? '';
+    if (!text) return;
+    void navigator.clipboard?.writeText(text)?.catch(() => {});
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1600);
+  };
+  return (
+    <div className="md-codeblock">
+      <button
+        type="button"
+        className="md-copy"
+        onClick={copy}
+        title={copied ? 'Copied' : 'Copy code'}
+        aria-label={copied ? 'Copied' : 'Copy code'}
+      >
+        {copied ? <CheckOutlined /> : <CopyOutlined />}
+      </button>
+      <pre ref={preRef}>{children}</pre>
+    </div>
+  );
+}
+
 export const MD = memo(function MD({ children, highlight = true }: { children: string; highlight?: boolean }) {
   return (
     <div className="md">
-      <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={highlight ? [rehypeHighlight] : []}>
+      <Markdown
+        remarkPlugins={[remarkGfm]}
+        rehypePlugins={highlight ? [rehypeHighlight] : []}
+        components={{ pre: CodeBlock }}
+      >
         {children}
       </Markdown>
     </div>
@@ -649,7 +784,8 @@ function ToolResult({
 // Pre renders monospace text and collapses past `threshold` lines (Read output,
 // long commands, JSON blobs) so one tool call can't flood the transcript.
 // `prompt` prefixes a shell `$` for Bash commands.
-function Pre({
+// Exported so the background-process tray can reuse the same collapsing output block.
+export function Pre({
   text,
   threshold = 16,
   muted,
@@ -891,7 +1027,8 @@ const safeJson = (v: any): string => {
 
 // A tool_result's content is either a string or an array of content blocks
 // (text/image/...). Flatten it to displayable text.
-function resultText(content: any): string {
+// Exported so the background-process tray can flatten a Read-on-output result the same way.
+export function resultText(content: any): string {
   if (content == null) return '';
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) {

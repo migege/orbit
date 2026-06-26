@@ -3,6 +3,7 @@ import { Spin } from 'antd';
 import { useLayoutEffect, useRef, useState } from 'react';
 import type { SlashCommandInfo } from '@orbit/shared';
 import { api } from '../api';
+import { agentsQuery } from '../lib/queries';
 import type { Runner } from '../components/TasksSidePanel';
 
 // One catalog row: the skill/command name plus its (often long) routing description.
@@ -43,18 +44,34 @@ function SkillRow({ item }: { item: SlashCommandInfo }) {
   );
 }
 
-// Runners report the slash commands (.claude/commands) and skills (.claude/skills)
-// they found on disk via heartbeat; GET /runners surfaces them as runner.commands /
-// runner.skills. This page groups that catalog by runner so you can see, per machine,
-// which skills and commands are available. (Only name + description are reported — the
-// SKILL.md body isn't carried over the heartbeat.)
+// One collapsible group: an agent's project assets (skills/commands found under its
+// workDir's .claude/). Host-level assets (~/.claude, shared by every agent on the machine)
+// are not cataloged here — they surface in the composer's `/` menu for every session.
+type Group = {
+  key: string;
+  title: string;
+  runnerName: string;
+  online: boolean;
+  skills: SlashCommandInfo[];
+  commands: SlashCommandInfo[];
+};
+
+// Runners report the slash commands/skills they found on disk via heartbeat; GET /runners
+// surfaces them per runner, each tagged with its agent. This page flattens that into one
+// collapsible group per agent so the catalog reads agent-first — what each agent can do —
+// rather than buried under the machine. Host-level assets are omitted (see Group).
 export function SkillsPage() {
   const runners = useQuery({
     queryKey: ['runners'],
     queryFn: () => api<Runner[]>('/runners'),
     refetchInterval: 15_000,
   });
+  const agents = useQuery(agentsQuery());
   const list = runners.data ?? [];
+
+  // agentId -> display name, so a project group reads as the agent, not a uuid.
+  const agentName = (id: string): string =>
+    (agents.data ?? []).find((a: { id: string }) => a.id === id)?.name ?? id;
 
   const [query, setQuery] = useState('');
   const q = query.trim().toLowerCase();
@@ -63,26 +80,55 @@ export function SkillsPage() {
     it.name.toLowerCase().includes(q) ||
     (it.description?.toLowerCase().includes(q) ?? false);
 
-  const renderGroup = (title: string, items: SlashCommandInfo[]) => {
+  // Expanded group keys — groups start collapsed; an active search forces every match open.
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const toggle = (key: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+
+  const renderGroup = (title: string, items: SlashCommandInfo[], keyPrefix: string) => {
     if (items.length === 0) return null;
     return (
       <div className="skills-group">
         <div className="skills-group-title">{title}</div>
         {items.map((it) => (
-          <SkillRow item={it} key={it.name} />
+          <SkillRow item={it} key={`${keyPrefix}:${it.name}`} />
         ))}
       </div>
     );
   };
 
-  // Per-runner filtered view; when searching, runners with no match drop out entirely.
-  const cards = list
-    .map((r) => ({
-      runner: r,
-      skills: (r.skills ?? []).filter(match),
-      commands: (r.commands ?? []).filter(match),
-    }))
-    .filter((c) => !q || c.skills.length > 0 || c.commands.length > 0);
+  // Flatten every runner's (search-filtered) assets into one group per agent that owns
+  // project assets, sorted by agent name. Host-level assets (no agentId) are skipped.
+  const groups: Group[] = [];
+  for (const r of list) {
+    const skills = (r.skills ?? []).filter(match);
+    const commands = (r.commands ?? []).filter(match);
+    const byAgent = new Map<string, Group>();
+    const bucket = (agentId: string): Group => {
+      let g = byAgent.get(agentId);
+      if (!g) {
+        g = {
+          key: `${r.id}:${agentId}`,
+          title: agentName(agentId),
+          runnerName: r.displayName || r.name,
+          online: !!r.online,
+          skills: [],
+          commands: [],
+        };
+        byAgent.set(agentId, g);
+      }
+      return g;
+    };
+    for (const s of skills) if (s.agentId) bucket(s.agentId).skills.push(s);
+    for (const c of commands) if (c.agentId) bucket(c.agentId).commands.push(c);
+    groups.push(...byAgent.values());
+  }
+  groups.sort((a, b) => a.title.localeCompare(b.title) || a.runnerName.localeCompare(b.runnerName));
 
   return (
     <div className="skills-page">
@@ -106,29 +152,44 @@ export function SkillsPage() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
-          {cards.length === 0 ? (
-            <div className="skills-no-match">No skills or commands match "{query}".</div>
+          {groups.length === 0 ? (
+            <div className="skills-no-match">
+              {q
+                ? `No skills or commands match "${query}".`
+                : 'No skills or commands reported by any runner yet.'}
+            </div>
           ) : (
             <div className="skills-list">
-              {cards.map(({ runner: r, skills, commands }) => {
-                const empty = skills.length === 0 && commands.length === 0;
+              {groups.map((g) => {
+                const open = !!q || expanded.has(g.key);
+                const count = g.skills.length + g.commands.length;
                 return (
-                  <div className="skills-runner" key={r.id}>
-                    <div className="skills-runner-head">
-                      <span
-                        className="runner-dot"
-                        style={{ background: r.online ? 'var(--success-solid)' : 'var(--dot-idle)' }}
-                        title={r.online ? 'Online' : 'Offline'}
-                      />
-                      <span className="skills-runner-name">{r.displayName || r.name}</span>
-                      <span className="skills-runner-status">
-                        {r.online ? 'Online' : 'Offline'}
+                  <div className="skills-group-card" key={g.key}>
+                    <button
+                      type="button"
+                      className="skills-group-head"
+                      onClick={() => toggle(g.key)}
+                      aria-expanded={open}
+                    >
+                      <span className={`skills-caret${open ? ' open' : ''}`} aria-hidden>
+                        ▸
                       </span>
-                    </div>
-                    {renderGroup('Skills', skills)}
-                    {renderGroup('Commands', commands)}
-                    {empty && (
-                      <div className="skills-runner-empty">No skills or commands reported.</div>
+                      <span className="skills-group-name">{g.title}</span>
+                      <span className="skills-group-meta">
+                        <span
+                          className="runner-dot"
+                          style={{ background: g.online ? 'var(--success-solid)' : 'var(--dot-idle)' }}
+                          title={g.online ? 'Online' : 'Offline'}
+                        />
+                        {g.runnerName}
+                      </span>
+                      <span className="skills-group-count">{count}</span>
+                    </button>
+                    {open && (
+                      <div className="skills-group-body">
+                        {renderGroup('Skills', g.skills, `${g.key}:s`)}
+                        {renderGroup('Commands', g.commands, `${g.key}:c`)}
+                      </div>
                     )}
                   </div>
                 );

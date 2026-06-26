@@ -156,6 +156,22 @@ func (t *Transport) turnComplete(sessionID string, b TurnCompleteRequest) error 
 	return t.do(nil, "POST", "/runner/sessions/"+sessionID+"/turn-complete", b, nil, 35*time.Second)
 }
 
+// mergeResult reports the outcome of a heartbeat-delivered MergeCommand back to the server.
+func (t *Transport) mergeResult(sessionID string, b MergeResultRequest) error {
+	return t.do(nil, "POST", "/runner/sessions/"+sessionID+"/merge-result", b, nil, 15*time.Second)
+}
+
+// commitResult reports the outcome of a heartbeat-delivered CommitCommand back to the server.
+func (t *Transport) commitResult(sessionID string, b CommitResultRequest) error {
+	return t.do(nil, "POST", "/runner/sessions/"+sessionID+"/commit-result", b, nil, 15*time.Second)
+}
+
+// diffResult pushes a freshly recomputed live worktree diff back to the server in response to
+// an inbox 'diff' refresh request (the web opened a file whose stored patch lagged).
+func (t *Transport) diffResult(sessionID string, b DiffResultRequest) error {
+	return t.do(nil, "POST", "/runner/sessions/"+sessionID+"/diff", b, nil, 35*time.Second)
+}
+
 // fetchAttachment GETs one image's raw bytes (runner-scoped, by session+attachment id),
 // for the inbox poller to base64-encode into a claude `image` content block. Returns the
 // raw body — not JSON — so it bypasses `do`.

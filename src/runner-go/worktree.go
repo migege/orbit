@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 )
 
 // Isolation outcomes reported back on /complete (Session.isolationStatus): the session
@@ -47,6 +50,60 @@ func isGitRepo(dir string) bool {
 
 func branchExists(repoRoot, branch string) bool {
 	_, err := git(repoRoot, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch)
+	return err == nil
+}
+
+// listMergeTargets returns the repo's local branches that make sense as merge targets for the
+// status bar's "Merge to…" dropdown: every refs/heads/* except Orbit's own per-session branches
+// (orbit/*), which you merge FROM, never INTO. Best-effort — nil on any git error / empty repo.
+func listMergeTargets(repoRoot string) []string {
+	out, err := git(repoRoot, "for-each-ref", "--format=%(refname:short)", "refs/heads/")
+	if err != nil || out == "" {
+		return nil
+	}
+	var targets []string
+	for _, b := range strings.Split(out, "\n") {
+		b = strings.TrimSpace(b)
+		if b == "" || strings.HasPrefix(b, "orbit/") {
+			continue
+		}
+		targets = append(targets, b)
+	}
+	return targets
+}
+
+// mergeTargetsForWT lists a worktree's repo branches usable as merge targets; nil for a nil
+// worktree (a shared-dir session — nothing to merge into).
+func mergeTargetsForWT(wt *Worktree) []string {
+	if wt == nil {
+		return nil
+	}
+	return listMergeTargets(wt.RepoDir)
+}
+
+// branchMergedInto reports whether the worktree's branch tip is already an ancestor of the repo's
+// default merge target (main, else master) — i.e. the work already landed there, e.g. via an
+// out-of-band command-line merge. The status bar shows a "✓ In main" chip instead of a redundant
+// Merge button when true. Mirrors mergeToMain's auto-detected default (it judges the same target
+// the plain "Merge to main" button would use). False when nothing's isolated, no target exists,
+// or git can't decide — a conservative default that keeps the actionable Merge button.
+func branchMergedInto(wt *Worktree) bool {
+	if wt == nil || wt.Branch == "" {
+		return false
+	}
+	var target string
+	for _, b := range []string{"main", "master"} {
+		if branchExists(wt.RepoDir, b) {
+			target = b
+			break
+		}
+	}
+	if target == "" || target == wt.Branch {
+		return false
+	}
+	// `merge-base --is-ancestor A B` exits 0 when A is contained in B, 1 when not, 128 on error;
+	// git() returns a non-nil error for any non-zero exit, so err == nil ⇔ already merged.
+	_, err := git(wt.RepoDir, "merge-base", "--is-ancestor", wt.Branch, target)
 	return err == nil
 }
 
@@ -102,6 +159,14 @@ func worktreesDir() string {
 	_ = os.MkdirAll(d, 0o755)
 	return d
 }
+
+// uploadsRootDir holds per-session attachment scratch (writeUpload), a sibling of worktreesDir
+// kept outside any repo so uploads are never swept into a session's git history. Reaped by
+// gcUploads when the session is no longer live.
+func uploadsRootDir() string { return filepath.Join(machineHome(), "uploads") }
+
+// uploadsDir is one session's attachment scratch dir.
+func uploadsDir(sessionID string) string { return filepath.Join(uploadsRootDir(), sessionID) }
 
 func baseRefName(sessionID string) string { return "refs/orbit-base/" + sessionID }
 
@@ -189,10 +254,21 @@ func setupWorktree(job *ClaimedSession, baseDir string) string {
 	return execDir
 }
 
+// parkCheckpointTrailer marks a finalize commit as a *park checkpoint*: the snapshot taken when
+// a still-resumable session (idle-recycled or user-ended, which the server settles PARKED) is
+// torn down, so its in-progress work is durable on the branch even after the checkout is GC'd.
+// It is NOT a real end. On the next resume, uncommitParkCheckpoint soft-resets it so the work
+// returns to an uncommitted working tree and the agent continues without a stray checkpoint
+// polluting the branch history. A genuine end (SUCCEEDED/FAILED) commits WITHOUT this trailer,
+// so its commit is permanent.
+const parkCheckpointTrailer = "Orbit-Park-Checkpoint"
+
 // finalizeWorktree commits whatever the session changed onto its branch and returns the
-// per-file diff vs the base. Called once at terminal completion, before /complete, so the
-// work is captured on the branch even though the checkout dir may then be removed.
-func finalizeWorktree(wt *Worktree, title string) []ChangedFile {
+// per-file diff stats plus the per-file unified-diff patches vs the base. Called once at
+// terminal completion, before /complete, so the work is captured on the branch even though
+// the checkout dir may then be removed. `checkpoint` tags the commit as an undo-on-resume park
+// checkpoint (see parkCheckpointTrailer) rather than a permanent end commit.
+func finalizeWorktree(wt *Worktree, title string, checkpoint bool) ([]ChangedFile, []FilePatch) {
 	if _, err := git(wt.Path, "add", "-A"); err != nil {
 		logln("worktree add failed for", wt.Session+":", err)
 	}
@@ -201,6 +277,9 @@ func finalizeWorktree(wt *Worktree, title string) []ChangedFile {
 		msg := strings.TrimSpace(title)
 		if msg == "" {
 			msg = "orbit session " + wt.Session
+		}
+		if checkpoint {
+			msg += "\n\n" + parkCheckpointTrailer + ": " + wt.Session
 		}
 		// Inline identity so the commit never fails on a runner with no git user.* set;
 		// --no-verify so a repo's pre-commit hook can't block finalization.
@@ -211,12 +290,41 @@ func finalizeWorktree(wt *Worktree, title string) []ChangedFile {
 		}
 	}
 	if wt.BaseSha == "" {
-		return nil
+		return nil, nil
 	}
-	return diffFiles(wt.Path, wt.BaseSha, "HEAD")
+	files := diffFiles(wt.Path, wt.BaseSha, "HEAD")
+	patchOut, _ := git(wt.Path, "diff", wt.BaseSha+"..HEAD")
+	return files, buildFilePatches(files, splitPatch(patchOut))
 }
 
-// diffFiles returns the per-file change summary for `git diff base..head` in dir.
+// uncommitParkCheckpoint undoes a park checkpoint (see parkCheckpointTrailer) at the start of a
+// resumed session: if the worktree's HEAD is THIS session's checkpoint, soft-reset it so the
+// snapshot returns to an uncommitted working tree and the agent continues where it left off, with
+// no checkpoint commit left in the branch's history. A no-op when HEAD isn't our checkpoint —
+// a fresh session, a permanent SUCCEEDED/FAILED end commit, or a branch merged/rebased since —
+// so it's safe to call unconditionally before every isolated session start. --soft never touches
+// the working tree or index, so the snapshot's content is preserved as a pending change.
+func uncommitParkCheckpoint(wt *Worktree) {
+	msg, err := git(wt.Path, "log", "-1", "--format=%B")
+	if err != nil || !strings.Contains(msg, parkCheckpointTrailer+": "+wt.Session) {
+		return
+	}
+	if _, err := git(wt.Path, "reset", "--soft", "HEAD~1"); err != nil {
+		logln("park-checkpoint un-commit failed for", wt.Session+":", err)
+		return
+	}
+	logln(fmt.Sprintf("session %s — undid park checkpoint (work restored to working tree)", wt.Session))
+}
+
+// gitEnv runs `git -C dir <args...>` with extra environment (e.g. GIT_INDEX_FILE).
+func gitEnv(dir string, env []string, args ...string) (string, error) {
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd.Env = env
+	out, err := cmd.Output()
+	return strings.TrimSpace(string(out)), err
+}
+
+// diffFiles returns the per-file change summary for the committed `git diff base..head`.
 func diffFiles(dir, base, head string) []ChangedFile {
 	rng := base + ".." + head
 	numOut, err := git(dir, "diff", "--numstat", rng)
@@ -224,14 +332,94 @@ func diffFiles(dir, base, head string) []ChangedFile {
 		logln("worktree diff failed in", dir+":", err)
 		return nil
 	}
-	// name-status (M/A/D/R...) keyed by path; for a rename take the new (last) path.
+	statusOut, _ := git(dir, "diff", "--name-status", rng)
+	return parseNumstat(numOut, statusOut)
+}
+
+// liveDiff returns the per-file stat summary AND the per-file unified-diff patches of the
+// worktree's CURRENT state (uncommitted + untracked) vs its base — for the turn-boundary
+// reports (turn-complete/complete) that drive the on-demand file diffs.
+func liveDiff(wt *Worktree) ([]ChangedFile, []FilePatch) {
+	return stagedLiveDiff(wt, true)
+}
+
+// liveDiffStat is the stats-only counterpart, for the heartbeat's SessionLiveState: it carries
+// the changed-file summary for the mid-turn status bar every ~30s, so it deliberately skips the
+// (heavier) per-file patch text that would bloat the heartbeat payload — the diff *patches*
+// refresh at turn boundaries via liveDiff instead.
+func liveDiffStat(wt *Worktree) []ChangedFile {
+	files, _ := stagedLiveDiff(wt, false)
+	return files
+}
+
+// stagedLiveDiff stages the worktree's current state into a throwaway temp index and computes
+// the per-file stat summary vs base; with withPatch it also captures the per-file unified-diff
+// patches (capped). The temp index (GIT_INDEX_FILE) never touches the real index claude may be
+// using, and .gitignore is respected so node_modules/build output don't show. The index is
+// pre-seeded from base (read-tree) so a tracked-but-ignored file isn't misreported as deleted.
+func stagedLiveDiff(wt *Worktree, withPatch bool) ([]ChangedFile, []FilePatch) {
+	if wt == nil || wt.BaseSha == "" {
+		return nil, nil
+	}
+	tmp, err := os.CreateTemp("", "orbit-idx-*")
+	if err != nil {
+		return nil, nil
+	}
+	idx := tmp.Name()
+	_ = tmp.Close()
+	// Remove the empty file first: git rejects a 0-byte index ("index file smaller than
+	// expected") — it creates a fresh index at this path instead.
+	_ = os.Remove(idx)
+	defer os.Remove(idx)
+	env := append(os.Environ(), "GIT_INDEX_FILE="+idx)
+	// Seed the temp index from base first: a file that's tracked in base but also matches a
+	// .gitignore rule (force-committed with `git add -f`) would otherwise be dropped by
+	// `add -A` — which honors .gitignore for paths it sees as untracked — and reported as a
+	// phantom deletion vs base. Pre-loaded as tracked, it survives and `add -A` only layers
+	// the worktree's real changes on top.
+	if _, err := gitEnv(wt.Path, env, "read-tree", wt.BaseSha); err != nil {
+		return nil, nil
+	}
+	if _, err := gitEnv(wt.Path, env, "add", "-A"); err != nil {
+		return nil, nil
+	}
+	numOut, err := gitEnv(wt.Path, env, "diff", "--cached", "--numstat", wt.BaseSha)
+	if err != nil {
+		return nil, nil
+	}
+	statusOut, _ := gitEnv(wt.Path, env, "diff", "--cached", "--name-status", wt.BaseSha)
+	files := parseNumstat(numOut, statusOut)
+	if !withPatch {
+		return files, nil
+	}
+	// Same staged index → the full patch matches the numstat exactly. Best-effort: a patch
+	// failure just leaves the file list without diffs, the status bar still works.
+	patchOut, _ := gitEnv(wt.Path, env, "diff", "--cached", wt.BaseSha)
+	return files, buildFilePatches(files, splitPatch(patchOut))
+}
+
+// worktreeIsDirty reports whether the worktree has uncommitted changes right now — tracked
+// or untracked, respecting .gitignore (`git status --porcelain` non-empty). Drives the
+// status bar's Commit-vs-Merge action. False for a nil/missing worktree.
+func worktreeIsDirty(wt *Worktree) bool {
+	if wt == nil {
+		return false
+	}
+	out, err := git(wt.Path, "status", "--porcelain")
+	return err == nil && out != ""
+}
+
+// parseNumstat zips `git diff --numstat` (+/-/path) with `git diff --name-status` (the
+// status letter, keyed by the new path for renames) into ChangedFile rows.
+func parseNumstat(numOut, statusOut string) []ChangedFile {
 	statusBy := map[string]string{}
-	if statusOut, err := git(dir, "diff", "--name-status", rng); err == nil {
-		for _, line := range strings.Split(statusOut, "\n") {
-			f := strings.Fields(line)
-			if len(f) >= 2 && len(f[0]) > 0 {
-				statusBy[f[len(f)-1]] = string(f[0][0])
-			}
+	for _, line := range strings.Split(statusOut, "\n") {
+		// `--name-status` is tab-delimited: "<status>\t<path>" (rename/copy add a trailing
+		// "\t<newpath>"). Split on tab, not whitespace, so filenames containing spaces aren't
+		// truncated and mis-keyed — which silently dropped them to the default "M".
+		f := strings.Split(line, "\t")
+		if len(f) >= 2 && f[0] != "" {
+			statusBy[f[len(f)-1]] = string(f[0][0])
 		}
 	}
 	var out []ChangedFile
@@ -263,6 +451,84 @@ func parseStatInt(s string) int {
 	return n
 }
 
+// Patch-size caps keep the per-turn upload (and the stored diff) bounded: a single file's
+// unified diff over maxFilePatchBytes, or any file once the running total passes
+// maxTotalPatchBytes, is reported as Truncated (no text) instead of shipped in full.
+const (
+	maxFilePatchBytes  = 64 * 1024
+	maxTotalPatchBytes = 512 * 1024
+)
+
+// splitPatch breaks a combined `git diff` into per-file unified-diff segments, keyed by each
+// file's new path (the `+++ b/…` header, falling back to the `diff --git …` line). Binary and
+// pure-rename sections carry no hunks and simply map to their header text.
+func splitPatch(full string) map[string]string {
+	out := map[string]string{}
+	if full == "" {
+		return out
+	}
+	var path string
+	var buf []string
+	flush := func() {
+		if path != "" {
+			out[path] = strings.Join(buf, "\n")
+		}
+		path, buf = "", nil
+	}
+	for _, ln := range strings.Split(full, "\n") {
+		if strings.HasPrefix(ln, "diff --git ") {
+			flush()
+			path = gitDiffNewPath(ln)
+			buf = []string{ln}
+			continue
+		}
+		if path == "" {
+			continue
+		}
+		// The `+++ b/<path>` header is the authoritative new name (handles renames); skip it
+		// for a deletion, whose +++ is /dev/null.
+		if strings.HasPrefix(ln, "+++ b/") {
+			path = ln[len("+++ b/"):]
+		}
+		buf = append(buf, ln)
+	}
+	flush()
+	return out
+}
+
+// gitDiffNewPath pulls the new path out of a `diff --git a/<old> b/<new>` header.
+func gitDiffNewPath(ln string) string {
+	if i := strings.Index(ln, " b/"); i >= 0 {
+		return ln[i+3:]
+	}
+	return ""
+}
+
+// buildFilePatches pairs each (non-binary) changed file with its unified-diff segment under
+// the per-file and running-total size caps. A file whose diff is too large — or that pushes
+// the total over the cap — is marked Truncated with no text; binary files are omitted (the
+// web shows "binary" from the ChangedFile stat).
+func buildFilePatches(files []ChangedFile, byPath map[string]string) []FilePatch {
+	var out []FilePatch
+	total := 0
+	for _, f := range files {
+		if f.Additions < 0 || f.Deletions < 0 {
+			continue // binary — no text preview
+		}
+		p := byPath[f.Path]
+		if p == "" {
+			continue
+		}
+		if len(p) > maxFilePatchBytes || total+len(p) > maxTotalPatchBytes {
+			out = append(out, FilePatch{Path: f.Path, Truncated: true})
+			continue
+		}
+		out = append(out, FilePatch{Path: f.Path, Patch: p})
+		total += len(p)
+	}
+	return out
+}
+
 // removeWorktree tears down the session's checkout (the branch is kept) and drops the base
 // ref. For a finished SUCCEEDED/FAILED session; a cancelled session keeps its checkout for
 // a possible resume and is reaped by gcWorktrees instead.
@@ -273,6 +539,444 @@ func removeWorktree(wt *Worktree) {
 		_, _ = git(wt.RepoDir, "worktree", "prune")
 	}
 	_, _ = git(wt.RepoDir, "update-ref", "-d", baseRefName(wt.Session))
+}
+
+// mergeLock serializes merges so two "merge to main" requests can't race on the same repo's
+// working tree / main ref.
+var mergeLock sync.Mutex
+
+// mergeOutcome is what mergeToMain reports: "merged" advanced main (MergedSha = new HEAD),
+// "conflict" means the merge was aborted cleanly, "error" means a precondition failed.
+// Message carries git's output / the failed precondition for the UI.
+type mergeOutcome struct {
+	Status    string
+	MergedSha string
+	Message   string
+}
+
+// mergeToMain brings a session's branch into a target branch on the runner's local repo by
+// REBASING the branch onto the target and fast-forwarding — so the result is a linear history
+// with no merge commit. The target is req.TargetBranch (the branch the user picked from the
+// status bar's dropdown), or auto-detected (main, else master) when empty.
+//
+// Before rebasing, the local target is brought up to date with origin/<target> (fetch +
+// fast-forward) when an 'origin' remote tracks it. Agents and "Resolve in session" reconcile
+// against origin/<target>, so a local target that lagged upstream would otherwise replay the
+// branch onto a stale base and conflict on lines already resolved upstream — a phantom conflict
+// no in-session resolve can clear. A target that has DIVERGED from origin (local-only commits) is
+// reported as an "error" to reconcile manually, rather than silently merged onto the wrong base.
+// Repos with no 'origin' (e.g. an auto-init'd workDir) skip this and behave exactly as before.
+//
+// The branch's commits are replayed on a temp copy in a throwaway worktree, so the session's own
+// branch is never rewritten (a resumable session keeps its original commits). The target is then
+// advanced to the rebased result, two paths, both conservative:
+//   - target is the repo root's current checkout (the usual case for main — isolated sessions
+//     run in their own worktrees, so the root sits on main between runs): fast-forward in place,
+//     guarding a clean tree so we never clobber unrelated work.
+//   - otherwise (a release/develop branch, or main when the root is on something else): the
+//     target isn't checked out anywhere, so move its ref directly. Fails cleanly if the target
+//     is checked out in another worktree.
+// A rebase conflict returns a "conflict" outcome (aborted cleanly); any precondition failure
+// returns "error" with an actionable message; the UI keeps a copyable `git merge` fallback. The
+// session branch is never rewritten or deleted. Serialized by mergeLock so concurrent merges
+// don't race on the repo.
+func mergeToMain(req MergeCommand) mergeOutcome {
+	mergeLock.Lock()
+	defer mergeLock.Unlock()
+
+	repoRoot, err := git(expandTilde(req.WorkDir), "rev-parse", "--show-toplevel")
+	if err != nil || repoRoot == "" {
+		return mergeOutcome{Status: "error", Message: "workDir is not a git repository"}
+	}
+	// Resolve the merge target: the branch the user picked, else auto-detect main → master.
+	target := strings.TrimSpace(req.TargetBranch)
+	if target == "" {
+		for _, b := range []string{"main", "master"} {
+			if branchExists(repoRoot, b) {
+				target = b
+				break
+			}
+		}
+		if target == "" {
+			return mergeOutcome{Status: "error", Message: "no main or master branch in this repo"}
+		}
+	} else if !branchExists(repoRoot, target) {
+		return mergeOutcome{Status: "error", Message: fmt.Sprintf("target branch %q not found", target)}
+	}
+	if !branchExists(repoRoot, req.Branch) {
+		return mergeOutcome{Status: "error", Message: fmt.Sprintf("branch %q not found", req.Branch)}
+	}
+	if req.Branch == target {
+		return mergeOutcome{Status: "error", Message: fmt.Sprintf("can't merge %q into itself", target)}
+	}
+
+	// Bring the local target up to date with origin before deciding how to advance it (see the
+	// function comment): a target that lagged origin/<target> would replay the branch onto a stale
+	// base and conflict on lines already reconciled upstream.
+	if out := reconcileTargetWithOrigin(repoRoot, target); out != nil {
+		return *out
+	}
+
+	// Decide how we'll advance the target after the rebase. If the repo root has the target checked
+	// out (usual for main), we fast-forward it in place and must guard a clean tree. Otherwise the
+	// target must not be checked out in any worktree, so we can move its ref directly.
+	ffAtRoot := false
+	if cur, _ := git(repoRoot, "rev-parse", "--abbrev-ref", "HEAD"); cur == target {
+		ffAtRoot = true
+		// Block on modified tracked files (a fast-forward could clobber them); untracked files are
+		// fine — git refuses only if the fast-forward would overwrite one (caught below).
+		if st, _ := git(repoRoot, "status", "--porcelain", "--untracked-files=no"); st != "" {
+			return mergeOutcome{Status: "error", Message: fmt.Sprintf("%s has uncommitted changes — commit/stash, or merge manually", target)}
+		}
+	} else if branchWorktree(repoRoot, target) != "" {
+		return mergeOutcome{Status: "error", Message: fmt.Sprintf("%q is checked out in another worktree — merge it there or pick another branch", target)}
+	}
+
+	return rebaseFastForward(repoRoot, req.Branch, target, req.SessionID, ffAtRoot)
+}
+
+// rebaseFastForward replays source's commits onto target and advances target to the result by
+// fast-forward, yielding a linear history with no merge commit. The replay runs on a temp branch
+// (a copy of source) in a throwaway worktree, so the session's own branch is left intact even if
+// it's checked out. ffAtRoot picks how target is advanced: in place at the repo root
+// (merge --ff-only) when it's the root checkout, else by moving its ref (branch -f) when it's
+// checked out nowhere — both strict fast-forwards, since the rebase put target underneath. On a
+// rebase conflict it aborts and reports "conflict". Inline identity so the rewritten commits
+// never fail on a runner with no git user.*.
+//
+// When origin tracks target, it pushes the rebased result to origin/<target> BEFORE advancing the
+// local branch, so the local target only ever moves to what origin already accepted — local merges
+// can't pile up unpushed and silently diverge from origin. A concurrent push that beats ours is
+// rejected (non-fast-forward); we re-sync to the new origin tip and replay, up to mergePushAttempts.
+func rebaseFastForward(repoRoot, source, target, sessionID string, ffAtRoot bool) mergeOutcome {
+	tmpBranch := "orbit/_rebase-" + sessionID
+	tmp := filepath.Join(worktreesDir(), "_rebase-"+sessionID)
+	// Clear any leftover from a crashed prior attempt before staging fresh.
+	_, _ = git(repoRoot, "worktree", "remove", "--force", tmp)
+	_ = os.RemoveAll(tmp)
+	_, _ = git(repoRoot, "branch", "-D", tmpBranch)
+
+	// Temp branch = source's tip, checked out in the throwaway worktree. A fresh branch (not
+	// source) means the rebase here never moves the session's branch.
+	if _, err := git(repoRoot, "worktree", "add", "-b", tmpBranch, tmp, source); err != nil {
+		return mergeOutcome{Status: "error", Message: clip(fmt.Sprintf("could not stage rebase of %s: %s", source, gitStderr(err)), 1000)}
+	}
+	defer func() {
+		_, _ = git(repoRoot, "worktree", "remove", "--force", tmp)
+		_ = os.RemoveAll(tmp)
+		_, _ = git(repoRoot, "branch", "-D", tmpBranch)
+	}()
+
+	pushToOrigin := originTracks(repoRoot, target)
+
+	// Replay the temp branch onto target and, when origin tracks target, push the result so
+	// origin/<target> advances in lockstep. A push that origin rejects (it moved under us) is
+	// retried: re-sync the local target to the new tip and replay onto it. The loop ends on a clean
+	// push, a local-only target (nothing to push), a rebase conflict, or a divergence we can't fix.
+	for attempt := 0; ; attempt++ {
+		// A conflict stops the rebase; abort so the worktree is left clean before we tear it down
+		// (git writes "CONFLICT ..." to stdout, returned as `out`).
+		if out, err := git(tmp,
+			"-c", "user.email=runner@orbit", "-c", "user.name=Orbit Runner",
+			"rebase", target); err != nil {
+			msg := strings.TrimSpace(out + "\n" + gitStderr(err))
+			_, _ = git(tmp, "rebase", "--abort")
+			return mergeOutcome{Status: "conflict", Message: clip(msg, 1000)}
+		}
+		if !pushToOrigin {
+			break // local-only target (or no origin): nothing to push.
+		}
+		// Push the rebased commits, fast-forwarding origin/<target> (target == origin/<target> after
+		// the reconcile, so origin is an ancestor of the rebased tip unless it just moved).
+		out, err := git(tmp, "push", "origin", "HEAD:refs/heads/"+target)
+		if err == nil {
+			break
+		}
+		combined := strings.TrimSpace(out + "\n" + gitStderr(err))
+		if !isNonFastForward(combined) {
+			// Auth/network/other — origin untouched, local target not yet advanced. Surface it.
+			return mergeOutcome{Status: "error", Message: clip(fmt.Sprintf("could not push %s to origin: %s", target, combined), 1000)}
+		}
+		if attempt+1 >= mergePushAttempts {
+			return mergeOutcome{Status: "error", Message: fmt.Sprintf("origin/%s kept advancing during the merge — retry", target)}
+		}
+		// Origin advanced under us. Fast-forward the local target to the new origin tip (or surface
+		// a genuine divergence) so the next iteration replays onto the up-to-date base.
+		if oc := reconcileTargetWithOrigin(repoRoot, target); oc != nil {
+			return *oc
+		}
+	}
+
+	// Advance target to the rebased commits — a strict fast-forward (target is now an ancestor).
+	if ffAtRoot {
+		if out, err := git(repoRoot, "merge", "--ff-only", tmpBranch); err != nil {
+			return mergeOutcome{Status: "error", Message: clip(strings.TrimSpace(out+"\n"+gitStderr(err)), 1000)}
+		}
+	} else if _, err := git(repoRoot, "branch", "-f", target, tmpBranch); err != nil {
+		return mergeOutcome{Status: "error", Message: clip(fmt.Sprintf("could not advance %s: %s", target, gitStderr(err)), 1000)}
+	}
+
+	sha, _ := git(repoRoot, "rev-parse", target)
+	logln(fmt.Sprintf("rebased %s onto %s (%s) for session %s", source, target, shortSha(sha), sessionID))
+	return mergeOutcome{Status: "merged", MergedSha: sha}
+}
+
+// mergePushAttempts bounds how many times a merge re-syncs and re-pushes when a concurrent push to
+// origin keeps beating ours — enough to absorb a racing writer, not an infinite loop.
+const mergePushAttempts = 3
+
+// originTracks reports whether the repo has an 'origin' remote that already carries <target>, i.e.
+// a successful merge should push the advance back to origin/<target>. False for local-init repos
+// (no origin) and for branches that live only locally — both keep the merge local-only.
+func originTracks(repoRoot, target string) bool {
+	if _, err := git(repoRoot, "remote", "get-url", "origin"); err != nil {
+		return false
+	}
+	_, err := git(repoRoot, "rev-parse", "--verify", "--quiet", "origin/"+target)
+	return err == nil
+}
+
+// isNonFastForward reports whether a failed `git push` was rejected because origin moved ahead (the
+// retryable case), versus an auth/network/other failure that retrying won't fix.
+func isNonFastForward(pushOutput string) bool {
+	s := strings.ToLower(pushOutput)
+	return strings.Contains(s, "non-fast-forward") ||
+		strings.Contains(s, "fetch first") ||
+		strings.Contains(s, "[rejected]")
+}
+
+// reconcileTargetWithOrigin fast-forwards the local target branch to origin/<target> before a
+// merge so the rebase replays onto the same tip agents and "Resolve in session" reconcile against
+// (origin/<target>), not a stale local ref. Returns nil when there's nothing to do (no 'origin'
+// remote, the target isn't tracked on origin, or it's already in sync / already ahead of origin),
+// and an *mergeOutcome{error} when the local target has diverged from origin or the fast-forward
+// fails — both surfaced rather than merged onto the wrong base. Best-effort on the network: a
+// failed fetch just proceeds against whatever origin ref the repo already has.
+func reconcileTargetWithOrigin(repoRoot, target string) *mergeOutcome {
+	// No 'origin' remote (e.g. an auto-init'd local repo) → nothing to reconcile; behave as before.
+	if _, err := git(repoRoot, "remote", "get-url", "origin"); err != nil {
+		return nil
+	}
+	_, _ = git(repoRoot, "fetch", "origin", target) // read-only; transient failures fall through
+	remoteRef := "origin/" + target
+	if _, err := git(repoRoot, "rev-parse", "--verify", "--quiet", remoteRef); err != nil {
+		return nil // target isn't tracked on origin (a local-only branch) → nothing to reconcile
+	}
+	localSha, _ := git(repoRoot, "rev-parse", target)
+	remoteSha, _ := git(repoRoot, "rev-parse", remoteRef)
+	if localSha == remoteSha {
+		return nil // already in sync
+	}
+	// Local already contains origin (local is ahead) → the rebase base is fine as-is.
+	if _, err := git(repoRoot, "merge-base", "--is-ancestor", remoteRef, target); err == nil {
+		return nil
+	}
+	// Local is behind origin (origin is a strict descendant) → fast-forward the local target up to
+	// origin so the branch replays onto the up-to-date tip.
+	if _, err := git(repoRoot, "merge-base", "--is-ancestor", target, remoteRef); err == nil {
+		if cur, _ := git(repoRoot, "rev-parse", "--abbrev-ref", "HEAD"); cur == target {
+			// Target is checked out at the repo root: fast-forward in place, guarding a clean tree
+			// (an ff could clobber modified tracked files).
+			if st, _ := git(repoRoot, "status", "--porcelain", "--untracked-files=no"); st != "" {
+				return &mergeOutcome{Status: "error", Message: fmt.Sprintf("%s has uncommitted changes — commit/stash, or merge manually", target)}
+			}
+			if out, err := git(repoRoot, "merge", "--ff-only", remoteRef); err != nil {
+				return &mergeOutcome{Status: "error", Message: clip(strings.TrimSpace(out+"\n"+gitStderr(err)), 1000)}
+			}
+		} else if branchWorktree(repoRoot, target) != "" {
+			return &mergeOutcome{Status: "error", Message: fmt.Sprintf("%q is checked out in another worktree — can't sync it with origin", target)}
+		} else if _, err := git(repoRoot, "branch", "-f", target, remoteRef); err != nil {
+			return &mergeOutcome{Status: "error", Message: clip(fmt.Sprintf("could not fast-forward %s to origin: %s", target, gitStderr(err)), 1000)}
+		}
+		return nil
+	}
+	// Neither is an ancestor of the other → genuinely diverged. Rebasing onto the stale local
+	// target is exactly the phantom-conflict bug, so surface it instead of merging blindly.
+	return &mergeOutcome{Status: "error", Message: fmt.Sprintf(
+		"local %s has diverged from origin/%s — reconcile it with origin first (git checkout %s && git merge origin/%s), then retry the merge",
+		target, target, target, target)}
+}
+
+// branchWorktree returns the path of the worktree that has `branch` checked out, or "" if none
+// does — used to refuse advancing a target that's checked out somewhere (we'd corrupt that
+// checkout). Best-effort: "" on any git error.
+func branchWorktree(repoRoot, branch string) string {
+	out, err := git(repoRoot, "worktree", "list", "--porcelain")
+	if err != nil {
+		return ""
+	}
+	want := "refs/heads/" + branch
+	path := ""
+	for _, line := range strings.Split(out, "\n") {
+		if p, ok := strings.CutPrefix(line, "worktree "); ok {
+			path = p
+		} else if ref, ok := strings.CutPrefix(line, "branch "); ok && ref == want {
+			return path
+		}
+	}
+	return ""
+}
+
+// commitOutcome is what commitWorktree reports: "committed" advanced the branch, "nochange"
+// means the tree was already clean, "error" means a precondition failed / git errored.
+type commitOutcome struct {
+	Status  string
+	Message string
+}
+
+// commitWorktree commits a live session's uncommitted worktree changes onto its branch, so
+// the user can checkpoint (and then merge) without ending the session. It operates on the
+// session's own checkout (worktreesDir()/SessionID), which is separate from the primary repo
+// on main, so it never disturbs main or another session. Returns "nochange" when the tree is
+// already clean, "committed" on a new commit, "error" if the checkout is missing or git
+// fails. Serialized per session by the runloop's in-flight guard.
+func commitWorktree(req CommitCommand) commitOutcome {
+	wtPath := filepath.Join(worktreesDir(), req.SessionID)
+	if !isGitRepo(wtPath) {
+		return commitOutcome{Status: "error", Message: "no live worktree for this session"}
+	}
+	if _, err := git(wtPath, "add", "-A"); err != nil {
+		return commitOutcome{Status: "error", Message: clip(gitStderr(err), 1000)}
+	}
+	// `diff --cached --quiet` exits 0 when nothing is staged → the tree is already clean.
+	if _, err := git(wtPath, "diff", "--cached", "--quiet"); err == nil {
+		return commitOutcome{Status: "nochange"}
+	}
+	// Summarize the staged diff into a real Conventional-Commits message (one-shot headless
+	// Claude); fall back to a diffstat subject, then the bare branch slug, so the history
+	// reads like hand-written commits instead of "orbit: commit <branch>".
+	msg := generateCommitMessage(wtPath, diffstatFallbackMessage(wtPath, req.Branch))
+	// Inline identity + --no-verify so the commit never fails on a runner with no git user.*
+	// set or a repo pre-commit hook (mirrors finalizeWorktree).
+	if _, err := git(wtPath,
+		"-c", "user.email=runner@orbit", "-c", "user.name=Orbit Runner",
+		"commit", "--no-verify", "-m", msg); err != nil {
+		return commitOutcome{Status: "error", Message: clip(gitStderr(err), 1000)}
+	}
+	logln(fmt.Sprintf("committed worktree changes for session %s onto %s", req.SessionID, req.Branch))
+	return commitOutcome{Status: "committed"}
+}
+
+// commitMsgModel is the Claude alias used to summarize a commit's diff — a fast, cheap tier is
+// plenty for a one-line message, and the call runs on the user's own subscription.
+const commitMsgModel = "sonnet"
+
+// commitMsgPrompt instructs the one-shot Claude; the staged diff is appended verbatim.
+const commitMsgPrompt = `Generate a git commit message for the staged changes below.
+
+Rules:
+- Use Conventional Commits format (feat:, fix:, chore:, refactor:, docs:, test:, etc.).
+- Subject line: imperative mood, max 72 chars, no trailing period.
+- Output ONLY the raw commit message. No markdown, no code fences, no surrounding quotes, no preamble like "Here is".
+- Add a short body after a blank line only if the change is non-trivial.
+
+Diff:
+`
+
+// generateCommitMessage asks a one-shot headless Claude to summarize the session's staged
+// worktree diff into a Conventional-Commits message, so a user-initiated checkpoint commit
+// reads like a hand-written one instead of "orbit: commit <branch>". Best-effort: on any
+// failure (claude missing / not signed in / timeout / empty reply) it returns `fallback`.
+// Runs in a throwaway temp dir so the target repo's CLAUDE.md / .mcp.json can't slow it down
+// or pull in tools, and bounds the diff so the call stays fast and cheap.
+func generateCommitMessage(wtPath, fallback string) string {
+	diff, err := git(wtPath, "diff", "--cached")
+	if err != nil || strings.TrimSpace(diff) == "" {
+		return fallback
+	}
+	const maxDiffRunes = 12000 // a few thousand tokens characterizes any change; keeps it quick
+	if r := []rune(diff); len(r) > maxDiffRunes {
+		diff = string(r[:maxDiffRunes]) + "\n…(diff truncated)"
+	}
+	tmp, err := os.MkdirTemp("", "orbit-cmsg-")
+	if err != nil {
+		return fallback
+	}
+	defer os.RemoveAll(tmp)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "claude", "-p", commitMsgPrompt+diff,
+		"--model", commitMsgModel, "--output-format", "text")
+	cmd.Dir = tmp
+	out, err := cmd.Output()
+	if err != nil {
+		return fallback
+	}
+	if msg := cleanCommitMessage(string(out)); msg != "" {
+		return msg
+	}
+	return fallback
+}
+
+// cleanCommitMessage normalizes the model's reply into a commit message: it strips a ```-fenced
+// wrapper and a single layer of surrounding quotes/backticks the model may add despite the
+// instructions, trims whitespace, and caps the length so a runaway body can't bloat history.
+// Returns "" when nothing usable remains (caller then falls back).
+func cleanCommitMessage(raw string) string {
+	s := strings.TrimSpace(raw)
+	if strings.HasPrefix(s, "```") {
+		if i := strings.IndexByte(s, '\n'); i >= 0 {
+			s = s[i+1:]
+		}
+		if j := strings.LastIndex(s, "```"); j >= 0 {
+			s = s[:j]
+		}
+		s = strings.TrimSpace(s)
+	}
+	for _, q := range []string{`"`, "'", "`"} {
+		if len(s) >= 2 && strings.HasPrefix(s, q) && strings.HasSuffix(s, q) {
+			s = strings.TrimSpace(s[1 : len(s)-1])
+			break
+		}
+	}
+	const maxRunes = 2000
+	if r := []rune(s); len(r) > maxRunes {
+		s = strings.TrimSpace(string(r[:maxRunes]))
+	}
+	return s
+}
+
+// diffstatFallbackMessage builds a deterministic subject from the staged file list, so even
+// without the LLM the message beats the bare branch slug. Falls back to "orbit: commit
+// <branch>" when git can't enumerate the staged diff.
+func diffstatFallbackMessage(wtPath, branch string) string {
+	names, err := git(wtPath, "diff", "--cached", "--name-only")
+	if err != nil || strings.TrimSpace(names) == "" {
+		return "orbit: commit " + branch
+	}
+	files := strings.Split(strings.TrimSpace(names), "\n")
+	switch {
+	case len(files) == 1:
+		return "Update " + filepath.Base(files[0])
+	case len(files) <= 3:
+		bases := make([]string, len(files))
+		for i, f := range files {
+			bases[i] = filepath.Base(f)
+		}
+		return "Update " + strings.Join(bases, ", ")
+	default:
+		return fmt.Sprintf("Update %s and %d more files", filepath.Base(files[0]), len(files)-1)
+	}
+}
+
+// gitStderr extracts git's stderr from a failed git() call (Output() puts it on ExitError).
+func gitStderr(err error) string {
+	if ee, ok := err.(*exec.ExitError); ok {
+		return strings.TrimSpace(string(ee.Stderr))
+	}
+	if err != nil {
+		return err.Error()
+	}
+	return ""
+}
+
+// clip truncates s to at most n runes, appending an ellipsis when it cut anything.
+func clip(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
 }
 
 // gcWorktrees removes leftover session checkouts whose session is no longer live — a crash
@@ -304,5 +1008,22 @@ func gcWorktrees(live map[string]bool) {
 		}
 		_ = os.RemoveAll(path)
 		logln("gc: removed orphan worktree dir", e.Name())
+	}
+}
+
+// gcUploads removes per-session attachment scratch dirs (writeUpload) whose session is no
+// longer live, mirroring gcWorktrees. Uploads live outside the worktree, so they get their own
+// sweep — otherwise a crashed or never-resumed session would leak its uploads forever.
+func gcUploads(live map[string]bool) {
+	entries, err := os.ReadDir(uploadsRootDir())
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if !e.IsDir() || live[e.Name()] {
+			continue
+		}
+		_ = os.RemoveAll(filepath.Join(uploadsRootDir(), e.Name()))
+		logln("gc: removed orphan uploads dir", e.Name())
 	}
 }

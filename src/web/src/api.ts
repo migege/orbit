@@ -52,12 +52,18 @@ export const createInteractiveSession = (body: {
   /** Ids of images uploaded unscoped on the compose page; the server scopes them to the
    *  new session and links them to its seeded first turn. */
   attachmentIds?: string[];
+  /** Compose from a `!cmd` draft: the server seeds the first turn as a shell command
+   *  (run on the runner, bypassing claude) instead of a normal message. */
+  shell?: boolean;
 }) =>
   api<{ id: string }>('/sessions', {
     method: 'POST',
     body: {
       ...body,
-      title: body.prompt.trim().slice(0, 80) || 'Interactive session',
+      // Mark a shell-launched session in the list with a `$` prefix so it reads as a command.
+      title: body.shell
+        ? `$ ${body.prompt.trim()}`.slice(0, 80)
+        : body.prompt.trim().slice(0, 80) || 'Interactive session',
     },
   });
 
@@ -145,16 +151,25 @@ export const listQueuedTurns = (sessionId: string) =>
 
 /** Revive an ended session with a new message: the runner --resumes claude's
  *  existing context. Requires the session's runner to be online. `config` re-applies
- *  mode/model/effort changes made while ended (omitted fields keep the prior value). */
+ *  mode/model/effort changes made while ended (omitted fields keep the prior value).
+ *  `kind: 'shell'` revives via a `!cmd` shell turn (run on the runner, output buffered
+ *  for the next message) instead of a normal prompt — claude still --resumes and idles. */
 export const resumeSession = (
   sessionId: string,
   content: string,
   config?: { model?: string; permissionMode?: string; effort?: string },
   attachmentIds?: string[],
+  kind?: 'message' | 'shell',
 ) =>
   api<{ turnId: string; seq: number }>(`/sessions/${sessionId}/resume`, {
     method: 'POST',
-    body: { clientTurnId: uuid(), content, ...config, ...(attachmentIds?.length ? { attachmentIds } : {}) },
+    body: {
+      clientTurnId: uuid(),
+      content,
+      ...config,
+      ...(attachmentIds?.length ? { attachmentIds } : {}),
+      ...(kind === 'shell' ? { kind } : {}),
+    },
   });
 
 export interface ApprovalInfo {
@@ -209,6 +224,20 @@ export const interruptSession = (sessionId: string) =>
 
 export const endSession = (sessionId: string) => api(`/sessions/${sessionId}/end`, { method: 'POST' });
 
+/** Ask the runner that ran this session to merge its worktree branch into `targetBranch`
+ *  (omitted → the default: the runner auto-detects main, else master). Async: the outcome
+ *  lands on SessionDetail.mergeStatus within a heartbeat (~30s). */
+export const mergeSessionToMain = (sessionId: string, targetBranch?: string) =>
+  api(`/sessions/${sessionId}/merge`, {
+    method: 'POST',
+    body: targetBranch ? { targetBranch } : {},
+  });
+
+/** Ask the runner to commit a live session's uncommitted worktree changes onto its branch.
+ *  Async: the outcome lands on SessionDetail.commitStatus / worktreeDirty within a heartbeat. */
+export const commitSession = (sessionId: string) =>
+  api(`/sessions/${sessionId}/commit`, { method: 'POST' });
+
 // Soft visibility actions for ended sessions. Archive hides a session into the
 // Archived view; delete moves it to the trash. Both keep all data; restore (which
 // clears both) brings it back to the active list. There is no hard delete.
@@ -236,17 +265,65 @@ export interface SessionChangedFile {
 export interface SessionDetail {
   id: string;
   assignedRunnerId: string | null;
-  agent: { id: string } | null;
+  // `defaultMergeTarget` is the branch this agent's sessions merge into by default,
+  // remembered from the last target the user switched to in the merge dropdown (null = the
+  // runner's auto-detected default). Agent-scoped, so it sticks across the agent's sessions.
+  agent: { id: string; defaultMergeTarget?: string | null } | null;
   branch?: string | null;
   baseSha?: string | null;
   changedFiles?: SessionChangedFile[] | null;
   isolationStatus?: string | null;
+  // "Merge to main" outcome (see mergeSessionToMain): 'pending' while the runner works,
+  // then 'merged' (mergedAt set) | 'conflict' | 'error' (mergeError carries why). Null
+  // until the user clicks merge.
+  mergeStatus?: 'pending' | 'merged' | 'conflict' | 'error' | null;
+  mergeError?: string | null;
+  mergedAt?: string | null;
+  // The branch the user chose to merge into (status bar's branch dropdown). Null = the
+  // default (runner auto-detects main, else master). Shown on the merged ✓ chip + used by
+  // "Retry merge" to retry the same target.
+  mergeTarget?: string | null;
+  // Candidate merge-target branches the runner reported for this session's repo (local
+  // branches minus orbit/*), populating the dropdown. Empty for older runners → no dropdown.
+  mergeTargets?: string[] | null;
+  // Whether the branch already landed in the default target (main, else master) — the runner's
+  // `git merge-base --is-ancestor` result. True → the bar shows a "✓ In main" chip instead of a
+  // redundant Merge button (the work merged out-of-band, e.g. a command-line push). Null = not
+  // reported (older runner / not recomputed since) → the bar keeps its mergeStatus behavior.
+  branchMerged?: boolean | null;
+  // Live-worktree commit state (see commitSession). worktreeDirty drives the bar's primary
+  // action — true → Commit, false → Merge — when the runner reports it (null = not reported,
+  // so the bar falls back to the session lifecycle). commitStatus is 'pending' while the
+  // runner commits, then 'committed' | 'nochange' | 'error' (commitError carries why).
+  worktreeDirty?: boolean | null;
+  commitStatus?: 'pending' | 'committed' | 'nochange' | 'error' | null;
+  commitError?: string | null;
 }
 
 /** Fetch one session by id (accepts a base62 public id or a raw UUID). Used to
  *  resolve the runner behind a `/sessions/:id` deep link and show its worktree output. */
 export const getSession = (idOrPublicId: string) =>
   api<SessionDetail>(`/sessions/${idOrPublicId}`);
+
+/** One changed file's full unified-diff text (git diff vs base). `patch` is absent for a
+ *  binary file (shown via the stat instead) or one dropped for size; `truncated` marks the
+ *  latter. Mirrors @orbit/shared FilePatch. Fetched lazily, only when a file's diff opens. */
+export interface SessionFilePatch {
+  path: string;
+  patch?: string;
+  truncated?: boolean;
+}
+
+/** The session's per-file diffs, kept off the session payload and fetched on demand when a
+ *  file in the worktree status bar is opened (GET /sessions/:id/diff). */
+export const getSessionDiff = (idOrPublicId: string) =>
+  api<{ patches: SessionFilePatch[] }>(`/sessions/${idOrPublicId}/diff`);
+
+/** Ask the live runner to recompute the worktree diff now (fixes a file listed but with no
+ *  stored patch — "No diff to preview" — when the snapshot lagged the live worktree). The fresh
+ *  diff lands asynchronously via the runner, so the caller refetches getSessionDiff after. */
+export const refreshSessionDiff = (idOrPublicId: string) =>
+  api<void>(`/sessions/${idOrPublicId}/diff/refresh`, { method: 'POST' });
 
 /** Enable per-session worktree isolation for an agent whose workDir isn't a git repo:
  *  flips `autoInitGit` so the runner `git init`s the dir (default .gitignore + baseline

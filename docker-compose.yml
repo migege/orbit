@@ -26,9 +26,6 @@ services:
       JWT_SECRET: "${JWT_SECRET:?set JWT_SECRET (generate: openssl rand -base64 32)}"
       PORT: "3000"
       CORS_ORIGINS: "http://localhost:2086"
-      # Shared secret guarding operator-only endpoints (e.g. POST /api/users).
-      # Leave unset to keep those endpoints closed.
-      ADMIN_TOKEN: "${ADMIN_TOKEN:-}"
       # Optional: DeepSeek (OpenAI-compatible) for clean English session titles + worktree
       # branch slugs. Unset → a deterministic slug fallback, no LLM call (see naming.ts).
       DEEPSEEK_API_KEY: "${DEEPSEEK_API_KEY:-}"
@@ -51,6 +48,10 @@ services:
     build:
       context: .
       dockerfile: src/web/Dockerfile
+      args:
+        # Public origin the install commands point at; baked into the bundle at build time.
+        # Defaults to the local gateway — set PUBLIC_ORIGIN in .env when serving on a domain.
+        PUBLIC_ORIGIN: "${PUBLIC_ORIGIN:-http://localhost:2086}"
     container_name: orbit-web
     depends_on:
       apiserver:

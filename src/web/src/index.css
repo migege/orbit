@@ -971,25 +971,57 @@ body {
   flex-direction: column;
   gap: 8px;
 }
-.skills-runner {
+/* One collapsible scope group (an agent, or a runner's "Shared" host bucket). */
+.skills-group-card {
   border: 1px solid var(--border-subtle);
   border-radius: 10px;
   background: var(--bg-raised);
-  padding: 14px;
+  overflow: hidden;
 }
-.skills-runner-head {
+.skills-group-head {
   display: flex;
   align-items: center;
   gap: 10px;
+  width: 100%;
+  padding: 12px 14px;
+  border: none;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
-.skills-runner-name {
+.skills-group-head:hover {
+  background: var(--bg-hover);
+}
+.skills-caret {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-3);
+  transition: transform 0.15s;
+}
+.skills-caret.open {
+  transform: rotate(90deg);
+}
+.skills-group-name {
   font-size: 14px;
-  font-weight: 500;
+  font-weight: 600;
   color: var(--text-1);
 }
-.skills-runner-status {
+.skills-group-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 12px;
   color: var(--text-3);
+}
+.skills-group-count {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.skills-group-body {
+  padding: 0 14px 12px;
 }
 .skills-group {
   margin-top: 12px;
@@ -1047,12 +1079,6 @@ body {
 .skill-desc-toggle:hover {
   text-decoration: underline;
 }
-.skills-runner-empty {
-  margin-top: 10px;
-  font-size: 13px;
-  color: var(--text-3);
-}
-
 /* ---- Runner detail / settings page ---- */
 .rd-head {
   margin-bottom: 8px;
@@ -1638,7 +1664,7 @@ body {
   display: flex;
   flex-direction: column;
   height: 100%;
-  padding: 24px var(--pane-gutter);
+  padding: 16px var(--pane-gutter);
 }
 .agent-header {
   display: flex;
@@ -1698,46 +1724,217 @@ body {
   margin-top: 2px;
 }
 
-/* Per-session worktree result, shown below the header once a run finishes (see
-   SessionOutputs.tsx): the branch the work was committed to + the changed files. */
-.session-outputs {
-  margin: 0 16px 10px;
-  padding: 10px 12px;
+/* Background-process tray above the composer (BackgroundShellsTray.tsx): the shells the
+   agent launched with Bash(run_in_background), collapsed to one line, expandable to a list
+   of processes (command · id · age) each showing its latest polled output. Shares the
+   collapsed-bar visual language with .wt-bar below. */
+.bg-tray {
+  margin: 0 0 8px;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
   background: var(--bg-subtle);
-  font-size: 12.5px;
+  overflow: hidden;
 }
-.session-outputs-head {
+.bg-tray-row {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
   gap: 8px;
+  min-height: 30px;
+  padding: 2px 6px 2px 10px;
+  font-size: 12px;
+  cursor: pointer;
 }
-.session-outputs-branch {
-  font-family: var(--font-mono, ui-monospace, monospace);
-  font-weight: 600;
+.bg-tray-row:hover {
+  background: var(--bg-hover);
+}
+.bg-tray-ico {
+  flex: none;
+  color: var(--text-3);
+}
+.bg-tray-title {
   color: var(--text-1);
+  font-weight: 500;
+}
+.bg-tray-count {
+  color: var(--text-3);
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+.bg-tray-list {
+  border-top: 1px solid var(--border-subtle);
+  padding: 4px 8px 6px;
+  max-height: 320px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.bg-shell {
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
   background: var(--bg-raised);
+  overflow: hidden;
+}
+.bg-shell-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.bg-shell-head:hover {
+  background: var(--bg-hover);
+}
+.bg-shell-cmd {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-1);
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+.bg-shell-id {
+  flex: none;
+  color: var(--text-3);
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+.bg-shell-age {
+  flex: none;
+  color: var(--text-3);
+}
+.bg-shell-caret {
+  flex: none;
+  display: inline-flex;
+  color: var(--text-3);
+}
+.bg-shell-peek {
+  padding: 0 8px 5px 30px;
+  color: var(--text-3);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bg-shell-detail {
+  border-top: 1px solid var(--border-subtle);
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.bg-shell-empty {
+  color: var(--text-3);
+  font-size: 12px;
+  font-style: italic;
+}
+.bg-shell-meta {
+  color: var(--text-3);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Worktree status bar above the composer (SessionOutputs.tsx): the branch this session's
+   work lives on + its diff, collapsed to one line, expandable to the changed files. */
+.wt-bar {
+  margin: 0 0 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-subtle);
+  overflow: hidden;
+}
+.wt-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 2px 6px 2px 10px;
+  font-size: 12px;
+}
+/* Whole-row click target when there's a file list to expand. */
+.wt-row-toggle {
+  cursor: pointer;
+}
+.wt-row-toggle:hover {
+  background: var(--bg-hover);
+}
+.wt-branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 56%;
+  padding: 2px 7px;
   border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 1px 7px;
-}
-.session-outputs-base {
-  color: var(--text-3);
+  background: var(--bg-raised);
+  color: var(--text-1);
   font-family: var(--font-mono, ui-monospace, monospace);
+  cursor: pointer;
 }
-.session-outputs-count {
+.wt-branch:hover {
+  background: var(--bg-hover);
+}
+.wt-branch-ico {
+  flex: none;
   color: var(--text-3);
-  margin-left: auto;
 }
-.session-outputs-files {
-  margin-top: 8px;
+.wt-branch-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wt-dim {
+  color: var(--text-3);
+}
+.wt-stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  color: var(--text-3);
+}
+.wt-add {
+  color: var(--success-solid);
+}
+.wt-del {
+  color: var(--error-solid);
+}
+.wt-spacer {
+  flex: 1 1 auto;
+}
+.wt-expand {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  border-radius: 5px;
+  cursor: pointer;
+}
+.wt-expand:hover {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+.wt-files-panel {
+  border-top: 1px solid var(--border-subtle);
+  padding: 7px 10px 8px;
+  max-height: 220px;
+  overflow: auto;
   display: flex;
   flex-direction: column;
   gap: 2px;
-  max-height: 220px;
-  overflow: auto;
 }
 .session-file {
   display: flex;
@@ -1766,10 +1963,24 @@ body {
 .session-file-path {
   flex: 1 1 auto;
   min-width: 0;
+  display: flex;
+  align-items: baseline;
+  overflow: hidden;
+  color: var(--text-2);
+}
+/* Dimmed directory gives up width first (ellipsis); the basename never shrinks, so files in the
+   same folder stay distinguishable instead of all truncating to the shared prefix. */
+.session-file-dir {
+  flex: 0 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--text-2);
+  color: var(--text-4);
+}
+.session-file-name {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 .session-file-stat {
   flex: none;
@@ -1787,41 +1998,248 @@ body {
   color: var(--text-4);
   font-style: italic;
 }
-.session-outputs-merge {
-  display: inline-block;
-  margin-top: 8px;
-  padding: 2px 7px;
-  border-radius: 6px;
-  background: var(--bg-sunken);
-  color: var(--text-2);
-  font-size: 11.5px;
-  font-family: var(--font-mono, ui-monospace, monospace);
+/* In the expanded list and the diff drawer, each file row is a button that opens its diff. */
+.session-file-btn {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  border-radius: 5px;
+  padding: 2px 6px;
+  margin: 0 -6px;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
 }
-.session-outputs-nogit {
+.session-file-btn:hover {
+  background: var(--bg-hover);
+}
+.session-file-btn.active {
+  background: var(--bg-active, var(--bg-hover));
+}
+.session-file-btn.active .session-file-name {
+  color: var(--text-1);
+}
+/* ── Worktree file-diff drawer (click a changed file → its unified diff) ─────── */
+.wt-diff-head {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+.wt-diff-head-sub {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-3);
+}
+.wt-diff-drawer .ant-drawer-body {
+  padding: 0;
+}
+.wt-diff-body {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+}
+.wt-diff-list {
+  flex: none;
+  width: 248px;
+  border-right: 1px solid var(--border-subtle);
+  padding: 8px;
+  overflow: auto;
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  border-color: var(--warning-border);
-  background: var(--warning-bg);
+  gap: 2px;
 }
-.session-outputs-warn {
-  font-weight: 600;
-  color: var(--warning);
+.wt-diff-pane {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
-.session-outputs-hint {
-  color: var(--text-2);
-  line-height: 1.5;
-}
-.session-outputs-hint code {
+.wt-diff-pane-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--border-subtle);
   font-family: var(--font-mono, ui-monospace, monospace);
-  background: var(--bg-raised);
+  font-size: 12.5px;
+}
+.wt-diff-pane-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-1);
+}
+.wt-diff-pane-stat {
+  flex: none;
+  display: inline-flex;
+  gap: 8px;
+}
+.wt-diff-pane-stat .add {
+  color: var(--success-solid);
+}
+.wt-diff-pane-stat .del {
+  color: var(--error-solid);
+}
+.wt-diff-view {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  border: 0;
+  border-radius: 0;
+}
+.wt-diff-empty {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  color: var(--text-3);
+  font-size: 13px;
+}
+/* Narrow screens: stack the file list above the diff instead of a side rail. */
+@media (max-width: 700px) {
+  .wt-diff-body {
+    flex-direction: column;
+  }
+  .wt-diff-list {
+    width: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--border-subtle);
+    max-height: 30vh;
+  }
+}
+.wt-merge {
+  margin-top: 7px;
+  padding-top: 7px;
+  border-top: 1px dashed var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+.wt-merge-cmd {
+  align-self: flex-start;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  background: var(--bg-sunken);
+  color: var(--text-2);
+  padding: 2px 7px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.wt-merge-cmd:hover {
+  background: var(--bg-hover);
+}
+/* "Merge to main": a compact action button on the bar row; failure detail + the copyable
+   manual command live in the expandable panel below (.wt-merge-manual). */
+.wt-merge-btn {
+  flex: none;
+  padding: 2px 10px;
+  border: 1px solid var(--brand-border);
+  border-radius: 6px;
+  background: var(--brand-tint);
+  color: var(--brand);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.wt-merge-btn:hover:not(:disabled) {
+  background: var(--brand-tint-hover);
+}
+.wt-merge-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.wt-merge-btn-failed {
+  border-color: var(--error-border, var(--error));
+  background: var(--error-bg);
+  color: var(--error);
+}
+.wt-merge-done {
+  flex: none;
+  font-weight: 600;
+  color: var(--success);
+}
+/* Split "Merge to <branch>" button: the main action butted up against a caret that opens a
+   dropdown of other branches to merge into. The main button's right border is the divider. */
+.wt-merge-split-wrap {
+  flex: none;
+  display: inline-flex;
+  align-items: stretch;
+}
+.wt-merge-btn-split {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.wt-merge-caret {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 6px;
+  border: 1px solid var(--brand-border);
+  border-left: none;
+  border-top-right-radius: 6px;
+  border-bottom-right-radius: 6px;
+  background: var(--brand-tint);
+  color: var(--brand);
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+}
+.wt-merge-caret:hover {
+  background: var(--brand-tint-hover);
+}
+.wt-merge-caret.wt-merge-btn-failed {
+  border-color: var(--error-border, var(--error));
+  background: var(--error-bg);
+  color: var(--error);
+}
+/* A branch row in the merge-target dropdown: the name + a subtle "default" tag on main/master. */
+.wt-merge-target {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.wt-merge-target-name {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+}
+.wt-merge-target-tag {
+  font-size: 10px;
+  color: var(--text-3);
+  border: 1px solid var(--border-subtle);
   border-radius: 4px;
   padding: 0 4px;
 }
-.session-outputs-enable {
-  align-self: flex-start;
-  margin-top: 6px;
-  padding: 4px 12px;
+.wt-merge-manual {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.wt-merge-err {
+  color: var(--error);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.wt-merge-or {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+/* Non-git: ran in the shared dir; amber bar with the one-click enable. */
+.wt-bar-nogit {
+  border-color: var(--warning-border);
+  background: var(--warning-bg);
+}
+.wt-warn {
+  font-weight: 600;
+  color: var(--warning);
+}
+.wt-enable {
+  flex: none;
+  padding: 3px 11px;
   border: 1px solid var(--warning-border);
   border-radius: 6px;
   background: var(--bg-raised);
@@ -1830,10 +2248,10 @@ body {
   font-weight: 600;
   cursor: pointer;
 }
-.session-outputs-enable:hover:not(:disabled) {
+.wt-enable:hover:not(:disabled) {
   background: var(--bg-hover);
 }
-.session-outputs-enable:disabled {
+.wt-enable:disabled {
   opacity: 0.55;
   cursor: default;
 }
@@ -1941,6 +2359,14 @@ body {
   flex: none;
   font-size: 12.5px;
   color: var(--text-4);
+}
+/* Merge failed/conflicted on this session's branch — a red nudge so it's noticed even
+   when the session isn't open (its status bar, where the reason lives, is then unseen). */
+.session-merge-badge {
+  flex: none;
+  font-size: 12.5px;
+  line-height: 1;
+  color: var(--error);
 }
 /* Last assistant reply, flattened to one line. Sits below the title row — darker
    than the time so it reads as content, not metadata. */
@@ -2368,8 +2794,20 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 10px;
+  margin-top: 6px;
   flex-wrap: wrap;
+}
+/* One quiet metadata strip: every footer control shares the same 12px secondary text.
+   AntD's borderless Selects otherwise render their value at 14px / colorText — a size
+   and a shade heavier than the static agent label and usage percent beside them — so
+   pull the selected value down to match. The disabled (non-editable) shade is left to
+   AntD so a read-only control still reads as read-only. */
+.composer-pills .ant-select-selection-item,
+.composer-pills .ant-select-selection-placeholder {
+  font-size: 12px;
+}
+.composer-pills .ant-select:not(.ant-select-disabled) .ant-select-selection-item {
+  color: var(--text-2);
 }
 /* Lightweight, borderless controls (Claude-style): text-only label, with a faint
    rounded background surfacing only on hover. The pill category is named via Tooltip. */
@@ -2395,8 +2833,8 @@ body {
 .composer-pill-static-label {
   padding: 0 8px 0 2px;
   line-height: 24px;
-  font-size: 13px;
-  font-weight: 500;
+  font-size: 12px;
+  font-weight: 400;
   color: var(--text-2);
 }
 /* Pushes Model + Effort to the right edge of the pill row, leaving Mode on the left. */
@@ -2428,7 +2866,7 @@ body {
   background: var(--warning-solid);
 }
 .composer-usage-pct {
-  font-size: 13px;
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
   color: var(--text-2);
 }
@@ -2536,6 +2974,51 @@ body {
 .composer-attach-remove:hover {
   background: rgba(0, 0, 0, 0.8);
 }
+/* A non-image upload staged in the composer: a horizontal chip (icon + name + size) with a
+   remove button, instead of the image thumbnail. */
+.composer-file {
+  gap: 6px;
+  padding: 4px 6px 4px 8px;
+  max-width: 220px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-sunken);
+  font-size: 12px;
+  color: var(--text-1);
+}
+.composer-file-icon {
+  flex: none;
+  color: var(--text-3);
+  font-size: 13px;
+}
+.composer-file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer-file-size {
+  flex: none;
+  color: var(--text-3);
+}
+.composer-file-remove {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 9px;
+  cursor: pointer;
+}
+.composer-file-remove:hover {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
 
 /* ---- Interactive session chat (Route B) ---- */
 .chat-note {
@@ -2560,27 +3043,88 @@ body {
      plain block would stretch the bubble background across 80% and trail blank space
      after a short message. fit-content shrinks to the text; margin-left:auto right-aligns. */
   width: fit-content;
-  /* anchor the hover-revealed copy button to the bubble's edge */
-  position: relative;
 }
-/* Copy button on a user message — sits just outside the bubble's left edge (the bubble is
-   right-aligned, so there's always room to its left), fades in on hover so it never
-   competes with the text. Absolute, so it adds no height and shifts nothing on the page. */
+/* Wraps the user bubble + a meta row (copy · relative time) beneath it as one right-aligned
+   column. The meta row sits IN FLOW (not absolute) so it reserves its own height — an earlier
+   absolute version overlapped whatever message followed. The time is always shown; the copy
+   button only fades in on hover (its slot is reserved, so revealing it shifts nothing). */
+.chat-user-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  width: fit-content;
+  max-width: 80%;
+  margin: 8px 0 8px auto;
+}
+.chat-user-wrap > .chat-user {
+  margin: 0;
+  max-width: 100%;
+}
+/* The whole meta row (copy + time) is hidden until hover — the time is not shown at rest,
+   per request. It still reserves height (occupies flow), so revealing it never overlaps the
+   next message and never shifts layout. */
+.chat-user-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 3px;
+  height: 18px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+.chat-user-wrap:hover .chat-user-meta,
+.chat-user-meta:focus-within {
+  opacity: 1;
+  pointer-events: auto;
+}
+.chat-time {
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-3);
+}
 .chat-copy {
-  position: absolute;
-  right: 100%;
-  bottom: 0;
-  margin-right: 6px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 20px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 0.12s ease, background 0.12s ease;
+}
+.chat-copy:hover {
+  color: var(--text-1);
+  background: var(--bg-hover);
+}
+/* Fenced code block in assistant markdown — a hover copy button in the top-right corner so a
+   whole generated file (e.g. an HTML report) can be lifted out without the surrounding prose.
+   The block is the hover area and the button sits inside it, so the pointer never leaves it. */
+.md-codeblock {
+  position: relative;
+}
+.md-copy {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
   padding: 0;
   border: none;
   border-radius: 6px;
-  background: transparent;
-  color: var(--text-3);
+  background: var(--bg-raised);
+  box-shadow: 0 0 0 1px var(--border-subtle);
+  color: var(--text-2);
   font-size: 13px;
   line-height: 1;
   cursor: pointer;
@@ -2588,12 +3132,12 @@ body {
   pointer-events: none;
   transition: opacity 0.12s ease, color 0.12s ease, background 0.12s ease;
 }
-.chat-user:hover .chat-copy,
-.chat-copy:focus-visible {
+.md-codeblock:hover .md-copy,
+.md-copy:focus-visible {
   opacity: 1;
   pointer-events: auto;
 }
-.chat-copy:hover {
+.md-copy:hover {
   color: var(--text-1);
   background: var(--bg-hover);
 }
@@ -2634,6 +3178,37 @@ body {
   height: 90px;
   border-radius: 8px;
   background: rgba(0, 0, 0, 0.06);
+}
+/* A non-image attachment the user sent: a downloadable chip (paperclip + filename) that
+   fetches the blob on click. */
+.chat-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.chat-files:not(:last-child) {
+  margin-bottom: 6px;
+}
+.chat-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 240px;
+  padding: 5px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-raised);
+  color: var(--text-1);
+  font-size: 12px;
+  cursor: pointer;
+}
+.chat-file:hover {
+  background: var(--bg-hover);
+}
+.chat-file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 /* Sticky "your prompt" bar: sits flush under the header (outside the scroll area, so no
    jitter) and surfaces the in-view turn's question once a long answer pushes it off the
@@ -3950,4 +4525,190 @@ body {
   .tdp-resizer {
     display: none;
   }
+}
+
+/* ── Worktree diff drawer: resizable width, folder-grouped list, file nav, split view ──────── */
+.wt-diff-body {
+  position: relative;
+}
+/* A thin grab strip on the drawer's left edge to drag its width (see startResize). */
+.wt-diff-resizer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  z-index: 5;
+}
+.wt-diff-resizer:hover,
+.wt-diff-resizer.resizing {
+  background: var(--brand);
+  opacity: 0.3;
+}
+/* Re-assert the diff body as the scroll container (it shares .chat-diff, which sets
+   overflow:hidden, defined later in the file) so the sticky hunk headers below have a scroller. */
+.wt-diff-view {
+  overflow: auto;
+}
+.wt-diff-view .diff-gap {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+/* Folder-grouped file list */
+.wt-diff-files {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.wt-tree-dir {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.wt-diff-group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  border-radius: 5px;
+  padding: 3px 6px;
+  margin: 0 -6px;
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+.wt-diff-group-head:hover {
+  background: var(--bg-hover);
+}
+.wt-diff-group-caret {
+  flex: none;
+  width: 10px;
+  color: var(--text-4);
+}
+.wt-diff-group-dir {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wt-diff-group-meta {
+  flex: none;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.wt-diff-group-meta .add {
+  color: var(--success-solid);
+}
+.wt-diff-group-meta .del {
+  color: var(--error-solid);
+}
+.wt-diff-group-n {
+  color: var(--text-4);
+}
+/* Pane head: prev/next file nav + Unified/Split toggle */
+.wt-diff-nav {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.wt-diff-nav button {
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  color: var(--text-3);
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  font-size: 15px;
+  line-height: 1;
+}
+.wt-diff-nav button:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+.wt-diff-nav button:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+.wt-diff-nav-pos {
+  min-width: 40px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-4);
+  font-variant-numeric: tabular-nums;
+}
+/* "Show N more lines" expander under a capped diff */
+.wt-diff-more {
+  display: block;
+  width: 100%;
+  border: 0;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-subtle);
+  color: var(--text-2);
+  padding: 8px;
+  cursor: pointer;
+  font-size: 12px;
+  font-family: inherit;
+}
+.wt-diff-more:hover {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+/* Split (side-by-side) diff: two columns sharing the existing .diff-add/.diff-del coloring */
+.wt-diff-split .diff-split-row {
+  display: flex;
+  align-items: stretch;
+}
+.wt-diff-split .diff-split-cell {
+  flex: 1 1 50%;
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.wt-diff-split .diff-split-cell:first-child {
+  border-right: 1px solid var(--border-subtle);
+}
+.wt-diff-split .diff-split-empty {
+  background: var(--bg-subtle);
+}
+.wt-diff-split .diff-split-cell .diff-text {
+  padding: 0 8px;
+}
+.wt-diff-split .diff-split-hunk {
+  display: flex;
+}
+/* With syntax highlighting on, the add/del background + sign carry the change; the line text
+   itself stays normal code color so the hljs token colors read cleanly (GitHub-style) rather than
+   being flattened to green/red. Scoped to the drawer so transcript inline diffs keep their tint. */
+.wt-diff-view .diff-add .diff-text,
+.wt-diff-view .diff-del .diff-text {
+  color: var(--text-1);
+}
+/* Maximize / Restore toggle in the drawer header (sits in AntD's `extra` slot, left of ✕). */
+.wt-diff-max-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--border-subtle);
+  background: transparent;
+  color: var(--text-2);
+  border-radius: 6px;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.wt-diff-max-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-1);
 }

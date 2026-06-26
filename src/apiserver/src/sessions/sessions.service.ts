@@ -11,6 +11,8 @@ import {
   ApprovalDecisionRequest,
   ApprovalInfo,
   ApprovalStatus,
+  FilePatch,
+  MAX_PROMPT_CHARS,
   RunEventType,
   SessionEndReason,
 } from '@orbit/shared';
@@ -19,6 +21,17 @@ import { QueueService } from '../queue/queue.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { CreateSessionDto, SessionConfigDto, SessionResumeDto, SessionTurnDto } from './dto';
 import { generateNaming } from './naming';
+
+// A single prompt / turn message past this size freezes the web & macOS clients (one giant
+// text node lays out synchronously on the main thread), so reject it here as the server-side
+// backstop to the composer's own client-side cap.
+function assertPromptSize(text: string, field: 'prompt' | 'message'): void {
+  if (text.length > MAX_PROMPT_CHARS) {
+    throw new BadRequestException(
+      `${field} is too long: ${text.length} characters (max ${MAX_PROMPT_CHARS})`,
+    );
+  }
+}
 
 @Injectable()
 export class SessionsService {
@@ -62,6 +75,7 @@ export class SessionsService {
     opts?: { source?: string; batch?: { id: string; maxConcurrent: number } },
   ) {
     if (!dto.prompt) throw new BadRequestException('prompt is required');
+    assertPromptSize(dto.prompt, 'prompt');
     // The session runs on a runner. Prefer an explicit pin; otherwise derive it from
     // the chosen agent's machine (agents belong to a runner) — picking an agent is
     // enough to know which machine + project dir to run in.
@@ -130,6 +144,17 @@ export class SessionsService {
         data: { sessionId: session.id },
       });
     }
+    // A shell-first session (composed from a `!cmd` draft): seed its first turn as a 'shell'
+    // turn now, using the SAME fixed clientTurnId the claim uses, so buildSession sees a turn
+    // already exists and skips its default message seed. The command runs on the runner and
+    // is never fed to claude as a prompt; claude still spawns (with --session-id) and idles.
+    if (dto.shell) {
+      await this.insertTurn(session.id, {
+        kind: 'shell',
+        content: dto.prompt,
+        clientTurnId: SessionsService.initialTurnClientId(session.id),
+      });
+    }
     this.queue.notifySessionQueued();
     return session;
   }
@@ -175,6 +200,8 @@ export class SessionsService {
       effort: string | null;
       lastAssistantText: string | null;
       lastToolUse: string | null;
+      mergeStatus: string | null;
+      runningBgCount: number;
       agentId: string | null;
       agentName: string | null;
       agentModel: string | null;
@@ -198,6 +225,8 @@ export class SessionsService {
         s.effort,
         left(s.last_assistant_text, ${SessionsService.PREVIEW_LEN}::int) AS "lastAssistantText",
         s.last_tool_use   AS "lastToolUse",
+        s.merge_status    AS "mergeStatus",
+        cardinality(s.running_bg_shells)::int AS "runningBgCount",
         a.id    AS "agentId",
         a.name  AS "agentName",
         a.model AS "agentModel",
@@ -232,6 +261,8 @@ export class SessionsService {
       effort: r.effort,
       lastAssistantText: r.lastAssistantText,
       lastToolUse: r.lastToolUse,
+      mergeStatus: r.mergeStatus,
+      runningBgCount: r.runningBgCount,
       agent: r.agentId ? { id: r.agentId, name: r.agentName, model: r.agentModel } : null,
       assignedRunner: r.runnerId ? { id: r.runnerId, name: r.runnerName } : null,
       taskId: r.taskId,
@@ -261,6 +292,53 @@ export class SessionsService {
     });
     if (!session) throw new NotFoundException('session not found');
     return session;
+  }
+
+  /**
+   * The session's per-file unified diffs (FilePatch[]), kept in a side table so the patch
+   * text never rides the session detail/list payload — fetched only when the user opens a
+   * file's diff in the worktree status bar. The runner upserts it each turn (live) and at
+   * completion (committed). Returns an empty list for a session with no recorded diff.
+   */
+  async getDiff(ownerId: string, id: string): Promise<{ patches: FilePatch[] }> {
+    const session = await this.prisma.session.findFirst({
+      where: { id, ownerId },
+      select: { id: true },
+    });
+    if (!session) throw new NotFoundException('session not found');
+    const row = await this.prisma.sessionDiff.findUnique({
+      where: { sessionId: id },
+      select: { patches: true },
+    });
+    return { patches: (row?.patches as unknown as FilePatch[]) ?? [] };
+  }
+
+  /**
+   * Ask the live runner to recompute this session's worktree diff right now. The stored
+   * patches only refresh at turn boundaries, but the file list refreshes on every heartbeat,
+   * so a file changed since the last turn end can show in the list with no diff ("No diff to
+   * preview"). Enqueueing a 'diff' control turn makes the runner's inbox poller recompute and
+   * push the diff back within a second or two (see RunnerApiController.diffResult).
+   *
+   * Only a live session has a running inbox poller; for anything else the stored snapshot is
+   * already as fresh as it gets, so this is a no-op. At most one refresh is queued at a time
+   * (dedup on a PENDING 'diff' turn) so repeated drawer opens / polls don't pile up turns.
+   */
+  async requestDiffRefresh(ownerId: string, id: string): Promise<void> {
+    const session = await this.prisma.session.findFirst({
+      where: { id, ownerId },
+      select: { id: true, status: true },
+    });
+    if (!session) throw new NotFoundException('session not found');
+    if (!SessionsService.LIVE.includes(session.status)) return;
+    const pending = await this.prisma.conversationTurn.findFirst({
+      where: { sessionId: id, kind: 'diff', status: 'PENDING' },
+      select: { id: true },
+    });
+    if (!pending) {
+      await this.insertTurn(id, { kind: 'diff', clientTurnId: randomUUID() });
+    }
+    this.realtime.notifyInbox(id);
   }
 
   // The session list shows the last reply as a single ellipsised line, so it only
@@ -439,6 +517,7 @@ export class SessionsService {
 
   /** Enqueue a user message for a live or still-queued (PENDING) session. */
   async createTurn(ownerId: string, id: string, dto: SessionTurnDto) {
+    assertPromptSize(dto.content, 'message');
     const session = await this.getSendable(ownerId, id);
     const existing = await this.prisma.conversationTurn.findUnique({
       where: { sessionId_clientTurnId: { sessionId: id, clientTurnId: dto.clientTurnId } },
@@ -536,6 +615,88 @@ export class SessionsService {
   async end(ownerId: string, id: string) {
     const session = await this.getLive(ownerId, id);
     await this.endLive(session, SessionEndReason.ENDED);
+    return { ok: true };
+  }
+
+  /**
+   * Queue a "merge this session's worktree branch into main" for the runner that ran it.
+   * Worktree-isolated sessions only, whose `branch` holds committed work (auto-committed at
+   * /complete for a finished session, or via {@link commitWorktree} for a live one) and whose
+   * `assignedRunnerId` still points at the machine whose local repo holds it. The runner
+   * picks the request up on its next heartbeat (≤30s), merges its branch's committed state
+   * into main (the live checkout, if any, is a separate worktree and is undisturbed), and
+   * reports the outcome back into `mergeStatus`/`mergeError`/`mergedAt`. Idempotent while a
+   * merge is already pending; re-requesting a merged/conflicted session re-queues it.
+   *
+   * `targetBranch` is the branch to merge INTO, picked from the status bar's dropdown; it's
+   * stored on `mergeTarget` and relayed to the runner. Omitted/empty → the default (the runner
+   * auto-detects main, else master). A target equal to the session's own branch is rejected.
+   *
+   * An explicit target is also remembered on the session's agent (`defaultMergeTarget`), so
+   * switching the target sticks across all of that agent's sessions — the next merge button
+   * defaults to it. Cleared back to the auto-detect default is not offered here (picking main
+   * from the dropdown re-records main).
+   */
+  async mergeToMain(ownerId: string, id: string, targetBranch?: string) {
+    const session = await this.prisma.session.findFirst({ where: { id, ownerId } });
+    if (!session) throw new NotFoundException('session not found');
+    if (session.isolationStatus !== 'worktree' || !session.branch) {
+      throw new BadRequestException('session has no worktree branch to merge');
+    }
+    if (!session.assignedRunnerId) {
+      throw new ConflictException('no runner is associated with this session');
+    }
+    const target = targetBranch?.trim() || null;
+    if (target && target === session.branch) {
+      throw new BadRequestException("can't merge a branch into itself");
+    }
+    if (session.mergeStatus === 'pending') return { ok: true };
+    await this.prisma.session.update({
+      where: { id },
+      data: {
+        mergeStatus: 'pending',
+        mergeTarget: target,
+        mergeRequestedAt: new Date(),
+        mergeError: null,
+        mergedAt: null,
+      },
+    });
+    // Remember an explicitly chosen target on the agent so every session of it defaults there.
+    if (target && session.agentId) {
+      await this.prisma.agent.update({
+        where: { id: session.agentId },
+        data: { defaultMergeTarget: target },
+      });
+    }
+    return { ok: true };
+  }
+
+  /**
+   * Queue a "commit this live session's uncommitted worktree changes onto its branch" for the
+   * runner that's running it. Worktree-isolated, still-live sessions only: the checkout exists
+   * on the runner and `assignedRunnerId` points at that machine. The runner picks the request
+   * up on its next heartbeat (≤30s), commits, and reports the outcome back into
+   * `commitStatus`/`commitError` (clearing `worktreeDirty` on success, so the bar flips to
+   * Merge). Idempotent while a commit is already pending. A finished session already committed
+   * its work at completion, so it has nothing to commit here (the bar shows Merge instead).
+   */
+  async commitWorktree(ownerId: string, id: string) {
+    const session = await this.prisma.session.findFirst({ where: { id, ownerId } });
+    if (!session) throw new NotFoundException('session not found');
+    if (session.isolationStatus !== 'worktree' || !session.branch) {
+      throw new BadRequestException('session has no worktree to commit');
+    }
+    if (!SessionsService.LIVE.includes(session.status) || session.cancelRequestedAt) {
+      throw new ConflictException('the session has ended — its work is already committed');
+    }
+    if (!session.assignedRunnerId) {
+      throw new ConflictException('no runner is associated with this session');
+    }
+    if (session.commitStatus === 'pending') return { ok: true };
+    await this.prisma.session.update({
+      where: { id },
+      data: { commitStatus: 'pending', commitRequestedAt: new Date(), commitError: null },
+    });
     return { ok: true };
   }
 
@@ -701,10 +862,31 @@ export class SessionsService {
     dto: SessionResumeDto,
     opts?: { batch?: { id: string; maxConcurrent: number } | null },
   ) {
+    assertPromptSize(dto.content, 'message');
     const session = await this.prisma.session.findFirst({ where: { id, ownerId } });
     if (!session) throw new NotFoundException('session not found');
-    // Still live — a normal turn belongs on the running process, not a revive.
+    // Still live — a normal turn belongs on the running process, not a revive. But a
+    // "Resolve in session" rebase reaches resume() on a live session too: the bar offers it
+    // while the session is still AWAITING_INPUT, and its whole point is to clear the failed
+    // merge so the bar offers Merge afresh once the agent rebases. The revive path below does
+    // that for ended sessions (mergeStatus: null); mirror it here, since createTurn doesn't.
+    // Only a *settled* outcome is stale — leave an in-flight 'pending' for its runner-api
+    // *-result to land (those writes are guarded on status === 'pending', so clearing it here
+    // would silently drop the result).
     if (SessionsService.LIVE.includes(session.status) && !session.cancelRequestedAt) {
+      const clear: Prisma.SessionUpdateInput = {};
+      if (session.mergeStatus && session.mergeStatus !== 'pending') {
+        clear.mergeStatus = null;
+        clear.mergeError = null;
+        clear.mergedAt = null;
+      }
+      if (session.commitStatus && session.commitStatus !== 'pending') {
+        clear.commitStatus = null;
+        clear.commitError = null;
+      }
+      if (Object.keys(clear).length > 0) {
+        await this.prisma.session.update({ where: { id }, data: clear });
+      }
       return this.createTurn(ownerId, id, dto);
     }
     if (!SessionsService.TERMINAL.includes(session.status)) {
@@ -737,8 +919,12 @@ export class SessionsService {
     const attachmentIds = await this.assertLinkableAttachments(ownerId, id, dto.attachmentIds);
     // Append the message, then flip the row back to PENDING so the runner re-claims
     // it; buildSession sees the existing turns and re-spawns claude with --resume.
+    // A `!cmd` revive seeds a 'shell' turn instead: the runner --resumes claude (context
+    // restored) AND runs the command, buffering its output for the next message — exactly
+    // like a shell turn on a live session. Whitelist kind, mirroring createTurn; a shell
+    // turn never advances numTurns (turn-complete), so --resume keeps working on respawn.
     const turn = await this.insertTurn(id, {
-      kind: 'message',
+      kind: dto.kind === 'shell' ? 'shell' : 'message',
       content: dto.content,
       clientTurnId: dto.clientTurnId,
     });
@@ -753,6 +939,15 @@ export class SessionsService {
         error: null,
         result: null,
         lastTurnAt: new Date(),
+        // Reviving will change the branch (more work / a conflict-resolution merge), so any
+        // prior "merge to main" outcome is stale — clear it so the bar offers Merge afresh.
+        mergeStatus: null,
+        mergeError: null,
+        mergedAt: null,
+        // Likewise the live-worktree commit state: the revived run re-reports worktreeDirty,
+        // and a stale 'pending'/'error' would otherwise wedge the bar's Commit button.
+        commitStatus: null,
+        commitError: null,
         // Re-apply any mode/model/effort changes made while the session was ended;
         // buildSession reads these when the runner re-claims and re-spawns claude.
         // Omitted fields keep their prior value (don't clobber to null).

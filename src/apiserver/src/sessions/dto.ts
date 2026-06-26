@@ -3,6 +3,10 @@ export interface CreateSessionDto {
   title?: string;
   /** First user message — seeds the session's first turn. */
   prompt: string;
+  /** Compose the session from a `!cmd` draft: seed the first turn as a 'shell' turn
+   *  (run `prompt` on the runner, bypassing claude) instead of a normal message. claude
+   *  still spawns and idles; the command's output becomes context for the next message. */
+  shell?: boolean;
   /** The runner this session is pinned to. Optional when `agentId` is given —
    *  the runner is then derived from the agent's machine. */
   assignedRunnerId?: string;
@@ -40,6 +44,12 @@ export interface SessionResumeDto extends SessionTurnDto {
   model?: string;
   permissionMode?: string;
   effort?: string;
+}
+
+export interface MergeToMainDto {
+  /** The branch to merge this session's worktree branch INTO, picked from the status bar's
+   *  branch dropdown. Omitted → the default: the runner auto-detects main, else master. */
+  targetBranch?: string;
 }
 
 export interface SessionConfigDto {

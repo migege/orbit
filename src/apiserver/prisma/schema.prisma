@@ -191,6 +191,10 @@ model Agent {
   // baseline commit) on the next claim so its sessions can be worktree-isolated. Opt-in
   // per agent — the web "Enable isolation" action on a non-git run flips this on.
   autoInitGit        Boolean  @default(false) @map("auto_init_git")
+  // The branch this agent's sessions merge into by default, remembered from the last time the
+  // user switched targets in the status bar's merge dropdown. Null → the runner's auto-detect
+  // (main, else master). Agent-scoped so a chosen target sticks across all the agent's sessions.
+  defaultMergeTarget String?  @map("default_merge_target")
   ownerId            String   @map("owner_id") @db.Uuid
   owner              User     @relation(fields: [ownerId], references: [id])
   createdAt          DateTime @default(now()) @map("created_at")
@@ -273,6 +277,11 @@ model Session {
   // Only meaningful while RUNNING; the list gates display on status so a stale value
   // on a finished session is never shown.
   lastToolUse       String?   @map("last_tool_use")
+  // Denormalized set of the agent's still-running background shells (Bash run_in_background):
+  // the tool_use ids of launches that haven't yet reported a terminal `<task-notification>`.
+  // Added on launch, removed on completion, cleared on (re)spawn/complete. Lets the list +
+  // header show "Background running" without scanning events. Only meaningful while live.
+  runningBgShells   String[]  @map("running_bg_shells")
   // ── Per-session git worktree isolation ──────────────────────────────────────
   // When the agent's workDir is a git repo, the runner runs this session in its own
   // git worktree on `branch`, forked from `baseSha` (the workDir HEAD at claim time).
@@ -287,6 +296,39 @@ model Session {
   baseSha           String?   @map("base_sha")
   changedFiles      Json?     @map("changed_files")
   isolationStatus   String?   @map("isolation_status")
+  // ── "Merge to main" (UI button on the worktree status bar) ──────────────────
+  // The user can ask the runner to merge this session's `branch` into a target branch.
+  // mergeStatus drives the button: 'pending' (queued for the next heartbeat of the
+  // session's assigned runner) → 'merged' (mergedAt set) | 'conflict' | 'error'
+  // (mergeError carries git's message / the failed precondition). All null until asked.
+  mergeStatus       String?   @map("merge_status")
+  mergeError        String?   @map("merge_error")
+  mergeRequestedAt  DateTime? @map("merge_requested_at")
+  mergedAt          DateTime? @map("merged_at")
+  // The branch the user chose to merge into (from the status bar's branch dropdown). Null
+  // means the default — the runner auto-detects main, else master. Relayed to the runner in
+  // the MergeCommand and shown on the merged ✓ chip.
+  mergeTarget       String?   @map("merge_target")
+  // Candidate merge targets the runner reported for this session's repo (local branches
+  // minus Orbit's own orbit/* session branches), populating the dropdown. Refreshed each
+  // heartbeat while live and at completion; empty for older runners (dropdown hidden).
+  mergeTargets      String[]  @default([]) @map("merge_targets")
+  // branchMerged is the runner's `git merge-base --is-ancestor branch <default target>` result,
+  // refreshed alongside worktreeDirty on each worktree report: true → this branch is already in
+  // main (e.g. merged out-of-band on the command line), so the bar shows a "✓ In main" chip
+  // instead of a redundant Merge button. Null = the runner hasn't reported it (older runner /
+  // not yet recomputed) → the bar keeps its mergeStatus-driven behavior.
+  branchMerged      Boolean?  @map("branch_merged")
+  // ── "Commit" (UI button on the worktree status bar, for a live session) ─────
+  // worktreeDirty is the runner's last-reported `git status` for the live worktree: true
+  // → the bar shows Commit (commit the uncommitted work onto `branch`), false → Merge.
+  // commitStatus drives the Commit button while it runs: 'pending' (queued for the next
+  // heartbeat) → 'committed' | 'nochange' | 'error' (commitError carries git's message).
+  // All null until the runner reports / the user clicks commit.
+  worktreeDirty     Boolean?  @map("worktree_dirty")
+  commitStatus      String?   @map("commit_status")
+  commitError       String?   @map("commit_error")
+  commitRequestedAt DateTime? @map("commit_requested_at")
   // Soft visibility: null = active. archivedAt hides the session into the Archived
   // view, deletedAt into the trash. Both retain all data (transcript, billing) and
   // are reversible — restore clears them. There is no hard delete.
@@ -303,12 +345,27 @@ model Session {
   // Tasks an agent created from within this session (cf. Task.creatorSession).
   createdTasks Task[] @relation("TaskCreatorSession")
   attachments  Attachment[]
+  diff         SessionDiff?
 
   @@index([assignedRunnerId, status])
   @@index([batchId, status])
   @@index([ownerId])
   @@index([status])
   @@map("session")
+}
+
+// On-demand per-file unified diffs of a session's worktree changes, kept in a side table
+// (1:1 with Session) so the potentially large patch text NEVER rides the session detail or
+// list payload — it's fetched only when the user opens a file's diff (GET /sessions/:id/diff).
+// The runner upserts it each turn (live, uncommitted) and at completion (committed). `patches`
+// is a FilePatch[] ({ path, patch?, truncated? }) — see @orbit/shared.
+model SessionDiff {
+  sessionId String   @id @map("session_id") @db.Uuid
+  patches   Json
+  updatedAt DateTime @updatedAt @map("updated_at")
+  session   Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@map("session_diff")
 }
 
 // A tool-permission request from claude's --permission-prompt-tool (served by the
@@ -443,6 +500,9 @@ model Attachment {
   turn      ConversationTurn? @relation(fields: [turnId], references: [id], onDelete: Cascade)
   mimeType  String   @map("mime_type")
   sizeBytes Int      @map("size_bytes")
+  // Original upload filename. The runner writes a non-image/-PDF upload to the worktree
+  // under this name and references it to claude. Null for legacy rows and pasted images.
+  fileName  String?  @map("file_name")
   data      Bytes // raw bytes (bytea); Postgres TOAST compresses/offloads transparently
   createdAt DateTime @default(now()) @map("created_at")
 

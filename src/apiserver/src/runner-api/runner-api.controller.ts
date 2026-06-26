@@ -36,8 +36,11 @@ import {
   RunnerHeartbeatResponse,
   RunnerRegisterRequest,
   RunnerRegisterResponse,
+  SessionCommitResultRequest,
   SessionCompleteRequest,
+  SessionDiffResultRequest,
   SessionEndReason,
+  SessionMergeResultRequest,
   TurnAttachment,
   TurnCompleteRequest,
 } from '@orbit/shared';
@@ -259,15 +262,48 @@ export class RunnerApiController {
         planUsage: (dto?.planUsage ?? undefined) as Prisma.InputJsonValue | undefined,
       },
     });
+    // Persist each running session's live worktree diff so the composer's status bar can
+    // appear mid-turn, not just at turn-complete. The `status in LIVE` guard stops a
+    // straggler heartbeat from overwriting a just-finalized session's committed diff;
+    // the try/catch keeps a DB hiccup here from failing the heartbeat (→ reads as offline).
+    if (dto?.sessions?.length) {
+      try {
+        await Promise.all(
+          dto.sessions.map((s) =>
+            this.prisma.session.updateMany({
+              where: { id: s.sessionId, assignedRunnerId: runner.id, status: { in: LIVE } },
+              data: {
+                isolationStatus: s.isolationStatus,
+                changedFiles: (s.changedFiles ?? []) as unknown as Prisma.InputJsonValue,
+                // Drives the status bar's Commit-vs-Merge action (older runners omit it →
+                // left untouched, so the bar falls back to the session lifecycle).
+                ...(s.worktreeDirty !== undefined ? { worktreeDirty: s.worktreeDirty } : {}),
+                // Candidate branches for the "Merge to…" dropdown (older runners omit it).
+                ...(s.mergeTargets !== undefined ? { mergeTargets: s.mergeTargets } : {}),
+                // Whether the branch already landed in main → bar shows "✓ In main", not a
+                // redundant Merge button (older runners omit it → left untouched).
+                ...(s.branchMerged !== undefined ? { branchMerged: s.branchMerged } : {}),
+              },
+            }),
+          ),
+        );
+      } catch {
+        // Next heartbeat retries; the status bar tolerates a one-cycle lag.
+      }
+    }
     let cancelSessionIds: string[] = [];
+    let mergeRequests: RunnerHeartbeatResponse['mergeRequests'] = [];
+    let commitRequests: RunnerHeartbeatResponse['commitRequests'] = [];
     try {
       cancelSessionIds = await this.realtime.drainCancellations(runner.id);
+      mergeRequests = await this.realtime.drainMergeRequests(runner.id);
+      commitRequests = await this.realtime.drainCommitRequests(runner.id);
     } catch {
-      // A transient DB hiccup shouldn't fail the heartbeat; cancels arrive next cycle.
+      // A transient DB hiccup shouldn't fail the heartbeat; all arrive next cycle.
     }
     // Hand back the authoritative max-concurrent (the editable DB value) so the runner
     // syncs its self-gate to a UI/API change without needing a restart.
-    return { cancelSessionIds, maxConcurrent: updated.maxConcurrent };
+    return { cancelSessionIds, maxConcurrent: updated.maxConcurrent, mergeRequests, commitRequests };
   }
 
   // ── Interactive sessions (Route B) ──
@@ -388,7 +424,9 @@ export class RunnerApiController {
         WHERE "session_id" = ${sessionId}::uuid
           AND (
             -- interrupt/end land immediately, even mid-message (interrupt is the point).
-            ("kind" IN ('interrupt', 'end')
+            -- 'diff' (an on-demand live-diff refresh) is read-only and claude-independent, so
+            -- it lands immediately too — even mid-turn — and is acked on delivery below.
+            ("kind" IN ('interrupt', 'end', 'diff')
               AND ("status" = 'PENDING' OR ("status" = 'IN_FLIGHT' AND "lease_deadline_at" < now())))
             -- A crashed in-flight message: re-deliver the same one (at-least-once lease).
             OR ("kind" IN ('message', 'shell') AND "status" = 'IN_FLIGHT' AND "lease_deadline_at" < now())
@@ -403,7 +441,7 @@ export class RunnerApiController {
                 AND inflight."status" = 'IN_FLIGHT'
             ))
           )
-        ORDER BY (CASE WHEN "kind" IN ('interrupt', 'end') THEN 0 WHEN "kind" = 'reload' THEN 1 ELSE 2 END), "seq" ASC
+        ORDER BY (CASE WHEN "kind" IN ('interrupt', 'end', 'diff') THEN 0 WHEN "kind" = 'reload' THEN 1 ELSE 2 END), "seq" ASC
         FOR UPDATE SKIP LOCKED
         LIMIT 1
       )
@@ -422,19 +460,26 @@ export class RunnerApiController {
         },
         data: { status: RunStatus.RUNNING, lastTurnAt: new Date() },
       });
-      // Hand the runner this turn's image refs (id + mime); it fetches the bytes via
-      // GET /api/attachments/:id and builds the claude `image` content block. Text-only
-      // and shell turns have none, so the field is omitted.
+      // Hand the runner this turn's attachment refs (id + mime + filename); it fetches the
+      // bytes via GET /api/attachments/:id and dispatches on the type (image/PDF inlined as
+      // content blocks, anything else written to the worktree). Shell turns have none, so
+      // the field is omitted.
       if (t.kind === 'message') {
         const atts = await this.prisma.attachment.findMany({
           where: { turnId: t.id },
-          select: { id: true, mimeType: true },
+          select: { id: true, mimeType: true, fileName: true },
           orderBy: { createdAt: 'asc' },
         });
-        if (atts.length > 0) attachments = atts.map((a) => ({ id: a.id, mimeType: a.mimeType }));
+        if (atts.length > 0) {
+          attachments = atts.map((a) => ({
+            id: a.id,
+            mimeType: a.mimeType,
+            fileName: a.fileName ?? undefined,
+          }));
+        }
       }
     } else {
-      // Control turns (interrupt/end) are fire-and-forget: ack on delivery so a
+      // Control turns (interrupt/end/reload/diff) are fire-and-forget: ack on delivery so a
       // stale one can never re-fire ahead of real messages every lease window.
       await this.prisma.conversationTurn.updateMany({
         where: { id: t.id, status: { not: 'ANSWERED' } },
@@ -546,6 +591,15 @@ export class RunnerApiController {
         data: { status: 'ANSWERED', answeredAt: new Date() },
       });
       if (ack.count === 0) return false;
+      // A `!`-shell turn runs on the runner, not in claude, so it must NOT advance numTurns:
+      // that counter gates --resume on respawn (queue.buildSession). Counting a shell turn
+      // would make a shell-first session (claude never received a message) try to --resume a
+      // conversation that was never established, failing with "No conversation found".
+      const completed = await tx.conversationTurn.findUnique({
+        where: { id: dto.turnId },
+        select: { kind: true },
+      });
+      const turnInc = completed?.kind === 'shell' ? 0 : (dto.numTurns ?? 1);
       // Park (or, on a failed task turn, finalize) + bill ONLY if the session is still
       // live and not being torn down, so a late/retried turn-complete can never
       // resurrect a finalized/cancelled session or double-bill it.
@@ -561,8 +615,18 @@ export class RunnerApiController {
           ...(failTask
             ? { error: dto.result || 'run failed', finishedAt: new Date(), cancelRequestedAt: new Date() }
             : {}),
+          // Live worktree state for the composer's status bar, refreshed each turn (the
+          // runner reports the worktree's uncommitted diff vs base on every turn-complete).
+          isolationStatus: dto.isolationStatus ?? undefined,
+          ...(dto.changedFiles !== undefined
+            ? { changedFiles: dto.changedFiles as unknown as Prisma.InputJsonValue }
+            : {}),
+          ...(dto.worktreeDirty !== undefined ? { worktreeDirty: dto.worktreeDirty } : {}),
+          // Whether the branch already landed in main — the turn-end snapshot an idle session
+          // shows, so the bar offers "✓ In main" not a redundant Merge (older runners omit it).
+          ...(dto.branchMerged !== undefined ? { branchMerged: dto.branchMerged } : {}),
           lastTurnAt: new Date(),
-          numTurns: { increment: dto.numTurns ?? 1 },
+          numTurns: { increment: turnInc },
           costUsd: { increment: dto.costUsd ?? 0 },
           sumInputTokens: { increment: usage?.input_tokens ?? 0 },
           sumOutputTokens: { increment: usage?.output_tokens ?? 0 },
@@ -571,6 +635,15 @@ export class RunnerApiController {
         },
       });
       if (parked.count === 0) return false; // session no longer live -> turn acked, no billing
+      // Per-file unified diffs to the side table (never on the session row, so the detail/
+      // list payload stays small) — fetched on demand when the user opens a file's diff.
+      if (dto.changedDiff !== undefined) {
+        await tx.sessionDiff.upsert({
+          where: { sessionId },
+          create: { sessionId, patches: dto.changedDiff as unknown as Prisma.InputJsonValue },
+          update: { patches: dto.changedDiff as unknown as Prisma.InputJsonValue },
+        });
+      }
       if (dto.modelUsage) {
         const rows = Object.entries(dto.modelUsage).map(([model, mu]) => ({
           sessionId,
@@ -630,9 +703,14 @@ export class RunnerApiController {
     // text_delta / thinking_delta are streaming-animation increments: broadcast them
     // live (below) but DON'T persist them — the full reply is durably saved as the
     // trailing `assistant` / `thinking` event, so replay/refresh still shows complete
-    // text without piling up rows.
+    // text without piling up rows. background_output is the live tail of a background
+    // shell's file — same deal (ephemeral animation; the durable record is the agent's
+    // own Read snapshots + the background_task completion event).
     const durable = events.filter(
-      (e) => e.type !== RunEventType.TEXT_DELTA && e.type !== RunEventType.THINKING_DELTA,
+      (e) =>
+        e.type !== RunEventType.TEXT_DELTA &&
+        e.type !== RunEventType.THINKING_DELTA &&
+        e.type !== RunEventType.BACKGROUND_OUTPUT,
     );
     if (durable.length > 0) {
       await this.prisma.runEvent.createMany({
@@ -695,6 +773,48 @@ export class RunnerApiController {
           startedAt: new Date(e.ts),
         })),
       });
+    }
+
+    // Maintain the running background-shell set (Session.runningBgShells), which drives the
+    // "Background running" status on the list + header. Added on a Bash(run_in_background)
+    // launch (keyed by its tool_use id), removed on that task's terminal <task-notification>,
+    // and cleared on a (re)spawn (Claude restarted → any prior background children are gone).
+    // Atomic array ops stay idempotent under event-batch retries.
+    const bgStarted = events
+      .filter(
+        (e) =>
+          e.type === RunEventType.TOOL_USE &&
+          (e.payload as { name?: string }).name === 'Bash' &&
+          (e.payload as { input?: { run_in_background?: boolean } }).input?.run_in_background ===
+            true,
+      )
+      .map((e) => String((e.payload as { id?: unknown }).id ?? ''))
+      .filter(Boolean);
+    const bgEnded = events
+      .filter(
+        (e) =>
+          e.type === RunEventType.BACKGROUND_TASK &&
+          ['completed', 'failed', 'killed', 'stopped'].includes(
+            String((e.payload as { status?: unknown }).status ?? ''),
+          ),
+      )
+      .map((e) => String((e.payload as { toolUseId?: unknown }).toolUseId ?? ''))
+      .filter(Boolean);
+    const bgReset = events.some(
+      (e) =>
+        e.type === RunEventType.SYSTEM &&
+        String((e.payload as { subtype?: unknown }).subtype ?? '') === 'resumed',
+    );
+    if (bgReset) {
+      await this.prisma.session.update({ where: { id: sessionId }, data: { runningBgShells: [] } });
+    }
+    for (const id of bgStarted) {
+      await this.prisma
+        .$executeRaw`UPDATE "session" SET "running_bg_shells" = array_append(array_remove("running_bg_shells", ${id}), ${id}) WHERE "id" = ${sessionId}::uuid`;
+    }
+    for (const id of bgEnded) {
+      await this.prisma
+        .$executeRaw`UPDATE "session" SET "running_bg_shells" = array_remove("running_bg_shells", ${id}) WHERE "id" = ${sessionId}::uuid`;
     }
 
     // Broadcast to live subscribers while the session is active (any LIVE status);
@@ -762,9 +882,26 @@ export class RunnerApiController {
           ...(dto.changedFiles !== undefined
             ? { changedFiles: dto.changedFiles as unknown as Prisma.InputJsonValue }
             : {}),
+          // Candidate branches for the ended session's "Merge to…" dropdown (older runners omit it).
+          ...(dto.mergeTargets !== undefined ? { mergeTargets: dto.mergeTargets } : {}),
+          // finalizeWorktree committed everything onto the branch before /complete, so the
+          // checkout is clean — the bar shows Merge (not Commit) for the ended session.
+          worktreeDirty: false,
+          // The session is ending — Claude (and its background children) are gone, so the
+          // running-background set can't still be live.
+          runningBgShells: [],
         },
       });
       if (res.count === 0) return false;
+      // Persist the committed branch's per-file diffs to the side table (see turn-complete) —
+      // off the session payload, fetched on demand when a file's diff is opened.
+      if (dto.changedDiff !== undefined) {
+        await tx.sessionDiff.upsert({
+          where: { sessionId },
+          create: { sessionId, patches: dto.changedDiff as unknown as Prisma.InputJsonValue },
+          update: { patches: dto.changedDiff as unknown as Prisma.InputJsonValue },
+        });
+      }
       // Drain any queued turns so nothing can be leased after the session ends.
       await tx.conversationTurn.updateMany({
         where: { sessionId, status: { not: 'ANSWERED' } },
@@ -796,6 +933,98 @@ export class RunnerApiController {
       ts: new Date().toISOString(),
       payload: { status: effectiveStatus, final: true },
     });
+    return { ok: true };
+  }
+
+  /** Outcome of a heartbeat-delivered MergeCommand — persist it so the worktree status bar
+   *  can show merged ✓ / conflict / error. mergedAt + cleared error on success; the message
+   *  (git stderr / failed precondition) is kept for conflict/error. */
+  @UseGuards(RunnerAuthGuard)
+  @Post('sessions/:id/merge-result')
+  async mergeResult(
+    @CurrentRunner() runner: { id: string },
+    @Param('id') sessionId: string,
+    @Body() dto: SessionMergeResultRequest,
+  ) {
+    await this.assertSessionOwnership(sessionId, runner.id);
+    const merged = dto.status === 'merged';
+    // Only accept the outcome while the merge is still pending. The MergeCommand runs async on
+    // the runner and is redelivered each heartbeat, so its result can land after a "Resolve in
+    // session" resume has already cleared mergeStatus to null — an unconditional write would
+    // re-stamp the stale conflict/error and wedge the bar back on "Resolve in session" after
+    // the conflict was actually resolved. updateMany no-ops (count 0) when no longer pending.
+    await this.prisma.session.updateMany({
+      where: { id: sessionId, mergeStatus: 'pending' },
+      data: {
+        mergeStatus: dto.status,
+        mergeError: merged ? null : (dto.message ?? null),
+        mergedAt: merged ? new Date() : null,
+      },
+    });
+    return { ok: true };
+  }
+
+  /** Outcome of a heartbeat-delivered CommitCommand — persist it so the worktree status bar
+   *  can flip from Commit to Merge. On success the worktree is clean (worktreeDirty=false),
+   *  so the bar shows Merge without waiting for the next live-diff heartbeat; 'nochange' is
+   *  also clean. An error keeps the Commit button (commitError carries git's message). */
+  @UseGuards(RunnerAuthGuard)
+  @Post('sessions/:id/commit-result')
+  async commitResult(
+    @CurrentRunner() runner: { id: string },
+    @Param('id') sessionId: string,
+    @Body() dto: SessionCommitResultRequest,
+  ) {
+    await this.assertSessionOwnership(sessionId, runner.id);
+    const clean = dto.status === 'committed' || dto.status === 'nochange';
+    // Same staleness guard as mergeResult: a resume clears commitStatus to null, and an
+    // in-flight commit-result landing afterward must not re-stamp it. No-ops when not pending.
+    await this.prisma.session.updateMany({
+      where: { id: sessionId, commitStatus: 'pending' },
+      data: {
+        commitStatus: dto.status,
+        commitError: dto.status === 'error' ? (dto.message ?? null) : null,
+        ...(clean ? { worktreeDirty: false } : {}),
+      },
+    });
+    return { ok: true };
+  }
+
+  /** A freshly recomputed live worktree diff, pushed in response to a 'diff' inbox control
+   *  turn (the web opened a file whose stored patch lagged). Overwrites the session's
+   *  changedFiles and the SessionDiff side-table patches together, so the file list and the
+   *  per-file diffs are consistent again. Guarded to LIVE + this runner (mirrors the heartbeat
+   *  guard) so a straggler can't clobber a just-finalized session's committed diff. */
+  @UseGuards(RunnerAuthGuard)
+  @Post('sessions/:id/diff')
+  @HttpCode(202)
+  async diffResult(
+    @CurrentRunner() runner: { id: string },
+    @Param('id') sessionId: string,
+    @Body() dto: SessionDiffResultRequest,
+  ) {
+    await this.assertSessionOwnership(sessionId, runner.id);
+    const updated = await this.prisma.session.updateMany({
+      where: { id: sessionId, assignedRunnerId: runner.id, status: { in: LIVE } },
+      data: {
+        ...(dto.changedFiles !== undefined
+          ? { changedFiles: dto.changedFiles as unknown as Prisma.InputJsonValue }
+          : {}),
+        ...(dto.worktreeDirty !== undefined ? { worktreeDirty: dto.worktreeDirty } : {}),
+        // Recomputed with the diff, so opening the drawer refreshes "✓ In main" for an idle
+        // session merged out-of-band (older runners omit it → left untouched).
+        ...(dto.branchMerged !== undefined ? { branchMerged: dto.branchMerged } : {}),
+      },
+    });
+    // Only persist the patches once we've confirmed the session is still live (count > 0);
+    // a no-op update means it finalized, so its committed diff must stay authoritative.
+    if (updated.count > 0 && dto.changedDiff !== undefined) {
+      await this.prisma.sessionDiff.upsert({
+        where: { sessionId },
+        create: { sessionId, patches: dto.changedDiff as unknown as Prisma.InputJsonValue },
+        update: { patches: dto.changedDiff as unknown as Prisma.InputJsonValue },
+      });
+    }
     return { ok: true };
   }
 

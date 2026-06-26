@@ -33,3 +33,11 @@ Thumbs.db
 
 # go build artifact (a bare `go build` in src/runner-go; real builds -> dist-bin/)
 /src/runner-go/orbit
+
+# swift / swiftpm build output (macOS client under src/macos/*) — generated, not source
+.build/
+.swiftpm/
+DerivedData/
+
+# session upload artifacts the app drops into the worktree (inputs, not source)
+/orbit-uploads/

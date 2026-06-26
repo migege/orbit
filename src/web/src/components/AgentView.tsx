@@ -33,10 +33,12 @@ import { useIsMobile } from '../lib/useMediaQuery';
 import { agentsQuery, sessionQuery, sessionsQuery } from '../lib/queries';
 import { DEFAULT_MODEL, MODEL_OPTIONS, supportsAuto } from '../lib/agentDefaults';
 import { SessionOutputs } from './SessionOutputs';
+import { BackgroundShellsTray } from './BackgroundShellsTray';
 import {
   type ApprovalInfo,
   archiveSession,
   cancelQueuedTurn,
+  commitSession,
   createInteractiveSession,
   decideApproval,
   deleteSession,
@@ -44,6 +46,7 @@ import {
   interruptSession,
   listApprovals,
   listQueuedTurns,
+  mergeSessionToMain,
   type PermissionRule,
   restoreSession,
   resumeSession,
@@ -56,6 +59,7 @@ import { AttachmentImage, ChatImage, StreamingMessage, Transcript, type TurnImag
 import { ApprovalPanel } from './ApprovalPanel';
 import type { Runner } from './TasksSidePanel';
 import type { PlanUsage } from '@orbit/shared';
+import { MAX_PROMPT_CHARS } from '@orbit/shared';
 
 interface RunEvent {
   seq: number;
@@ -76,21 +80,31 @@ interface QueuedTurn {
   attachments?: { id: string; mimeType: string }[];
 }
 
-// An image staged in the composer: uploaded to the control plane (POST /api/attachments)
+// An attachment staged in the composer: uploaded to the control plane (POST /api/attachments)
 // the moment it's picked/pasted, then sent by id with the turn. `previewUrl` is a local
-// object URL for the thumbnail; `id` is set once the upload resolves.
+// object URL for the thumbnail — set only for inline images; a non-image file renders as a
+// chip (name + size) instead. `id` is set once the upload resolves.
 interface ComposerImage {
   uid: string;
   file: File;
-  previewUrl: string;
+  previewUrl?: string;
   status: 'uploading' | 'done';
   id?: string;
 }
 
-// Image upload limits — kept in sync with the server (attachments.media.ts) so a bad
-// pick is rejected before the round-trip rather than surfacing a 400/413.
+// The image types Claude takes as inline content blocks: shown as a thumbnail and capped
+// tighter (kept in sync with the runner's image-block dispatch). Anything else is a generic
+// file — any type, up to the server's 25MB cap (attachments.media.ts).
 const ALLOWED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_FILE_BYTES = 25 * 1024 * 1024;
+
+// Compact byte size for a staged file chip ("12 KB", "3.4 MB").
+const fmtBytes = (n: number): string => {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+};
 
 const TERMINAL = ['SUCCEEDED', 'FAILED', 'CANCELLED', 'PARKED'];
 // Session statuses that occupy one of the runner's maxConcurrent slots.
@@ -263,6 +277,12 @@ const plainPreview = (md: string): string =>
 // plain tool names (Bash, Read, Edit) pass through unchanged.
 const fmtTool = (name: string): string => name.replace(/^mcp__[^_]+__/, '');
 
+// "Background process running" / "N background processes running" — shown when a session is
+// parked at AWAITING_INPUT but still has live background shells (server-tracked
+// runningBgCount, from Session.runningBgShells), so it doesn't read as idle.
+const bgRunningLabel = (n: number): string =>
+  n > 1 ? `${n} background processes running` : 'Background process running';
+
 // The line shown under a session title. For a LIVE (openable) session that's working we
 // surface its current state — the tool in flight, that it's blocked on you, or a bare
 // "Running…" — so the row never collapses to just a title with no sign of progress.
@@ -277,6 +297,9 @@ const sessionLine = (s: any, live: boolean): SessionLine | null => {
     return { text: 'Running…', tone: 'running' };
   }
   if (live && s.status === 'PENDING') return { text: 'Queued', tone: 'queued' };
+  // Parked (AWAITING_INPUT) but a background process is still running — not idle.
+  if (live && (s.runningBgCount ?? 0) > 0)
+    return { text: `${bgRunningLabel(s.runningBgCount)}…`, tone: 'running' };
   if (s.lastAssistantText) return { text: plainPreview(s.lastAssistantText), tone: 'preview' };
   return null;
 };
@@ -288,7 +311,10 @@ function statusLabel(session: any): string {
   const status: string = session.status;
   if (status === 'RUNNING')
     return (session.pendingApprovals ?? 0) > 0 ? 'Waiting for approval' : 'Running';
-  if (status === 'AWAITING_INPUT') return 'Waiting for your reply';
+  if (status === 'AWAITING_INPUT')
+    return (session.runningBgCount ?? 0) > 0
+      ? bgRunningLabel(session.runningBgCount)
+      : 'Waiting for your reply';
   if (status === 'SUCCEEDED') return 'Completed';
   if (status === 'FAILED') {
     const err: string = typeof session.error === 'string' ? session.error : '';
@@ -342,7 +368,11 @@ function StatusIcon({ session, completed }: { session: any; completed?: boolean 
     );
   }
   if (status === 'AWAITING_INPUT')
-    return (
+    return (session.runningBgCount ?? 0) > 0 ? (
+      <Tooltip title={bgRunningLabel(session.runningBgCount)}>
+        <LoadingOutlined spin style={{ color: 'var(--brand)', fontSize }} />
+      </Tooltip>
+    ) : (
       <Tooltip title="Waiting for your reply">
         <MessageOutlined style={{ color: 'var(--text-3)', fontSize }} />
       </Tooltip>
@@ -601,7 +631,45 @@ export function AgentView({ runner }: { runner: Runner }) {
   const sessionDetailQ = useQuery({
     ...sessionQuery(selectedId),
     placeholderData: keepPreviousData,
+    // Poll the detail when either side has a live update the runner pushes via heartbeat:
+    // while the session is live, for the worktree status bar (isolation + uncommitted diff,
+    // reported mid-turn) to appear without waiting for turn_end; and while a "merge to main"
+    // or "commit" is pending, for the runner's outcome (≤1 heartbeat away) to land. Idle else.
+    refetchInterval: (q) =>
+      q.state.data?.mergeStatus === 'pending' || q.state.data?.commitStatus === 'pending'
+        ? 3000
+        : selected && !TERMINAL.includes(selected.status)
+          ? 5000
+          : false,
   });
+  // A merge's outcome lands asynchronously (≤1 heartbeat after the click) — but the only place
+  // it surfaces is the worktree status bar, and only if the user is still on this session with the
+  // file panel expanded. Toast the landing (success or the failure reason) the moment it flips off
+  // 'pending', so it's noticed even after they look away. Tracked per session id so switching to an
+  // already-failed session doesn't re-fire — only a real pending→result transition toasts.
+  const prevMergeRef = useRef<{ id: string; status: string | null } | null>(null);
+  useEffect(() => {
+    const d = sessionDetailQ.data;
+    if (!d) return;
+    const prev = prevMergeRef.current;
+    const was = prev && prev.id === d.id ? prev.status : null;
+    prevMergeRef.current = { id: d.id, status: d.mergeStatus ?? null };
+    if (was !== 'pending' || !d.mergeStatus || d.mergeStatus === 'pending') return;
+    const target = d.mergeTarget || 'main';
+    if (d.mergeStatus === 'merged') {
+      message.success(`Merged into ${target} ✓`);
+    } else if (d.mergeStatus === 'conflict') {
+      message.error({
+        content: `Merge into ${target} hit a conflict — aborted, your branch is untouched. Resolve it from the status bar.`,
+        duration: 8,
+      });
+    } else {
+      message.error({
+        content: `Merge into ${target} failed: ${d.mergeError ?? 'see the status bar for details.'}`,
+        duration: 8,
+      });
+    }
+  }, [sessionDetailQ.data, message]);
   const live = selected ? !TERMINAL.includes(selected.status) : false;
   // An ended session can be revived (--resume claude's context) only if it actually
   // ran and its runner is online — the transcript lives on that machine's disk.
@@ -797,7 +865,7 @@ export function AgentView({ runner }: { runner: Runner }) {
     // Staged uploads are scoped to the previous session (can't be linked to another), and
     // the sent-image previews are this session's object URLs — drop and revoke both.
     setImages((prev) => {
-      prev.forEach((im) => URL.revokeObjectURL(im.previewUrl));
+      prev.forEach((im) => im.previewUrl && URL.revokeObjectURL(im.previewUrl));
       return [];
     });
     setTurnImages((prev) => {
@@ -908,7 +976,14 @@ export function AgentView({ runner }: { runner: Runner }) {
         }
         // Track turn boundaries live so the composer re-enables the instant a turn
         // ends, rather than waiting for the 4s session poll.
-        if (ev.type === 'turn_end') setIdle(true);
+        if (ev.type === 'turn_end') {
+          setIdle(true);
+          // Refresh the worktree status bar: the runner reports this turn's diff +
+          // isolation on /turn-complete. Delay a touch so that POST (which persists
+          // changed_files) lands before we refetch the detail, rather than racing the
+          // turn_end event broadcast.
+          setTimeout(() => qc.invalidateQueries({ queryKey: ['session', selectedId] }), 400);
+        }
         else if (ev.type === 'user') {
           setIdle(false);
           // The runner just picked up this turn — it's now in the transcript, so drop
@@ -1023,11 +1098,14 @@ export function AgentView({ runner }: { runner: Runner }) {
       if (selected && resumable) {
         // The pills were seeded from this session's stored config, so an untouched
         // send keeps it and an edited Mode/Model/Effort is re-applied on resume.
+        // A `!cmd` revives via a shell turn: claude --resumes (context restored) and the
+        // runner runs the command, buffering its output for the next message.
         const res = await resumeSession(
           selected.id,
           content,
           { model, permissionMode: MODE_TO_PERMISSION[mode], effort: effort || undefined },
           attachmentIds,
+          shell ? 'shell' : undefined,
         );
         return { id: selected.id, turnId: res.turnId };
       }
@@ -1039,6 +1117,8 @@ export function AgentView({ runner }: { runner: Runner }) {
         permissionMode: MODE_TO_PERMISSION[mode],
         effort: effort || undefined,
         attachmentIds,
+        // A `!cmd` draft seeds the session's first turn as a shell command, not a message.
+        shell,
       });
       return { id: created.id, created: true };
     },
@@ -1057,17 +1137,19 @@ export function AgentView({ runner }: { runner: Runner }) {
         });
       navigate(`/sessions/${encodeId(id)}`);
       setText('');
-      // Hand the sent previews to the transcript, keyed by turnId, so the image shows in
-      // the user bubble immediately (the runner echoes the text + image refs). The object
+      // Hand the sent image previews to the transcript, keyed by turnId, so they show in
+      // the user bubble immediately (the runner echoes the text + attachment refs). Only
+      // inline images have a local object URL; files render from the durable ref echo. The
       // URLs move here as-is — setImages([]) below drops the chips without revoking them.
-      if (turnId && vars.images.length) {
-        const refs: TurnImage[] = vars.images.map((im) => ({ url: im.previewUrl, mime: im.file.type }));
+      const previews = vars.images.filter((im) => im.previewUrl);
+      if (turnId && previews.length) {
+        const refs: TurnImage[] = previews.map((im) => ({ url: im.previewUrl as string, mime: im.file.type }));
         setTurnImages((m) => ({ ...m, [turnId]: refs }));
-      } else if (created && vars.images.length) {
+      } else if (created && previews.length) {
         // The create path has no turnId to key local previews on (the runner seeds the
         // first turn), so free these object URLs — the seeded turn's `user` event carries
-        // the image refs and the transcript fetches them back for display.
-        vars.images.forEach((im) => URL.revokeObjectURL(im.previewUrl));
+        // the attachment refs and the transcript fetches them back for display.
+        previews.forEach((im) => im.previewUrl && URL.revokeObjectURL(im.previewUrl));
       }
       setImages([]);
       setView('active'); // a new/continued session lives in the active list
@@ -1209,6 +1291,58 @@ export function AgentView({ runner }: { runner: Runner }) {
       // instead of leaving an unhandled promise rejection.
       onOk: () => enableIsoMut.mutateAsync(agentId).catch(() => {}),
     });
+  // Merge this session's worktree branch into main on the runner that ran it. Async: the
+  // runner merges on its next heartbeat and the outcome lands on sessionDetail.mergeStatus
+  // (the status bar polls while pending). Invalidate detail so 'pending' shows immediately.
+  const mergeMut = useMutation({
+    mutationFn: (vars: { id: string; target?: string }) => mergeSessionToMain(vars.id, vars.target),
+    onSuccess: (_data, vars) => {
+      message.success(
+        `Merging to ${vars.target ?? 'main'} — the result will appear on the status bar shortly.`,
+      );
+      if (selectedId) qc.invalidateQueries({ queryKey: ['session', selectedId] });
+    },
+    onError: (e: Error) => message.error(e.message),
+  });
+  // Resolve a merge conflict in-session: revive the session so its own agent rebases the branch
+  // onto the latest main and fixes the conflicts (it has the context for its own changes); the
+  // rebase bakes the resolution into the branch's commits, so the runner's rebase merge then
+  // fast-forwards cleanly. resume() clears the stale mergeStatus, so the bar offers "Merge to
+  // main" again once the agent finishes.
+  const resolveMut = useMutation({
+    mutationFn: (vars: { id: string; branch: string }) =>
+      resumeSession(
+        vars.id,
+        'Rebase this branch onto the latest `main` and resolve any conflicts.\n\n' +
+          "You're in this session's isolated git worktree, checked out on `" +
+          vars.branch +
+          '`. Run `git rebase main` — it may stop on conflicts. For each, resolve every conflict' +
+          ' using your knowledge of the changes made on this branch, `git add` the resolved' +
+          ' files, then `git rebase --continue`, repeating until the rebase completes. Do not' +
+          ' push. Once the rebase finishes, the branch can be merged into main cleanly from the' +
+          ' status bar above the composer.',
+      ),
+    onSuccess: () => {
+      message.success('Resuming the session to resolve the conflict…');
+      if (selectedId) {
+        qc.invalidateQueries({ queryKey: ['session', selectedId] });
+        qc.invalidateQueries({ queryKey: ['sessions'] });
+      }
+    },
+    onError: (e: Error) => message.error(e.message),
+  });
+  // Commit a live session's uncommitted worktree changes onto its branch. Like merge it runs
+  // on the runner (heartbeat round-trip) and the outcome lands on commitStatus/worktreeDirty;
+  // committing is safe/local so it fires directly (no confirm). Invalidate detail so 'pending'
+  // shows immediately and the poll above picks up the runner's outcome.
+  const commitMut = useMutation({
+    mutationFn: (id: string) => commitSession(id),
+    onSuccess: () => {
+      message.success('Committing worktree changes — the result will appear on the status bar shortly.');
+      if (selectedId) qc.invalidateQueries({ queryKey: ['session', selectedId] });
+    },
+    onError: (e: Error) => message.error(e.message),
+  });
   // Change a LIVE session's model / mode between turns. Optimistically patch the
   // cached session so the pill updates instantly; server-side the runner re-spawns
   // claude --resume with the new flag. Revert + surface the error on failure. Keyed on
@@ -1263,22 +1397,26 @@ export function AgentView({ runner }: { runner: Runner }) {
   // runner must be online to fetch the bytes; otherwise the picker is disabled.
   const canAttach = runner.online && (selected ? live || resumable : composing);
   const imageUid = useRef(0);
-  // Validate, then upload an image as a staged chip. Uploaded eagerly (not on send) so the
-  // turn carries only the id and a slow upload doesn't block typing. When composing there's
-  // no session yet, so it's uploaded unscoped; create scopes it to the new session.
+  // Validate, then upload an attachment as a staged chip. Uploaded eagerly (not on send) so
+  // the turn carries only the id and a slow upload doesn't block typing. When composing
+  // there's no session yet, so it's uploaded unscoped; create scopes it to the new session.
+  // An inline-image type gets a thumbnail preview and the tighter image cap; any other type
+  // is a generic file (no preview, 25MB cap) that the runner drops into the worktree.
   const addImage = useCallback(
     async (file: File): Promise<void> => {
       if (!canAttach) return;
-      if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
-        message.error(`Unsupported image type: ${file.type || file.name}`);
+      const isInlineImage = ALLOWED_IMAGE_TYPES.includes(file.type);
+      const cap = isInlineImage ? MAX_IMAGE_BYTES : MAX_FILE_BYTES;
+      if (file.size <= 0) {
+        message.error(`${file.name || 'File'} is empty`);
         return;
       }
-      if (file.size > MAX_IMAGE_BYTES) {
-        message.error('Image exceeds the 5MB limit');
+      if (file.size > cap) {
+        message.error(isInlineImage ? 'Image exceeds the 5MB limit' : 'File exceeds the 25MB limit');
         return;
       }
-      const uid = `img-${imageUid.current++}`;
-      const previewUrl = URL.createObjectURL(file);
+      const uid = `att-${imageUid.current++}`;
+      const previewUrl = isInlineImage ? URL.createObjectURL(file) : undefined;
       setImages((prev) => [...prev, { uid, file, previewUrl, status: 'uploading' }]);
       try {
         const { id } = await uploadAttachment(file, selected?.id);
@@ -1286,7 +1424,7 @@ export function AgentView({ runner }: { runner: Runner }) {
       } catch (e) {
         // Drop the failed chip and free its preview; the toast explains why.
         setImages((prev) => prev.filter((im) => im.uid !== uid));
-        URL.revokeObjectURL(previewUrl);
+        if (previewUrl) URL.revokeObjectURL(previewUrl);
         message.error((e as Error).message);
       }
     },
@@ -1295,7 +1433,7 @@ export function AgentView({ runner }: { runner: Runner }) {
   const removeImage = (uid: string): void => {
     setImages((prev) => {
       const target = prev.find((im) => im.uid === uid);
-      if (target) URL.revokeObjectURL(target.previewUrl);
+      if (target?.previewUrl) URL.revokeObjectURL(target.previewUrl);
       return prev.filter((im) => im.uid !== uid);
     });
   };
@@ -1327,10 +1465,14 @@ export function AgentView({ runner }: { runner: Runner }) {
     }
     if (!c && readyImages.length === 0) return;
     setHistIdx(-1);
-    // `!cmd` on a live session runs a raw shell command on the runner (bypassing claude).
-    // Its output echoes to the transcript and is fed to claude as context on your next
-    // message. A bare `!` is a no-op; images are ignored for a shell turn.
-    if (live && c.startsWith('!')) {
+    // `!cmd` runs a raw shell command on the runner (bypassing claude): on a live session,
+    // as the first turn of a brand-new draft (no selection), or as the revive turn of an
+    // ended-but-resumable session — the server seeds it as a shell turn and the runner runs
+    // it once it claims the session (a resume --resumes claude first, so its context is back
+    // before the command runs). Its output echoes to the transcript and feeds claude as
+    // context on the next message. A bare `!` is a no-op; images are ignored. Only an
+    // unresumable ended session falls through (no claude to wake — start fresh instead).
+    if (c.startsWith('!') && (live || resumable || !selected)) {
       const cmd = c.slice(1).trim();
       if (cmd) send.mutate({ content: cmd, images: [], shell: true });
       else setText('');
@@ -1374,6 +1516,7 @@ export function AgentView({ runner }: { runner: Runner }) {
   // regex match, so the menu auto-hides).
   const taRef = useRef<any>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [slashIndex, setSlashIndex] = useState(0);
   const [slashDismissed, setSlashDismissed] = useState<string | null>(null);
   // The `+` menu opens the picker scoped to one asset kind; null (manual `/` typing) shows both.
@@ -1567,7 +1710,7 @@ export function AgentView({ runner }: { runner: Runner }) {
             const deleteItem = {
               key: 'delete',
               icon: <DeleteOutlined />,
-              label: ended ? 'Delete' : 'Delete & end session',
+              label: 'Delete',
               danger: true,
               onClick: ({ domEvent }: { domEvent: { stopPropagation: () => void } }) => {
                 domEvent.stopPropagation();
@@ -1596,6 +1739,14 @@ export function AgentView({ runner }: { runner: Runner }) {
                 <div className="session-main">
                   <div className="session-title-row">
                     <div className="session-title">{s.title}</div>
+                    {(s.mergeStatus === 'error' || s.mergeStatus === 'conflict') && (
+                      <Tooltip
+                        title={s.mergeStatus === 'conflict' ? 'Merge conflict — needs resolving' : 'Merge failed'}
+                        placement="top"
+                      >
+                        <span className="session-merge-badge">⚠</span>
+                      </Tooltip>
+                    )}
                     <span className="session-time">{fmtTime(s.lastTurnAt ?? s.createdAt)}</span>
                   </div>
                   {line ? (
@@ -1696,7 +1847,7 @@ export function AgentView({ runner }: { runner: Runner }) {
                       key: 'delete',
                       icon: <DeleteOutlined />,
                       danger: true,
-                      label: TERMINAL.includes(selected.status) ? 'Delete' : 'Delete & end session',
+                      label: 'Delete',
                       onClick: () => deleteMut.mutate(selected.id),
                     },
                   ],
@@ -1708,17 +1859,6 @@ export function AgentView({ runner }: { runner: Runner }) {
           )}
         </div>
 
-        {selected && !composing && (
-          <SessionOutputs
-            detail={sessionDetailQ.data}
-            enabling={enableIsoMut.isPending}
-            onEnableIsolation={
-              sessionDetailQ.data?.agent?.id
-                ? () => askEnableIsolation(sessionDetailQ.data!.agent!.id)
-                : undefined
-            }
-          />
-        )}
 
         {stuck && (
           <button
@@ -1821,33 +1961,95 @@ export function AgentView({ runner }: { runner: Runner }) {
         </div>
 
       <div className="agent-composer">
+        {/* Image previews sit above the worktree status bar so a staged screenshot reads
+            as part of the message you're about to send, not buried under the diff chip. */}
         {images.length > 0 && (
           <div className="composer-attachments">
-            {images.map((im) => (
-              <span key={im.uid} className="composer-pill composer-attach">
-                <Image
-                  className="composer-attach-thumb"
-                  src={im.previewUrl}
-                  alt=""
-                  preview={{ mask: <EyeOutlined className="composer-attach-eye" /> }}
-                />
-                {im.status === 'uploading' && (
-                  <span className="composer-attach-spin">
-                    <LoadingOutlined spin />
+            {images.map((im) =>
+              im.previewUrl ? (
+                <span key={im.uid} className="composer-pill composer-attach">
+                  <Image
+                    className="composer-attach-thumb"
+                    src={im.previewUrl}
+                    alt=""
+                    preview={{ mask: <EyeOutlined className="composer-attach-eye" /> }}
+                  />
+                  {im.status === 'uploading' && (
+                    <span className="composer-attach-spin">
+                      <LoadingOutlined spin />
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    className="composer-attach-remove"
+                    onClick={() => removeImage(im.uid)}
+                    aria-label="Remove image"
+                  >
+                    <CloseOutlined />
+                  </button>
+                </span>
+              ) : (
+                <span key={im.uid} className="composer-pill composer-file">
+                  {im.status === 'uploading' ? (
+                    <LoadingOutlined spin className="composer-file-icon" />
+                  ) : (
+                    <PaperClipOutlined className="composer-file-icon" />
+                  )}
+                  <span className="composer-file-name" title={im.file.name}>
+                    {im.file.name}
                   </span>
-                )}
-                <button
-                  type="button"
-                  className="composer-attach-remove"
-                  onClick={() => removeImage(im.uid)}
-                  aria-label="Remove image"
-                >
-                  <CloseOutlined />
-                </button>
-              </span>
-            ))}
+                  <span className="composer-file-size">{fmtBytes(im.file.size)}</span>
+                  <button
+                    type="button"
+                    className="composer-file-remove"
+                    onClick={() => removeImage(im.uid)}
+                    aria-label="Remove file"
+                  >
+                    <CloseOutlined />
+                  </button>
+                </span>
+              ),
+            )}
           </div>
         )}
+        {/* Background processes the agent launched (Bash run_in_background) — invisible
+            otherwise. Derived from this session's events; hidden when there are none. */}
+        {selectedId && <BackgroundShellsTray events={events} live={live} />}
+        <SessionOutputs
+          // Only the open session has a worktree to show. With nothing selected (new-session
+          // draft, empty list) `keepPreviousData` still holds the previously-open session's
+          // detail, which would render its stale branch/diff bar over a fresh draft — so gate
+          // on selectedId rather than the placeholder-backed query data.
+          detail={selectedId ? sessionDetailQ.data : null}
+          committed={!live}
+          // A turn in flight (live but not awaiting input) leaves the branch in a transient
+          // state — hold "Merge to main" until it finishes so we never merge half-done work.
+          turnActive={live && !idle}
+          enabling={enableIsoMut.isPending}
+          onEnableIsolation={
+            sessionDetailQ.data?.agent?.id
+              ? () => askEnableIsolation(sessionDetailQ.data!.agent!.id)
+              : undefined
+          }
+          merging={mergeMut.isPending}
+          onMergeToMain={
+            selectedId && sessionDetailQ.data?.branch
+              ? (target?: string) => mergeMut.mutate({ id: selectedId, target })
+              : undefined
+          }
+          resolving={resolveMut.isPending}
+          onResolveInSession={
+            selectedId && sessionDetailQ.data?.branch
+              ? () => resolveMut.mutate({ id: selectedId, branch: sessionDetailQ.data!.branch! })
+              : undefined
+          }
+          committing={commitMut.isPending}
+          onCommit={
+            selectedId && sessionDetailQ.data?.branch
+              ? () => commitMut.mutate(selectedId)
+              : undefined
+          }
+        />
         {replyTo && (
           <div className="composer-replyto">
             <span className="composer-replyto-icon">↩</span>
@@ -1901,19 +2103,24 @@ export function AgentView({ runner }: { runner: Runner }) {
               e.target.value = '';
             }}
           />
+          {/* Hidden picker for the `Upload file` menu item — any type (the runner routes by
+              MIME: images/PDFs inline, everything else into the worktree). Same upload path. */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            hidden
+            onChange={(e) => {
+              Array.from(e.target.files ?? []).forEach((f) => void addImage(f));
+              e.target.value = '';
+            }}
+          />
           <Dropdown
             trigger={['click']}
             placement="topLeft"
             disabled={!runner.online}
             menu={{
               items: [
-                {
-                  key: 'image',
-                  icon: <PictureOutlined />,
-                  label: canAttach ? 'Attach image' : 'Attach image (needs a started session)',
-                  disabled: !canAttach,
-                  onClick: () => imageInputRef.current?.click(),
-                },
                 {
                   key: 'command',
                   icon: <CodeOutlined />,
@@ -1931,15 +2138,28 @@ export function AgentView({ runner }: { runner: Runner }) {
                 {
                   key: 'shell',
                   icon: <ConsoleSqlOutlined />,
-                  label: live ? 'Shell' : 'Shell (needs a started session)',
-                  disabled: !live,
+                  // Works on a live session, a brand-new draft (sent as the first turn), and
+                  // an ended-but-resumable session (sent as the revive turn — the runner
+                  // --resumes claude, runs the command, and buffers its output for the next
+                  // message). Only an unresumable ended session blocks it (never started, or
+                  // its runner is offline) — there's no claude context to wake.
+                  label: !!selected && !live && !resumable ? 'Shell (resume the session first)' : 'Shell',
+                  disabled: !!selected && !live && !resumable,
                   onClick: insertShell,
+                },
+                {
+                  key: 'image',
+                  icon: <PictureOutlined />,
+                  label: canAttach ? 'Attach image' : 'Attach image (needs a started session)',
+                  disabled: !canAttach,
+                  onClick: () => imageInputRef.current?.click(),
                 },
                 {
                   key: 'file',
                   icon: <PaperClipOutlined />,
-                  label: 'Upload file (coming soon)',
-                  disabled: true,
+                  label: canAttach ? 'Upload file' : 'Upload file (needs a started session)',
+                  disabled: !canAttach,
+                  onClick: () => fileInputRef.current?.click(),
                 },
               ],
             }}
@@ -1956,6 +2176,10 @@ export function AgentView({ runner }: { runner: Runner }) {
             ref={taRef}
             variant="borderless"
             autoSize={{ minRows: 1, maxRows: 6 }}
+            // Hard-cap input length: an oversized prompt freezes the composer (autoSize
+            // remeasures the whole value on every keystroke) and the transcript. Pasting past
+            // the cap truncates; very large content should go through Upload file instead.
+            maxLength={MAX_PROMPT_CHARS}
             placeholder={
               !runner.online
                 ? 'Runner offline'

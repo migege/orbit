@@ -7,7 +7,9 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sync/atomic"
 	"time"
 )
@@ -125,7 +127,7 @@ func claudeCredentialsPath() string {
 }
 
 func claudeOAuthToken() (string, error) {
-	b, err := os.ReadFile(claudeCredentialsPath())
+	b, err := claudeCredentialsJSON()
 	if err != nil {
 		return "", err
 	}
@@ -141,6 +143,36 @@ func claudeOAuthToken() (string, error) {
 		return "", fmt.Errorf("no oauth token (api-key auth?)")
 	}
 	return c.ClaudeAiOauth.AccessToken, nil
+}
+
+// claudeCredentialsJSON returns the raw {"claudeAiOauth":{...}} blob Claude Code
+// stores. On Linux that's the .credentials.json file; on macOS the CLI keeps it in
+// the login Keychain instead, leaving no file — so fall back to the Keychain when the
+// file read fails. The original file error is preserved when the fallback also fails,
+// so the logged reason stays accurate on non-mac hosts.
+func claudeCredentialsJSON() ([]byte, error) {
+	b, err := os.ReadFile(claudeCredentialsPath())
+	if err == nil {
+		return b, nil
+	}
+	if runtime.GOOS == "darwin" {
+		if kb, kerr := keychainCredentials(); kerr == nil {
+			return kb, nil
+		}
+	}
+	return nil, err
+}
+
+// keychainCredentials reads Claude Code's OAuth credentials from the macOS login
+// Keychain (item "Claude Code-credentials"), where the CLI stores them on darwin. The
+// first read from the runner triggers a one-time Keychain access prompt; choosing
+// "Always Allow" makes subsequent reads silent.
+func keychainCredentials() ([]byte, error) {
+	out, err := exec.Command("security", "find-generic-password", "-s", "Claude Code-credentials", "-w").Output()
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func fetchPlanUsage(ctx context.Context, client *http.Client) (*PlanUsage, error) {

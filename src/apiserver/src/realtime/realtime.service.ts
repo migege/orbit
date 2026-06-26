@@ -2,7 +2,7 @@ import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/commo
 import { EventEmitter } from 'events';
 import { randomUUID } from 'crypto';
 import { Client } from 'pg';
-import { NormalizedRunEvent, RunEventType } from '@orbit/shared';
+import { CommitCommand, MergeCommand, NormalizedRunEvent, RunEventType } from '@orbit/shared';
 import { Observable, Subject, filter, map } from 'rxjs';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -221,5 +221,41 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
       select: { id: true },
     });
     return sessions.map((s) => s.id);
+  }
+
+  /**
+   * Branch merges this runner should perform: sessions it ran (assignedRunnerId) that the
+   * user asked to merge into main (mergeStatus='pending'). At-least-once — redelivered each
+   * heartbeat until the runner reports an outcome that flips mergeStatus off 'pending'. The
+   * workDir comes from the session's agent; the runner resolves the repo root from it.
+   */
+  async drainMergeRequests(runnerId: string): Promise<MergeCommand[]> {
+    const sessions = await this.prisma.session.findMany({
+      where: { assignedRunnerId: runnerId, mergeStatus: 'pending', branch: { not: null } },
+      select: { id: true, branch: true, mergeTarget: true, agent: { select: { workDir: true } } },
+    });
+    return sessions
+      .filter((s) => s.branch && s.agent?.workDir)
+      .map((s) => ({
+        sessionId: s.id,
+        branch: s.branch!,
+        workDir: s.agent!.workDir!,
+        // Null mergeTarget → omit it so the runner auto-detects main/master (original behavior).
+        ...(s.mergeTarget ? { targetBranch: s.mergeTarget } : {}),
+      }));
+  }
+
+  /**
+   * Worktree commits this runner should perform: live sessions it runs (assignedRunnerId)
+   * that the user asked to commit (commitStatus='pending'). At-least-once — redelivered each
+   * heartbeat until the runner reports an outcome that flips commitStatus off 'pending'. The
+   * runner locates the per-session checkout from the session id; branch is for logging.
+   */
+  async drainCommitRequests(runnerId: string): Promise<CommitCommand[]> {
+    const sessions = await this.prisma.session.findMany({
+      where: { assignedRunnerId: runnerId, commitStatus: 'pending', branch: { not: null } },
+      select: { id: true, branch: true },
+    });
+    return sessions.filter((s) => s.branch).map((s) => ({ sessionId: s.id, branch: s.branch! }));
   }
 }

@@ -112,6 +112,12 @@ func runInteractiveSession(t *Transport, job *ClaimedSession, ctx context.Contex
 		}
 	}()
 
+	// Watches background-shell output files for live output and turns Claude's
+	// <task-notification> messages into durable completion events. Shared across respawns;
+	// all tails stop when this session run returns.
+	bg := newBgTailer(ctx, emit)
+	defer bg.stopAll()
+
 	logln(fmt.Sprintf("> interactive run %s — %s", job.SessionID, job.Title))
 	status := stCancelled
 	// A reclaimed or revived session's claude session already exists, so even its
@@ -122,7 +128,7 @@ func runInteractiveSession(t *Transport, job *ClaimedSession, ctx context.Contex
 		if ctx.Err() != nil || shutdownCtx.Err() != nil {
 			break
 		}
-		st, ended, reload := runSessionProcess(ctx, shutdownCtx, t, job, execDir, scratch, emit, setTurn, firstSpawn)
+		st, ended, reload := runSessionProcess(ctx, shutdownCtx, t, job, execDir, scratch, emit, setTurn, firstSpawn, bg)
 		firstSpawn = false
 		if ended {
 			status = st
@@ -168,11 +174,15 @@ func runInteractiveSession(t *Transport, job *ClaimedSession, ctx context.Contex
 	// compute the diff, so the branch is usable for a manual merge even after the checkout
 	// is removed. A SUCCEEDED/FAILED run is done — drop the checkout (the branch stays); a
 	// CANCELLED one keeps its checkout for a possible resume and is reaped by gcWorktrees.
+	// A cancelled run is still resumable (server settles it PARKED for idle/user-end), so its
+	// finalize commit is a *park checkpoint* — tagged for undo-on-resume rather than permanent.
 	cr := CompleteRequest{Status: status, IsolationStatus: job.IsolationStatus}
 	if job.WT != nil {
 		cr.Branch = job.WT.Branch
 		cr.BaseSha = job.WT.BaseSha
-		cr.ChangedFiles = finalizeWorktree(job.WT, job.Title)
+		cr.ChangedFiles, cr.ChangedDiff = finalizeWorktree(job.WT, job.Title, status == stCancelled)
+		// Candidate merge targets for the ended session's "Merge to…" dropdown.
+		cr.MergeTargets = mergeTargetsForWT(job.WT)
 	}
 	if err := t.complete(job.SessionID, cr); err != nil {
 		logln("complete failed for", job.SessionID+":", err)
@@ -205,13 +215,24 @@ func withBuiltinTaskToolsDisallowed(configured []string) []string {
 	return out
 }
 
+// envWithAgent returns the runner's own environment with the agent's custom env vars
+// layered on top. Shared by the claude process and `!`-shells so a command run either
+// way sees the same configured environment.
+func envWithAgent(agentEnv map[string]string) []string {
+	env := os.Environ()
+	for k, v := range agentEnv {
+		env = append(env, k+"="+v)
+	}
+	return env
+}
+
 // runSessionProcess spawns ONE claude process and drives it until the session
 // ends (an 'end' turn closes stdin) or the process exits. Returns (status, ended);
 // ended=false means an unexpected crash that the caller should --resume.
 // Returns (status, ended, reload). ended=false means the caller should re-spawn:
 // reload=true for a requested model/permission-mode change (re-spawn with the new
 // flags now on job.Agent), reload=false for an unexpected crash.
-func runSessionProcess(ctx context.Context, shutdownCtx context.Context, t *Transport, job *ClaimedSession, execDir, scratchDir string, emit emitFn, setTurn func(string), firstSpawn bool) (string, bool, bool) {
+func runSessionProcess(ctx context.Context, shutdownCtx context.Context, t *Transport, job *ClaimedSession, execDir, scratchDir string, emit emitFn, setTurn func(string), firstSpawn bool, bg *bgTailer) (string, bool, bool) {
 	// Reset turn attribution for this (possibly re-spawned) process: events before
 	// the first turn is (re-)fed — claude's system/init — are session-level (null).
 	setTurn("")
@@ -277,6 +298,14 @@ func runSessionProcess(ctx context.Context, shutdownCtx context.Context, t *Tran
 	} else {
 		args = append(args, "--resume", job.SessionUUID)
 	}
+	// Uploaded attachments land in the session's uploads dir, which is OUTSIDE execDir so they
+	// stay out of git (see writeUpload). Add it as an explicit working dir so claude can read
+	// them without a per-read permission prompt; created up front so the flag points at an
+	// existing dir even before the first upload arrives.
+	upDir := uploadsDir(job.SessionID)
+	if err := os.MkdirAll(upDir, 0o755); err == nil {
+		args = append(args, "--add-dir", upDir)
+	}
 
 	procCtx, procCancel := context.WithCancel(ctx)
 	defer procCancel()
@@ -288,10 +317,7 @@ func runSessionProcess(ctx context.Context, shutdownCtx context.Context, t *Tran
 	cmd := exec.CommandContext(procCtx, "claude", args...)
 	cmd.Dir = execDir
 	// Start from the runner's own env, then layer the agent's custom env vars on top.
-	cmd.Env = os.Environ()
-	for k, v := range job.Agent.Env {
-		cmd.Env = append(cmd.Env, k+"="+v)
-	}
+	cmd.Env = envWithAgent(job.Agent.Env)
 	// Inject session context so the built-in `orbit mcp` server (a child of claude)
 	// knows where it is. The runner token is NOT passed here — `orbit mcp` reads it
 	// from config.json so it never lands in the claude process environment.
@@ -378,43 +404,82 @@ func runSessionProcess(ctx context.Context, shutdownCtx context.Context, t *Tran
 				if dup {
 					continue
 				}
-				// Build the claude user message: any pasted images as base64 `image`
-				// blocks, then the text. The runner fetches each blob (runner-scoped);
-				// a fetch failure drops just that image so the turn still goes through as
-				// text rather than stalling the conversation. imgRefs (id+mime) ride on
-				// the `user` event so the web can render the images after a reload.
+				// Build the claude user message by dispatching each attachment on its MIME
+				// type: images and PDFs are inlined as base64 content blocks; anything else is
+				// written to the session's uploads dir outside the worktree for claude to read
+				// with its tools (its path is announced in the text below, kept out of git so it
+				// isn't auto-committed or merged). The runner fetches each blob (runner-scoped); a
+				// fetch/write failure drops just that one so the turn still goes through rather
+				// than stalling. attRefs (id+mime+name) ride on the `user` event so the web can
+				// render the attachments (image thumbnails / file chips) after a reload.
 				content := []map[string]interface{}{}
-				var imgRefs []map[string]interface{}
+				var attRefs []map[string]interface{}
+				var writtenPaths []string
 				for _, att := range resp.Attachments {
 					data, ferr := t.fetchAttachment(procCtx, job.SessionID, att.ID)
 					if ferr != nil {
 						logln("attachment fetch failed for", job.SessionID, att.ID+":", ferr)
 						continue
 					}
-					content = append(content, map[string]interface{}{
-						"type": "image",
-						"source": map[string]interface{}{
-							"type":       "base64",
-							"media_type": att.MimeType,
-							"data":       base64.StdEncoding.EncodeToString(data),
-						},
-					})
-					imgRefs = append(imgRefs, map[string]interface{}{"id": att.ID, "mime": att.MimeType})
+					switch {
+					// Only the media types Claude accepts as image blocks; other image/* (svg,
+					// bmp, tiff) and every non-image, non-PDF type fall through to disk.
+					case att.MimeType == "image/png" || att.MimeType == "image/jpeg" ||
+						att.MimeType == "image/webp" || att.MimeType == "image/gif":
+						content = append(content, map[string]interface{}{
+							"type": "image",
+							"source": map[string]interface{}{
+								"type":       "base64",
+								"media_type": att.MimeType,
+								"data":       base64.StdEncoding.EncodeToString(data),
+							},
+						})
+					case att.MimeType == "application/pdf":
+						content = append(content, map[string]interface{}{
+							"type": "document",
+							"source": map[string]interface{}{
+								"type":       "base64",
+								"media_type": att.MimeType,
+								"data":       base64.StdEncoding.EncodeToString(data),
+							},
+						})
+					default:
+						abs, werr := writeUpload(job.SessionID, att.FileName, att.ID, data)
+						if werr != nil {
+							logln("attachment write failed for", job.SessionID, att.ID+":", werr)
+							continue
+						}
+						writtenPaths = append(writtenPaths, abs)
+					}
+					attRefs = append(attRefs, map[string]interface{}{"id": att.ID, "mime": att.MimeType, "name": att.FileName})
 				}
-				// Prepend any buffered `!`-shell output as context — claude sees the
+				// Prepend any buffered `!`-shell output as context - claude sees the
 				// command+output with this message (CLI `!` semantics), no turn spent on it.
 				feedText := resp.Content
 				if len(pendingShellCtx) > 0 {
 					feedText = strings.Join(pendingShellCtx, "\n") + "\n\n" + resp.Content
 					pendingShellCtx = nil
 				}
-				// Keep the text block unless this is an image-only turn with nothing to feed.
+				// Tell claude where the written-to-disk uploads landed (absolute paths outside
+				// the worktree), so it reads them with its tools instead of expecting inline
+				// content it never received.
+				if len(writtenPaths) > 0 {
+					note := fmt.Sprintf("[The user uploaded %d file(s), saved at: %s - read or process them with your tools as needed.]",
+						len(writtenPaths), strings.Join(writtenPaths, ", "))
+					if feedText != "" {
+						feedText = note + "\n\n" + feedText
+					} else {
+						feedText = note
+					}
+				}
+				// Keep the text block unless this is an inline-attachment-only turn with
+				// nothing to feed.
 				if feedText != "" || len(content) == 0 {
 					content = append(content, map[string]interface{}{"type": "text", "text": feedText})
 				}
 				userEv := map[string]interface{}{"text": resp.Content}
-				if len(imgRefs) > 0 {
-					userEv["images"] = imgRefs
+				if len(attRefs) > 0 {
+					userEv["attachments"] = attRefs
 				}
 				emit(evUser, userEv)
 				select {
@@ -445,14 +510,27 @@ func runSessionProcess(ctx context.Context, shutdownCtx context.Context, t *Tran
 				inflight[resp.TurnID] = true
 				inflightMu.Unlock()
 				setTurn(resp.TurnID)
-				shOut, shExit := runShellTurn(procCtx, execDir, resp.Content, emit, resp.TurnID)
-				pendingShellCtx = append(pendingShellCtx,
-					fmt.Sprintf("<bash-input>%s</bash-input>\n<bash-stdout>%s</bash-stdout>", resp.Content, shOut))
-				if err := t.turnComplete(job.SessionID, TurnCompleteRequest{
-					TurnID: resp.TurnID, Status: stSucceeded,
-					Result: fmt.Sprintf("exit %d", shExit), Subtype: "shell",
-				}); err != nil {
-					logln("shell turn-complete failed for", job.SessionID+":", err)
+				if shCmd, isBg := splitBackground(resp.Content); isBg {
+					// `!cmd &`: launch detached and finish the turn now — the process keeps
+					// running, surfaced in the Background-processes tray (output + completion),
+					// not buffered into the next message's context.
+					runShellTurnBackground(bg, execDir, scratchDir, shCmd, resp.TurnID, emit, job.Agent.Env)
+					if err := t.turnComplete(job.SessionID, TurnCompleteRequest{
+						TurnID: resp.TurnID, Status: stSucceeded,
+						Result: "started in background", Subtype: "shell",
+					}); err != nil {
+						logln("shell turn-complete failed for", job.SessionID+":", err)
+					}
+				} else {
+					shOut, shExit := runShellTurn(procCtx, execDir, resp.Content, emit, resp.TurnID, job.Agent.Env)
+					pendingShellCtx = append(pendingShellCtx,
+						fmt.Sprintf("<bash-input>%s</bash-input>\n<bash-stdout>%s</bash-stdout>", resp.Content, shOut))
+					if err := t.turnComplete(job.SessionID, TurnCompleteRequest{
+						TurnID: resp.TurnID, Status: stSucceeded,
+						Result: fmt.Sprintf("exit %d", shExit), Subtype: "shell",
+					}); err != nil {
+						logln("shell turn-complete failed for", job.SessionID+":", err)
+					}
 				}
 				inflightMu.Lock()
 				delete(inflight, resp.TurnID)
@@ -493,6 +571,23 @@ func runSessionProcess(ctx context.Context, shutdownCtx context.Context, t *Tran
 				reloadRequested.Store(true)
 				procCancel() // kill claude; the main loop returns reload=true to re-spawn
 				return
+			case "diff":
+				// On-demand live-diff refresh: the web opened a file's diff and the stored
+				// snapshot may lag the current worktree (the heartbeat refreshes the file list
+				// but not the patch text). Recompute the full live diff and push it back so the
+				// drawer shows the real diff within a second or two. Read-only (throwaway temp
+				// index, like the heartbeat's liveDiffStat), so it's safe even mid-turn; no
+				// claude involvement and no turn consumed. Acked server-side on delivery, so
+				// there's no redelivery to dedup against.
+				liveFiles, livePatches := liveDiff(job.WT)
+				if err := t.diffResult(job.SessionID, DiffResultRequest{
+					ChangedFiles:  liveFiles,
+					ChangedDiff:   livePatches,
+					WorktreeDirty: worktreeIsDirty(job.WT),
+					BranchMerged:  branchMergedInto(job.WT),
+				}); err != nil {
+					logln("diff-result failed for", job.SessionID+":", err)
+				}
 			case "end":
 				endSession()
 				return
@@ -545,7 +640,7 @@ func runSessionProcess(ctx context.Context, shutdownCtx context.Context, t *Tran
 		if json.Unmarshal([]byte(line), &msg) != nil {
 			continue
 		}
-		handleMessage(msg, emit)
+		handleMessage(msg, emit, bg)
 		if msg["type"] == "assistant" {
 			if txt := assistantText(msg); txt != "" {
 				lastAssistantText = txt
@@ -578,15 +673,23 @@ func runSessionProcess(ctx context.Context, shutdownCtx context.Context, t *Tran
 			default:
 			}
 			if turnID != "" {
+				// Live worktree state for the composer's status bar: what this turn left in
+				// the worktree (uncommitted), so the diff updates each turn, not just at end.
+				liveFiles, livePatches := liveDiff(job.WT)
 				if err := t.turnComplete(job.SessionID, TurnCompleteRequest{
-					TurnID:     turnID,
-					Status:     turnStatus,
-					Result:     r.Result,
-					Subtype:    r.Subtype,
-					NumTurns:   r.NumTurns,
-					CostUsd:    r.CostUsd,
-					Usage:      r.Usage,
-					ModelUsage: r.ModelUsage,
+					TurnID:          turnID,
+					Status:          turnStatus,
+					Result:          r.Result,
+					Subtype:         r.Subtype,
+					NumTurns:        r.NumTurns,
+					CostUsd:         r.CostUsd,
+					Usage:           r.Usage,
+					ModelUsage:      r.ModelUsage,
+					IsolationStatus: job.IsolationStatus,
+					ChangedFiles:    liveFiles,
+					ChangedDiff:     livePatches,
+					WorktreeDirty:   worktreeIsDirty(job.WT),
+					BranchMerged:    branchMergedInto(job.WT),
 				}); err != nil {
 					logln("turn-complete failed for", job.SessionID+":", err)
 				}
@@ -616,4 +719,25 @@ func runSessionProcess(ctx context.Context, shutdownCtx context.Context, t *Tran
 		return stCancelled, true, false // graceful drain -> caller detaches without finalizing
 	}
 	return stFailed, false, false // unexpected exit -> respawn with --resume
+}
+
+// writeUpload saves a non-image/-PDF attachment into the session's uploads dir, which lives
+// OUTSIDE the git worktree (see uploadsDir) so attachments are never swept into the session's
+// auto-commit, surfaced in the live diff, or merged to main. Returns the ABSOLUTE path to hand
+// to claude. The name is reduced to its base (no path traversal) and falls back to the
+// attachment id when unusable.
+func writeUpload(sessionID, name, id string, data []byte) (string, error) {
+	base := filepath.Base(strings.TrimSpace(name))
+	if base == "." || base == ".." || base == string(filepath.Separator) || base == "" {
+		base = id
+	}
+	dir := uploadsDir(sessionID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	p := filepath.Join(dir, base)
+	if err := os.WriteFile(p, data, 0o644); err != nil {
+		return "", err
+	}
+	return p, nil
 }
