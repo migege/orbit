@@ -9,6 +9,9 @@ public struct User: Codable, Equatable, Sendable, Identifiable {
     public let email: String
     public let name: String?
     public let role: String?
+    // `GET /users/me` also returns these; login's user payload omits them (→ nil).
+    public let createdAt: String?
+    public let preferences: UserPreferences?
 }
 
 public struct LoginRequest: Codable, Sendable {
@@ -35,6 +38,21 @@ public struct Agent: Codable, Equatable, Sendable, Identifiable {
     public let model: String?
     public let permissionMode: String?
     public let workDir: String?
+    // The rest back the detail / edit form; all optional so a list payload (which may omit
+    // them) still decodes. Mirrors the columns in the Prisma Agent model / `UpdateAgentDto`.
+    public let description: String?
+    public let appendSystemPrompt: String?
+    public let systemPrompt: String?
+    public let allowedTools: [String]?
+    public let disallowedTools: [String]?
+    public let maxTurns: Int?
+    public let maxBudgetUsd: Double?
+    public let targetRunnerId: String?
+    public let targetLabels: [String]?
+    public let runnerId: String?
+    public let env: [String: String]?
+    public let enabled: Bool?
+    public let autoInitGit: Bool?
 }
 
 public struct Runner: Codable, Equatable, Sendable, Identifiable {
@@ -44,6 +62,10 @@ public struct Runner: Codable, Equatable, Sendable, Identifiable {
     public let online: Bool?
     public let version: String?
     public let maxConcurrent: Int?
+    public let displayName: String?
+    // Reported on the GET /runners payload (renamed from availableSkills/availableCommands).
+    public let skills: [SlashCommandInfo]?
+    public let commands: [SlashCommandInfo]?
 }
 
 /// A session row (list + detail share this; detail carries the extra worktree/stat fields).

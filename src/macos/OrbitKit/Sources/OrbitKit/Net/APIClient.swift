@@ -45,6 +45,9 @@ public final class APIClient: @unchecked Sendable {
     }
 
     public func me() async throws -> User { try await get("users/me") }
+    public func updatePreferences(_ req: UpdatePreferencesRequest) async throws -> User {
+        try await patch("users/me/preferences", body: req)
+    }
 
     // MARK: sessions
 
@@ -68,6 +71,13 @@ public final class APIClient: @unchecked Sendable {
         _ = try await postRaw("sessions/\(sessionID)/interrupt", body: Optional<Empty>.none)
     }
 
+    // Lifecycle: gracefully end (PARKED), archive/restore (hide/unhide), hard delete. After any
+    // of these the caller refetches the list (`view=active|archived|deleted`).
+    public func endSession(_ id: String) async throws { _ = try await postRaw("sessions/\(id)/end", body: Optional<Empty>.none) }
+    public func archiveSession(_ id: String) async throws { _ = try await postRaw("sessions/\(id)/archive", body: Optional<Empty>.none) }
+    public func restoreSession(_ id: String) async throws { _ = try await postRaw("sessions/\(id)/restore", body: Optional<Empty>.none) }
+    public func deleteSession(_ id: String) async throws { try await deleteRaw("sessions/\(id)") }
+
     // MARK: approvals
 
     public func approvals(sessionID: String, status: String = "PENDING") async throws -> [ApprovalInfo] {
@@ -81,8 +91,34 @@ public final class APIClient: @unchecked Sendable {
     // MARK: agents / runners
 
     public func agents() async throws -> [Agent] { try await get("agents") }
+    public func agent(_ id: String) async throws -> Agent { try await get("agents/\(id)") }
+    public func createAgent(_ req: CreateAgentRequest) async throws -> Agent { try await post("agents", body: req) }
+    public func updateAgent(_ id: String, _ req: UpdateAgentRequest) async throws -> Agent { try await patch("agents/\(id)", body: req) }
+    public func deleteAgent(_ id: String) async throws { try await deleteRaw("agents/\(id)") }
+    public func reorderAgents(_ ids: [String]) async throws { try await postRaw("agents/reorder", body: ReorderAgentsRequest(ids: ids)) }
+
+    // MARK: tasks
+    public func tasks() async throws -> [TaskItem] { try await get("tasks") }
+    public func task(_ id: String) async throws -> TaskItem { try await get("tasks/\(id)") }
+    public func createTask(_ req: CreateTaskRequest) async throws -> TaskItem { try await post("tasks", body: req) }
+    public func updateTask(_ id: String, _ req: UpdateTaskRequest) async throws -> TaskItem { try await patch("tasks/\(id)", body: req) }
+    public func deleteTask(_ id: String) async throws { try await deleteRaw("tasks/\(id)") }
+    public func executeTask(_ id: String) async throws { try await postRaw("tasks/\(id)/execute", body: Optional<Empty>.none) }
+    public func batchExecute(_ req: BatchExecuteRequest) async throws { try await postRaw("tasks/batch-execute", body: req) }
+    public func batchStop(_ req: BatchStopRequest) async throws { try await postRaw("tasks/batch-stop", body: req) }
+    public func batchAssign(_ req: BatchAssignRequest) async throws { try await postRaw("tasks/batch-assign", body: req) }
+    public func addTaskComment(taskID: String, _ req: CreateTaskCommentRequest) async throws { try await postRaw("tasks/\(taskID)/comments", body: req) }
+    public func removeTaskComment(taskID: String, commentID: String) async throws { try await deleteRaw("tasks/\(taskID)/comments/\(commentID)") }
+    public func addTaskDependency(taskID: String, _ req: AddDependencyRequest) async throws { try await postRaw("tasks/\(taskID)/dependencies", body: req) }
+    public func removeTaskDependency(taskID: String, dependsOnTaskID: String) async throws { try await deleteRaw("tasks/\(taskID)/dependencies/\(dependsOnTaskID)") }
+
     public func runners() async throws -> [Runner] { try await get("runners") }
     public func runner(_ id: String) async throws -> Runner { try await get("runners/\(id)") }
+    public func updateRunner(_ id: String, _ req: UpdateRunnerRequest) async throws -> Runner { try await patch("runners/\(id)", body: req) }
+    public func rotateRunnerToken(_ id: String) async throws -> RotateTokenResponse { try await postEmpty("runners/\(id)/rotate-token") }
+    public func deleteRunner(_ id: String) async throws { try await deleteRaw("runners/\(id)") }
+    public func createEnrollmentToken(_ req: CreateEnrollmentTokenRequest) async throws -> EnrollmentTokenInfo { try await post("runners/enrollment-tokens", body: req) }
+    public func enrollmentTokens() async throws -> [EnrollmentTokenInfo] { try await get("runners/enrollment-tokens") }
 
     // MARK: runner enrollment (Phase 4 — one-app device flow)
 
@@ -167,6 +203,21 @@ public final class APIClient: @unchecked Sendable {
     @discardableResult
     private func postRaw<B: Encodable>(_ path: String, body: B?) async throws -> Data {
         try await send(makeRequest(path, method: "POST", body: body))
+    }
+
+    private func patch<T: Decodable, B: Encodable>(_ path: String, body: B) async throws -> T {
+        let data = try await send(makeRequest(path, method: "PATCH", body: body))
+        return try decoder.decode(T.self, from: data)
+    }
+
+    private func deleteRaw(_ path: String) async throws {
+        _ = try await send(makeRequest(path, method: "DELETE", body: Optional<Empty>.none))
+    }
+
+    /// POST with no request body but a decoded response (e.g. rotate-token).
+    private func postEmpty<T: Decodable>(_ path: String) async throws -> T {
+        let data = try await send(makeRequest(path, method: "POST", body: Optional<Empty>.none))
+        return try decoder.decode(T.self, from: data)
     }
 
     private func makeRequest<B: Encodable>(_ path: String, method: String,
