@@ -834,11 +834,12 @@ export class SessionsService {
         status,
         message: dto.message ?? null,
         answers: dto.answers ? (dto.answers as Prisma.InputJsonValue) : Prisma.DbNull,
-        // Only an allow can carry a "remember same kind" rule; the runner reads it off
-        // the long-poll and adds it to claude's session permissions.
+        // Only an allow can carry "remember same kind" rules; the runner reads them off
+        // the long-poll and adds them to claude's session permissions. Stored as a JSON
+        // array (the schemaless `remember_rule` column holds either shape).
         rememberRule:
-          dto.behavior === 'allow' && dto.rememberRule
-            ? (dto.rememberRule as unknown as Prisma.InputJsonValue)
+          dto.behavior === 'allow' && dto.rememberRules?.length
+            ? (dto.rememberRules as unknown as Prisma.InputJsonValue)
             : Prisma.DbNull,
         decidedById: ownerId,
         decidedAt: new Date(),

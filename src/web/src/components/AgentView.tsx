@@ -1060,12 +1060,12 @@ export function AgentView({ runner }: { runner: Runner }) {
     behavior: 'allow' | 'deny',
     answers?: Record<string, string[]>,
     message?: string,
-    rememberRule?: PermissionRule,
+    rememberRules?: PermissionRule[],
   ): Promise<void> => {
     if (!selectedId) return;
     setApprovals((prev) => prev.filter((x) => x.id !== approvalId));
     try {
-      await decideApproval(selectedId, approvalId, behavior, message, answers, rememberRule);
+      await decideApproval(selectedId, approvalId, behavior, message, answers, rememberRules);
     } catch {
       listApprovals(selectedId)
         .then(setApprovals)

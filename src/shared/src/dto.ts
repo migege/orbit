@@ -312,12 +312,14 @@ export interface PermissionRule {
 
 /** Browser → control plane: a human's allow/deny on a pending approval. For an
  *  AskUserQuestion an `allow` carries the picked `answers`. An `allow` may also carry
- *  `rememberRule` to auto-allow the same kind of call for the rest of the session. */
+ *  `rememberRules` to auto-allow the same kinds of call for the rest of the session —
+ *  one rule per distinct sub-command of a compound Bash line, so `cd x && git add …`
+ *  remembers both `cd` and `git add`, not just the leading `cd`. */
 export interface ApprovalDecisionRequest {
   behavior: 'allow' | 'deny';
   message?: string;
   answers?: QuestionAnswers;
-  rememberRule?: PermissionRule;
+  rememberRules?: PermissionRule[];
 }
 
 /** Control plane → runner: the resolved decision (returned by the approval
@@ -328,6 +330,9 @@ export interface ApprovalDecisionResponse {
   behavior?: 'allow' | 'deny';
   message?: string;
   answers?: QuestionAnswers;
+  rememberRules?: PermissionRule[];
+  /** Deprecated: the first of `rememberRules`, kept so runners that predate the array
+   *  form still remember at least the primary rule until they restart and self-update. */
   rememberRule?: PermissionRule;
 }
 

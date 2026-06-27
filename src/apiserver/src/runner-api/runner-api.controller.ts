@@ -574,13 +574,19 @@ export class RunnerApiController {
       const a = await this.prisma.approval.findFirst({ where: { id: approvalId, sessionId } });
       if (!a) return { id: approvalId, status: 'DENIED', behavior: 'deny', message: 'approval not found' };
       if (a.status !== 'PENDING') {
+        // The schemaless column holds an array (current) or a lone object (legacy rows);
+        // normalize, then send both forms so runners that predate the array still get the
+        // primary rule via `rememberRule` until they restart and self-update.
+        const stored = a.rememberRule as PermissionRule | PermissionRule[] | null;
+        const rules = Array.isArray(stored) ? stored : stored ? [stored] : [];
         return {
           id: a.id,
           status: a.status as ApprovalStatus,
           behavior: a.status === 'ALLOWED' ? 'allow' : 'deny',
           message: a.message ?? undefined,
           answers: (a.answers as QuestionAnswers | null) ?? undefined,
-          rememberRule: (a.rememberRule as PermissionRule | null) ?? undefined,
+          rememberRules: rules.length ? rules : undefined,
+          rememberRule: rules[0],
         };
       }
       if (Date.now() >= deadline) return { id: a.id, status: 'PENDING' };

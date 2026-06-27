@@ -382,7 +382,11 @@ type ApprovalDecisionResponse struct {
 	// option labels. Fed back to claude as the tool's updatedInput.answers.
 	Answers map[string][]string `json:"answers,omitempty"`
 	// Set when the human chose "allow + remember same kind": fed back to claude as
-	// updatedPermissions so its engine auto-allows matching calls for the session.
+	// updatedPermissions so its engine auto-allows matching calls for the session. A
+	// compound Bash line yields one rule per distinct sub-command.
+	RememberRules []PermissionRule `json:"rememberRules,omitempty"`
+	// Deprecated: the primary (first) rule, kept for forward-compat with control planes
+	// that don't send the array yet. Prefer RememberRules.
 	RememberRule *PermissionRule `json:"rememberRule,omitempty"`
 }
 

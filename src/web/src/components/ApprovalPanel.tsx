@@ -15,15 +15,60 @@ function planText(input: unknown): string {
   return '';
 }
 
-// The leading command word(s) to auto-allow as "same kind" — claude's engine then
-// matches future calls against `Bash(<prefix>:*)`. Skip FOO=bar env assignments, take
-// the program word, and add one following sub-command word when it looks like one (not
-// a flag/path/operator), so `git commit -m x` → "git commit" and `ls -la` → "ls".
-function bashPrefix(input: unknown): string | null {
-  const cmd =
-    input && typeof input === 'object' ? (input as { command?: unknown }).command : undefined;
-  if (typeof cmd !== 'string' || !cmd.trim()) return null;
-  const toks = cmd.trim().split(/\s+/);
+// Split a shell command into its top-level sub-commands at unquoted ; && || | and
+// newlines, so every real command in a compound line can get its own allow rule — claude
+// gates each segment separately, so remembering only the leading one (e.g. `cd`) leaves
+// the rest re-prompting. Quote- and backslash-aware so an operator inside a quoted string
+// stays literal (e.g. the | in grep "a\|b"). Best-effort, not a full shell parser.
+function bashSegments(cmd: string): string[] {
+  const out: string[] = [];
+  let cur = '';
+  let quote: '"' | "'" | null = null;
+  for (let i = 0; i < cmd.length; i++) {
+    const c = cmd[i];
+    if (c === '\\' && i + 1 < cmd.length) {
+      cur += c + cmd[i + 1];
+      i++;
+      continue;
+    }
+    if (quote) {
+      cur += c;
+      if (c === quote) quote = null;
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      quote = c;
+      cur += c;
+      continue;
+    }
+    if (c === ';' || c === '\n') {
+      out.push(cur);
+      cur = '';
+      continue;
+    }
+    if ((c === '&' || c === '|') && cmd[i + 1] === c) {
+      out.push(cur);
+      cur = '';
+      i++;
+      continue;
+    }
+    if (c === '|') {
+      out.push(cur);
+      cur = '';
+      continue;
+    }
+    cur += c;
+  }
+  out.push(cur);
+  return out;
+}
+
+// The leading command word(s) of one sub-command, to auto-allow as "same kind" — claude
+// then matches future calls against `Bash(<prefix>:*)`. Skip FOO=bar env assignments,
+// take the program word, and add one following sub-command word when it looks like one
+// (not a flag/path/operator), so `git commit -m x` → "git commit" and `ls -la` → "ls".
+function bashPrefix(segment: string): string | null {
+  const toks = segment.trim().split(/\s+/);
   let i = 0;
   while (i < toks.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(toks[i])) i++;
   const prog = toks[i];
@@ -32,24 +77,44 @@ function bashPrefix(input: unknown): string | null {
   return next && /^[A-Za-z][\w-]*$/.test(next) ? `${prog} ${next}` : prog;
 }
 
-// Derive the session-scoped rule for "allow + remember same kind", or null when it
-// doesn't apply: questions/plans aren't repeatable, and a Bash command with no clean
-// prefix can't be generalized. Non-Bash tools get a tool-wide rule (no ruleContent).
-function rememberRuleFor(a: ApprovalInfo): PermissionRule | null {
-  if (a.toolName === 'AskUserQuestion' || isPlan(a)) return null;
+// Derive the session-scoped rules for "allow + remember same kind", or [] when none
+// apply: questions/plans aren't repeatable. A Bash line yields one rule per distinct
+// sub-command prefix (so `cd x && git add …` remembers both, not just the leading `cd`);
+// other tools get a single tool-wide rule (no ruleContent).
+function rememberRulesFor(a: ApprovalInfo): PermissionRule[] {
+  if (a.toolName === 'AskUserQuestion' || isPlan(a)) return [];
   if (a.toolName === 'Bash') {
-    const p = bashPrefix(a.input);
-    return p ? { toolName: 'Bash', ruleContent: `${p}:*` } : null;
+    const cmd =
+      a.input && typeof a.input === 'object'
+        ? (a.input as { command?: unknown }).command
+        : undefined;
+    if (typeof cmd !== 'string' || !cmd.trim()) return [];
+    const seen = new Set<string>();
+    const rules: PermissionRule[] = [];
+    for (const seg of bashSegments(cmd)) {
+      const p = bashPrefix(seg);
+      if (p && !seen.has(p)) {
+        seen.add(p);
+        rules.push({ toolName: 'Bash', ruleContent: `${p}:*` });
+      }
+    }
+    return rules;
   }
-  return { toolName: a.toolName };
+  return [{ toolName: a.toolName }];
 }
 
-// The human-readable scope shown on the "remember" button.
-function rememberLabel(rule: PermissionRule): string {
-  if (rule.toolName === 'Bash' && rule.ruleContent) {
-    return rule.ruleContent.replace(/:\*$/, ''); // "git commit:*" → "git commit"
-  }
-  return rule.toolName;
+// The command prefixes (or tool name for non-Bash) behind a set of remember rules.
+function ruleNames(rules: PermissionRule[]): string[] {
+  return rules.map((r) =>
+    r.toolName === 'Bash' && r.ruleContent ? r.ruleContent.replace(/:\*$/, '') : r.toolName,
+  );
+}
+
+// The human-readable scope shown on the "remember" button, capped so a long compound
+// line stays readable (the full list rides along in the button's title).
+function rememberLabel(rules: PermissionRule[]): string {
+  const names = ruleNames(rules);
+  return names.length <= 4 ? names.join(', ') : `${names.slice(0, 4).join(', ')} +${names.length - 4}`;
 }
 
 type OnDecide = (
@@ -57,7 +122,7 @@ type OnDecide = (
   behavior: 'allow' | 'deny',
   answers?: Record<string, string[]>,
   message?: string,
-  rememberRule?: PermissionRule,
+  rememberRules?: PermissionRule[],
 ) => void;
 
 // The modifier hotkey accepts metaKey || ctrlKey on every platform; only the hint label
@@ -110,13 +175,14 @@ export function ApprovalPanel({
 }): JSX.Element {
   const isQuestion = approval.toolName === 'AskUserQuestion';
   // "Allow + remember same kind" for the rest of the session (claude's engine matches
-  // future calls). Null for questions/plans and Bash commands with no clean prefix.
-  const rule = isQuestion ? null : rememberRuleFor(approval);
+  // future calls). Empty for questions/plans and Bash commands with no clean prefix; a
+  // compound Bash line yields one rule per distinct sub-command.
+  const rules = isQuestion ? [] : rememberRulesFor(approval);
   // Plain card: Enter approves; ⌘/Ctrl + Enter approves-and-remembers (only when that
   // option exists). Questions submit via QuestionForm's own ⌘/Ctrl + Enter hook.
   useApproveHotkey(active && !isQuestion, () => onDecide(approval.id, 'allow'), { requireMod: false });
-  useApproveHotkey(active && !isQuestion && !!rule, () => {
-    if (rule) onDecide(approval.id, 'allow', undefined, undefined, rule);
+  useApproveHotkey(active && !isQuestion && rules.length > 0, () => {
+    if (rules.length) onDecide(approval.id, 'allow', undefined, undefined, rules);
   });
   if (isQuestion) {
     return (
@@ -143,13 +209,13 @@ export function ApprovalPanel({
           {isPlan(approval) ? 'Approve & run' : 'Approve'}
           {active && <span className="approval-btn-kbd">{ENTER_HINT}</span>}
         </button>
-        {rule && (
+        {rules.length > 0 && (
           <button
             className="approval-btn approve-always"
-            title="Auto-approve calls like this for the rest of this session"
-            onClick={() => onDecide(approval.id, 'allow', undefined, undefined, rule)}
+            title={`Auto-approve calls like this for the rest of this session: ${ruleNames(rules).join(', ')}`}
+            onClick={() => onDecide(approval.id, 'allow', undefined, undefined, rules)}
           >
-            Approve, and auto-allow future <code className="approval-rule">{rememberLabel(rule)}</code>
+            Approve, and auto-allow future <code className="approval-rule">{rememberLabel(rules)}</code>
             {active && <span className="approval-btn-kbd">{SHORTCUT_HINT}</span>}
           </button>
         )}

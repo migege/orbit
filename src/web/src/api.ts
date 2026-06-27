@@ -198,18 +198,18 @@ export interface PermissionRule {
 /** Allow or deny a pending tool-permission approval; the runner's long-poll
  *  delivers the decision back to claude's --permission-prompt-tool. For an
  *  AskUserQuestion, `answers` (question text → picked labels) rides along an allow.
- *  `rememberRule` (on an allow) auto-allows the same kind of call for the session. */
+ *  `rememberRules` (on an allow) auto-allows the same kinds of call for the session. */
 export const decideApproval = (
   sessionId: string,
   approvalId: string,
   behavior: 'allow' | 'deny',
   message?: string,
   answers?: Record<string, string[]>,
-  rememberRule?: PermissionRule,
+  rememberRules?: PermissionRule[],
 ) =>
   api<ApprovalInfo>(`/sessions/${sessionId}/approvals/${approvalId}/decision`, {
     method: 'POST',
-    body: { behavior, message, answers, rememberRule },
+    body: { behavior, message, answers, rememberRules },
   });
 
 /** Change a live session's model, permission mode and/or effort between turns. The

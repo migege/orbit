@@ -284,9 +284,13 @@ func (s *mcpServer) permissionPrompt(args map[string]interface{}) map[string]int
 			if getString(args, "tool_name") == "AskUserQuestion" {
 				return toolResult(allowJSON(askQuestionInput(args["input"], dec.Answers), nil), false)
 			}
-			// "Allow + remember same kind": add a session-scoped permission rule so
+			// "Allow + remember same kind": add session-scoped permission rules so
 			// claude's own engine auto-allows future matching calls without re-prompting.
-			return toolResult(allowJSON(args["input"], rememberPermissions(dec.RememberRule)), false)
+			rules := dec.RememberRules
+			if len(rules) == 0 && dec.RememberRule != nil {
+				rules = []PermissionRule{*dec.RememberRule}
+			}
+			return toolResult(allowJSON(args["input"], rememberPermissions(rules)), false)
 		case "DENIED":
 			msg := dec.Message
 			if msg == "" {
@@ -318,20 +322,27 @@ func askQuestionInput(input interface{}, answers map[string][]string) map[string
 	return out
 }
 
-// rememberPermissions turns a "remember same kind" rule into claude's updatedPermissions
-// payload: add the rule for this session only (claude's engine matches future calls).
-// Returns nil when there's no rule, so allowJSON omits the field (the common case).
-func rememberPermissions(rule *PermissionRule) []interface{} {
-	if rule == nil || rule.ToolName == "" {
-		return nil
+// rememberPermissions turns "remember same kind" rules into claude's updatedPermissions
+// payload: add the rules for this session only (claude's engine matches future calls).
+// Returns nil when there are none, so allowJSON omits the field (the common case).
+func rememberPermissions(rules []PermissionRule) []interface{} {
+	var rs []interface{}
+	for _, rule := range rules {
+		if rule.ToolName == "" {
+			continue
+		}
+		r := map[string]interface{}{"toolName": rule.ToolName}
+		if rule.RuleContent != "" {
+			r["ruleContent"] = rule.RuleContent
+		}
+		rs = append(rs, r)
 	}
-	r := map[string]interface{}{"toolName": rule.ToolName}
-	if rule.RuleContent != "" {
-		r["ruleContent"] = rule.RuleContent
+	if len(rs) == 0 {
+		return nil
 	}
 	return []interface{}{map[string]interface{}{
 		"type":        "addRules",
-		"rules":       []interface{}{r},
+		"rules":       rs,
 		"behavior":    "allow",
 		"destination": "session",
 	}}
