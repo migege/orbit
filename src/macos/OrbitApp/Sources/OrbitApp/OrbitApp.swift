@@ -11,6 +11,7 @@ struct OrbitApp: App {
         WindowGroup {
             RootView()
                 .environment(model)
+                .environmentObject(updater)
                 .frame(minWidth: 820, minHeight: 520)
                 .onOpenURL { url in
                     if let route = DeepLink.parse(url) { model.route(to: route) }
@@ -49,6 +50,15 @@ struct OrbitApp: App {
                     .keyboardShortcut(KeyEquivalent(Character("\(pair.offset + 1)")), modifiers: .command)
                 }
             }
+        }
+
+        // Standard macOS Settings window — adds "Settings…" (⌘,) to the app menu. Reuses the same
+        // SettingsView as the in-app Settings section so both stay in sync.
+        Settings {
+            SettingsView()
+                .environment(model)
+                .environmentObject(updater)
+                .frame(width: 480, height: 560)
         }
 
         // Always-present menu-bar item: glanceable summary + quick jump into "needs you".

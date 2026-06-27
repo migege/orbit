@@ -10,6 +10,7 @@ import OrbitKit
 /// and change-password. Lives in the middle column; the detail stays a neutral hint.
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
+    @EnvironmentObject private var updater: UpdaterModel
 
     @State private var theme = "system"
     @State private var defaultModel = AgentDefaults.defaultModelID
@@ -64,6 +65,12 @@ struct SettingsView: View {
                 if let m = pwMessage {
                     Text(m).font(.caption).foregroundStyle(.secondary)
                 }
+            }
+
+            Section("Updates") {
+                Toggle("Receive beta updates", isOn: $updater.betaChannel)
+                Text("Beta releases ship earlier and may be less stable.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)

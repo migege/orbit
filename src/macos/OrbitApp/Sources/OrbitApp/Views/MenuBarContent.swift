@@ -38,8 +38,6 @@ struct MenuBarContent: View {
             Divider()
             Button("Check for Updates…") { updater.checkForUpdates() }
                 .disabled(!updater.canCheckForUpdates)
-            Toggle("Receive beta updates", isOn: $updater.betaChannel)
-                .toggleStyle(.checkbox)
             Button("Quit Orbit") { NSApp.terminate(nil) }
         }
         .padding(12)
