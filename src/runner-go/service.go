@@ -136,18 +136,26 @@ WantedBy=multi-user.target
 		if err := run("systemctl", "daemon-reload"); err != nil {
 			return errors.New("systemctl daemon-reload failed — is this a systemd host?")
 		}
-		if err := run("systemctl", "enable", "--now", svc); err != nil {
+		if err := run("systemctl", "enable", svc); err != nil {
 			return errors.New("systemctl enable failed — is this a systemd host?")
 		}
 		// Dropping privileges to another user: hand them the runner's config + run
-		// scratch so the service (now that user) can read/write them.
+		// scratch so the service (now that user) can read/write them. Do this before
+		// the (re)start below so the service comes up able to read the new config.
 		if u.Uid != "0" {
 			_ = run("chown", "-R", u.Username+":"+grp, orbitHome)
+		}
+		// restart, not just start: a re-register rewrites config.json with a freshly
+		// issued credential, but `enable --now`/`start` is a no-op on an already-running
+		// unit — the live runner would keep its stale in-memory token and 401 until
+		// restarted. restart starts a stopped unit and replaces a running one.
+		if err := run("systemctl", "restart", svc); err != nil {
+			return errors.New("systemctl restart failed — is this a systemd host?")
 		}
 	} else {
 		sudo, err := exec.LookPath("sudo")
 		if err != nil || !interactive() {
-			return fmt.Errorf("installing the systemd service needs root: write %s then run `systemctl enable --now %s`", unitPath, svc)
+			return fmt.Errorf("installing the systemd service needs root: write %s then run `systemctl enable %s && systemctl restart %s`", unitPath, svc, svc)
 		}
 		tmp, err := os.CreateTemp("", svc+"-*.service")
 		if err != nil {
@@ -167,8 +175,13 @@ WantedBy=multi-user.target
 		if err := run(sudo, "systemctl", "daemon-reload"); err != nil {
 			return errors.New("systemctl daemon-reload failed")
 		}
-		if err := run(sudo, "systemctl", "enable", "--now", svc); err != nil {
+		if err := run(sudo, "systemctl", "enable", svc); err != nil {
 			return errors.New("systemctl enable failed")
+		}
+		// restart (not just start) so a re-register replaces a still-running runner's
+		// stale credential — see the root-path note above.
+		if err := run(sudo, "systemctl", "restart", svc); err != nil {
+			return errors.New("systemctl restart failed")
 		}
 	}
 	fmt.Printf("\n✓ %s service installed and started as user %q.\n"+
