@@ -9,10 +9,16 @@
 # This does NOT produce a distributable .app/.dmg — that needs an Xcode app target + Developer
 # ID signing/notarization (see src/macos/OrbitApp/README.md). This workflow is the build/test
 # gate those release steps would build on.
+#
+# When each runs (macOS runners bill at 10×, so the expensive job is PR-only):
+#   • branch push  → orbitkit-linux only (cheap Linux test on every commit)
+#   • pull request → + macos (the 10×-billed macOS compile/test)
+#   • tag v*       → neither; macos-release.yml does a full signed build for tags
 name: macOS client
 
 on:
   push:
+    branches: ["**"] # branches only — tags are handled by macos-release.yml
     paths:
       - "src/macos/**"
       - ".github/workflows/macos-client.yml"
@@ -41,6 +47,8 @@ jobs:
 
   macos:
     name: macOS (build + test)
+    # macOS runners bill at 10× — only burn them on PRs, not on every branch push.
+    if: github.event_name == 'pull_request'
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
