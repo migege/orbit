@@ -61,17 +61,18 @@ struct ComposerView: View {
             // One rounded box wrapping the + menu, the growing field, and send — mirrors the web
             // composer's single bordered `.composer-box` instead of three separate controls. Shell
             // mode is reached by a `!` prefix (the + menu's Shell item inserts it), not a toggle.
-            HStack(alignment: .bottom, spacing: 6) {
+            HStack(alignment: .center, spacing: 6) {
                 addMenu
 
                 TextField(placeholder, text: $console.composerText, axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(.system(size: 14))
                     .lineLimit(1...6)
-                    // Give the empty box real height with the text pinned top-left, so it reads as a
-                    // writing surface (placeholder top, + and send sitting at the bottom corners via
-                    // the HStack's .bottom alignment) instead of a thin single-line search pill.
-                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .topLeading)
+                    // Fill the available width; vertical centering comes from the HStack's .center
+                    // alignment, so the placeholder, the + and the send button all sit on one
+                    // centerline. The box hugs the content height (no forced minHeight that would
+                    // strand the text at the top).
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .focused($inputFocused)
                     .onSubmit { onReturn() }
                     .onKeyPress(.upArrow) { moveSlash(-1) }
@@ -123,9 +124,7 @@ struct ComposerView: View {
             )
             .overlay {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .strokeBorder(inputFocused ? Color.accentColor.opacity(0.55)
-                                              : Color.primary.opacity(0.10),
-                                  lineWidth: 1)
+                    .strokeBorder(Color.primary.opacity(inputFocused ? 0.22 : 0.10), lineWidth: 1)
             }
             .animation(.easeOut(duration: 0.15), value: inputFocused)
 
