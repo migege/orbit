@@ -48,7 +48,7 @@ struct RunnerControlPane: View {
                         Text(c.config?.serverUrl ?? "").font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()
-                    Text(LocalRunnerStatus.line(hasConfig: c.hasLocalRunner, status: c.status))
+                    Text(LocalRunnerStatus.line(hasConfig: c.hasLocalRunner, installed: c.serviceInstalled, status: c.status))
                         .font(.callout).foregroundStyle(.secondary)
                 }
 
@@ -62,15 +62,30 @@ struct RunnerControlPane: View {
                     .font(.caption)
                 }
 
-                HStack {
-                    Button { Task { await c.start() } } label: { Label("Start", systemImage: "play.fill") }
-                        .disabled(c.status.running)
-                    Button { Task { await c.stop() } } label: { Label("Stop", systemImage: "stop.fill") }
-                        .disabled(!c.status.running)
-                    Button { Task { await c.restart() } } label: { Label("Restart", systemImage: "arrow.clockwise") }
-                    Spacer()
-                    Button { Task { await c.refresh() } } label: { Image(systemName: "arrow.clockwise.circle") }
-                        .help("Refresh")
+                if c.serviceInstalled {
+                    HStack {
+                        Button { Task { await c.start() } } label: { Label("Start", systemImage: "play.fill") }
+                            .disabled(c.status.running)
+                        Button { Task { await c.stop() } } label: { Label("Stop", systemImage: "stop.fill") }
+                            .disabled(!c.status.running)
+                        Button { Task { await c.restart() } } label: { Label("Restart", systemImage: "arrow.clockwise") }
+                        Spacer()
+                        Button { Task { await c.refresh() } } label: { Image(systemName: "arrow.clockwise.circle") }
+                            .help("Refresh")
+                    }
+                } else {
+                    Text("This Mac is enrolled, but the background runner service isn't installed yet. "
+                         + "Install it to start running agents here — no Terminal needed.")
+                        .font(.callout).foregroundStyle(.secondary)
+                    HStack {
+                        Button { Task { await c.installService() } } label: {
+                            Label("Install service", systemImage: "arrow.down.circle.fill")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        Spacer()
+                        Button { Task { await c.refresh() } } label: { Image(systemName: "arrow.clockwise.circle") }
+                            .help("Refresh")
+                    }
                 }
 
                 Divider()
@@ -96,8 +111,8 @@ struct RunnerControlPane: View {
         VStack(spacing: 14) {
             Image(systemName: "desktopcomputer").font(.system(size: 40)).foregroundStyle(.secondary)
             Text("No runner on this Mac").font(.headline)
-            Text("Enroll this Mac to run agents here. Enrollment fetches a credential and writes "
-                 + "~/.orbit/config.json; install the runner service with orbit register / install.sh to start it.")
+            Text("Enroll this Mac to run agents here. Enrollment fetches a credential and installs "
+                 + "the background runner service automatically — no Terminal needed.")
                 .font(.callout).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center).frame(maxWidth: 400)
             TextField("Runner name", text: $enrollName).textFieldStyle(.roundedBorder).frame(width: 240)
