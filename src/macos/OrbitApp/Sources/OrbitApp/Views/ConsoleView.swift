@@ -65,6 +65,12 @@ struct TranscriptView: View {
         .listStyle(.plain)
         .scrollContentBackground(.hidden)   // show the window background, not the List's own
         .defaultScrollAnchor(.bottom)
+        // `defaultScrollAnchor` only anchors the bottom on first appearance. This view is reused
+        // across session switches (only `console` swaps), so without a fresh identity it keeps the
+        // previous session's scroll offset. Keying the List on `sessionID` makes each switch a fresh
+        // appearance → it opens at the latest message. The data layer stays warm (the registry isn't
+        // rebuilt), so this only resets scrolling, not the transcript.
+        .id(console.sessionID)
         .safeAreaInset(edge: .top, spacing: 0) { statusBar }
     }
 
