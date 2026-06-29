@@ -286,11 +286,7 @@ func (s *mcpServer) permissionPrompt(args map[string]interface{}) map[string]int
 			}
 			// "Allow + remember same kind": add session-scoped permission rules so
 			// claude's own engine auto-allows future matching calls without re-prompting.
-			rules := dec.RememberRules
-			if len(rules) == 0 && dec.RememberRule != nil {
-				rules = []PermissionRule{*dec.RememberRule}
-			}
-			return toolResult(allowJSON(args["input"], rememberPermissions(rules)), false)
+			return toolResult(allowJSON(args["input"], rememberPermissions(dec.resolveRememberRules())), false)
 		case "DENIED":
 			msg := dec.Message
 			if msg == "" {

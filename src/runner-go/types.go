@@ -390,6 +390,18 @@ type ApprovalDecisionResponse struct {
 	RememberRule *PermissionRule `json:"rememberRule,omitempty"`
 }
 
+// resolveRememberRules prefers the array form, falling back to the deprecated singular
+// RememberRule so a control plane that hasn't adopted the array yet still works.
+func (d ApprovalDecisionResponse) resolveRememberRules() []PermissionRule {
+	if len(d.RememberRules) > 0 {
+		return d.RememberRules
+	}
+	if d.RememberRule != nil {
+		return []PermissionRule{*d.RememberRule}
+	}
+	return nil
+}
+
 // Run-event type strings — mirror RunEventType in @orbit/shared.
 const (
 	evSystem        = "system"

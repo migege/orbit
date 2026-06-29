@@ -26,7 +26,6 @@ import {
   DeviceStartRequest,
   DeviceStartResponse,
   PermissionMode,
-  PermissionRule,
   QuestionAnswers,
   ReclaimResponse,
   ReclaimSession,
@@ -50,6 +49,7 @@ import { generateToken, generateUserCode, sha256 } from '../common/crypto.util';
 import { PrismaService } from '../prisma/prisma.service';
 import { QueueService } from '../queue/queue.service';
 import { RealtimeService } from '../realtime/realtime.service';
+import { normalizeStoredRememberRules } from '../sessions/remember-rules';
 import { postRunFailureComment, reclaimStalledTask } from '../tasks/reclaim-stalled-task';
 import { CurrentRunner } from './current-runner.decorator';
 import { RunnerAuthGuard } from './runner-auth.guard';
@@ -574,19 +574,13 @@ export class RunnerApiController {
       const a = await this.prisma.approval.findFirst({ where: { id: approvalId, sessionId } });
       if (!a) return { id: approvalId, status: 'DENIED', behavior: 'deny', message: 'approval not found' };
       if (a.status !== 'PENDING') {
-        // The schemaless column holds an array (current) or a lone object (legacy rows);
-        // normalize, then send both forms so runners that predate the array still get the
-        // primary rule via `rememberRule` until they restart and self-update.
-        const stored = a.rememberRule as PermissionRule | PermissionRule[] | null;
-        const rules = Array.isArray(stored) ? stored : stored ? [stored] : [];
         return {
           id: a.id,
           status: a.status as ApprovalStatus,
           behavior: a.status === 'ALLOWED' ? 'allow' : 'deny',
           message: a.message ?? undefined,
           answers: (a.answers as QuestionAnswers | null) ?? undefined,
-          rememberRules: rules.length ? rules : undefined,
-          rememberRule: rules[0],
+          ...normalizeStoredRememberRules(a.rememberRule),
         };
       }
       if (Date.now() >= deadline) return { id: a.id, status: 'PENDING' };
