@@ -28,14 +28,6 @@ struct MainView: View {
                 }
                 .help("Manage the runner on this Mac")
             }
-            ToolbarItem(placement: .primaryAction) {
-                Menu {
-                    if let email = model.user?.email { Text(email) }
-                    Button("Sign out", role: .destructive) { model.logout() }
-                } label: {
-                    Label(model.user?.name ?? model.user?.email ?? "Account", systemImage: "person.crop.circle")
-                }
-            }
         }
         .task { model.startPolling() }
         // Drive the debounced console mount off the list selection (covers arrow-key navigation,
@@ -110,6 +102,13 @@ struct SectionSidebar: View {
             }
         }
         .navigationTitle("Orbit")
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) {
+                Divider()
+                AccountFooter()
+            }
+            .background(.bar)
+        }
         .task { await model.agents?.load() }
     }
 
@@ -131,6 +130,55 @@ struct SectionSidebar: View {
         } label: {
             Label(AppSection.agents.title, systemImage: AppSection.agents.systemImage)
         }
+    }
+}
+
+/// Pinned to the bottom of the sidebar, mirroring the web's `tp-user` footer: a monogram avatar
+/// plus the signed-in user's name. Clicking opens the account menu (email + Sign out) that used to
+/// live in the window toolbar.
+struct AccountFooter: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let display = model.user?.name ?? model.user?.email
+        Menu {
+            if let email = model.user?.email { Text(email) }
+            Button("Sign out", role: .destructive) { model.logout() }
+        } label: {
+            HStack(spacing: 8) {
+                AvatarMonogram(name: display)
+                Text(display ?? "Account")
+                    .lineLimit(1)
+                    .foregroundStyle(.primary)
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+    }
+}
+
+/// Circular initials avatar — the first letter of the name/email, like the web's `Avatar`.
+struct AvatarMonogram: View {
+    let name: String?
+
+    private var initial: String {
+        let trimmed = (name ?? "").trimmingCharacters(in: .whitespaces)
+        return trimmed.isEmpty ? "?" : String(trimmed.first!).uppercased()
+    }
+
+    var body: some View {
+        Circle()
+            .fill(Color.accentColor)
+            .frame(width: 28, height: 28)
+            .overlay(
+                Text(initial)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white)
+            )
     }
 }
 
