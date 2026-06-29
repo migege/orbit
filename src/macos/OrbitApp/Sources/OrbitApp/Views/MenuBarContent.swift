@@ -35,11 +35,20 @@ struct MenuBarContent: View {
                     Divider()
                     RunnerTraySection(control: control)
                 }
-                Divider()
-                Button("Open Orbit") { activate() }
             }
             Divider()
-            Button("Quit Orbit") { NSApp.terminate(nil) }
+            // Native menu-item-style Quit row (à la OrbStack): full-width plain row with the ⌘Q
+            // shortcut hint trailing. ⌘Q itself is already wired by SwiftUI's standard app menu.
+            Button { NSApp.terminate(nil) } label: {
+                HStack(spacing: 8) {
+                    Text("Quit Orbit")
+                    Spacer(minLength: 12)
+                    Text("⌘Q").foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
         }
         .padding(12)
         .frame(width: 300)
