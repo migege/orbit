@@ -80,7 +80,7 @@ struct OrbitApp: App {
 
         // Always-present menu-bar item: glanceable summary + quick jump into "needs you".
         MenuBarExtra {
-            MenuBarContent().environment(model).environmentObject(updater)
+            MenuBarContent().environment(model)
         } label: {
             if let badge = model.menuSummary.badge {
                 Label(badge, systemImage: "circle.hexagongrid.fill")
