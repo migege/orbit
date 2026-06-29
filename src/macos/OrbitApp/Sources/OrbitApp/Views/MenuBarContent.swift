@@ -13,6 +13,7 @@ struct MenuBarContent: View {
             if !model.signedIn {
                 Text("Not signed in").foregroundStyle(.secondary)
                 Button("Open Orbit") { activate() }
+                    .buttonStyle(MenuRowButtonStyle())
             } else {
                 Text(headline).font(.headline)
                 Divider()
@@ -23,12 +24,12 @@ struct MenuBarContent: View {
                         Button { open(item.route) } label: {
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(item.title).lineLimit(1)
-                                Text(item.subtitle).font(.caption).foregroundStyle(.secondary)
+                                // `.opacity` (not `.secondary`) so the subtitle tracks the row's
+                                // foreground and dims to white-on-accent when the row highlights.
+                                Text(item.subtitle).font(.caption).opacity(0.6)
                             }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .contentShape(Rectangle())
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(MenuRowButtonStyle())
                     }
                 }
                 if let control = model.runnerControl {
@@ -37,18 +38,18 @@ struct MenuBarContent: View {
                 }
             }
             Divider()
-            // Native menu-item-style Quit row (à la OrbStack): full-width plain row with the ⌘Q
-            // shortcut hint trailing. ⌘Q itself is already wired by SwiftUI's standard app menu.
+            // Native menu-item-style Quit row (à la OrbStack): full-width row with the ⌘Q hint
+            // trailing and an accent hover highlight. ⌘Q itself is already wired by SwiftUI's
+            // standard app menu. The ⌘Q opacity (not `.secondary`) lets it track the row's
+            // foreground so it turns white-dim when the row highlights.
             Button { NSApp.terminate(nil) } label: {
                 HStack(spacing: 8) {
                     Text("Quit Orbit")
                     Spacer(minLength: 12)
-                    Text("⌘Q").foregroundStyle(.secondary)
+                    Text("⌘Q").opacity(0.55)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(MenuRowButtonStyle())
         }
         .padding(12)
         .frame(width: 300)
@@ -67,6 +68,36 @@ struct MenuBarContent: View {
 
     private func activate() {
         NSApp.activate(ignoringOtherApps: true)
+    }
+}
+
+/// A native-menu-style row: transparent at rest, accent highlight + white text on hover, like a
+/// real `NSMenuItem`. The `.window`-style `MenuBarExtra` (which we need for the runner controls)
+/// doesn't get AppKit's free menu hover highlight, so `.buttonStyle(.plain)` rows feel dead —
+/// this restores it. Nested `Row` carries the hover `@State`, since a ButtonStyle struct can't.
+struct MenuRowButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Row(configuration: configuration)
+    }
+
+    private struct Row: View {
+        let configuration: Configuration
+        @State private var hovering = false
+
+        var body: some View {
+            configuration.label
+                .padding(.horizontal, 6)
+                .padding(.vertical, 4)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .foregroundStyle(hovering ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+                .background(
+                    RoundedRectangle(cornerRadius: 5)
+                        .fill(hovering ? Color.accentColor : .clear)
+                )
+                .contentShape(Rectangle())
+                .opacity(configuration.isPressed ? 0.7 : 1)
+                .onHover { hovering = $0 }
+        }
     }
 }
 
