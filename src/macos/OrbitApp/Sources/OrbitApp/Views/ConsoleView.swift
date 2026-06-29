@@ -47,6 +47,11 @@ struct ConsoleView: View {
 struct TranscriptView: View {
     let console: ConsoleModel
     private let bottomID = "transcript-bottom"
+    // Mirrors web's `atBottom` (AgentView.tsx): flips false once the user scrolls up off the live
+    // tail. Drives the floating jump-to-latest button AND gates the auto-follow below, so reading
+    // history isn't yanked back down by streaming updates. Maintained by `BottomTracker` (macOS 15+);
+    // on the macOS 14 floor it stays true — the view keeps the unconditional follow and hides the button.
+    @State private var atBottom = true
 
     var body: some View {
         // `List` is NSTableView-backed on macOS → true row recycling, so a long transcript stays
@@ -79,11 +84,44 @@ struct TranscriptView: View {
             .listStyle(.plain)
             .scrollContentBackground(.hidden)   // show the window background, not the List's own
             .defaultScrollAnchor(.bottom)
-            .onChange(of: console.state.items) { proxy.scrollTo(bottomID, anchor: .bottom) }
-            .onChange(of: console.sessionID) { proxy.scrollTo(bottomID, anchor: .bottom) }
+            .modifier(BottomTracker(atBottom: $atBottom))
+            // Follow new/streaming content only while pinned at the bottom (web's smart auto-scroll):
+            // if the user has scrolled up to read, don't drag them back. A session switch always
+            // re-pins. One-shot, non-animated scrollTo — never the per-frame animated scroll that froze
+            // the old build.
+            .onChange(of: console.state.items) { if atBottom { proxy.scrollTo(bottomID, anchor: .bottom) } }
+            .onChange(of: console.sessionID) { atBottom = true; proxy.scrollTo(bottomID, anchor: .bottom) }
             .onAppear { proxy.scrollTo(bottomID, anchor: .bottom) }
+            // Floating jump-to-latest button, shown only while scrolled up (web's `.scroll-to-bottom`).
+            .overlay(alignment: .bottom) {
+                if !atBottom {
+                    scrollToBottomButton(proxy: proxy)
+                        .transition(.opacity.combined(with: .move(edge: .bottom)))
+                }
+            }
+            .animation(.easeOut(duration: 0.15), value: atBottom)
         }
         .safeAreaInset(edge: .top, spacing: 0) { statusBar }
+    }
+
+    // Circular "scroll to latest" control (web parity). One user-initiated scroll — not the per-frame
+    // animated scroll that previously froze the transcript — so animating this one is safe.
+    private func scrollToBottomButton(proxy: ScrollViewProxy) -> some View {
+        Button {
+            withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(bottomID, anchor: .bottom) }
+            atBottom = true
+        } label: {
+            Image(systemName: "arrow.down")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.primary)
+                .frame(width: 32, height: 32)
+                .background(.regularMaterial, in: Circle())
+                .overlay { Circle().strokeBorder(.primary.opacity(0.12)) }
+                .shadow(color: .black.opacity(0.18), radius: 4, y: 1)
+        }
+        .buttonStyle(.plain)
+        .padding(.bottom, 12)
+        .help("Scroll to latest")
     }
 
     private var statusBar: some View {
@@ -103,6 +141,35 @@ struct TranscriptView: View {
         }
         .padding(.horizontal, 12).padding(.vertical, 6)
         .background(.bar)
+    }
+}
+
+/// Tracks whether the transcript is pinned to the bottom, to drive the jump-to-latest button and
+/// the auto-follow gate. `onScrollGeometryChange` (macOS 15+) is a read-only geometry observer —
+/// unlike `scrollPosition(id:)` + `scrollTargetLayout()` it registers no per-row scroll targets, so
+/// it won't re-break `List` virtualization (see the transcript-freeze history). On the macOS 14 floor
+/// it's a no-op, leaving `atBottom` true. Mirrors web's `measure()`: pin while near the bottom, and
+/// un-pin only on an *upward* scroll — a downward content-growth delta must never strand the view.
+private struct BottomTracker: ViewModifier {
+    @Binding var atBottom: Bool
+    @State private var lastOffset: CGFloat = 0
+    // Within this many points of the bottom still counts as pinned (web uses 80px).
+    private let nearBottom: CGFloat = 80
+
+    private struct Metrics: Equatable { let distance: CGFloat; let offset: CGFloat }
+
+    func body(content: Content) -> some View {
+        if #available(macOS 15, *) {
+            content.onScrollGeometryChange(for: Metrics.self) { geo in
+                Metrics(distance: geo.contentSize.height - geo.visibleRect.maxY, offset: geo.contentOffset.y)
+            } action: { _, m in
+                if m.distance <= nearBottom { atBottom = true }
+                else if m.offset < lastOffset - 1 { atBottom = false }   // genuine upward scroll
+                lastOffset = m.offset
+            }
+        } else {
+            content
+        }
     }
 }
 
