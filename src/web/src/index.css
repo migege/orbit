@@ -3436,14 +3436,31 @@ body {
   font-size: 12.5px;
 }
 .md table {
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
   margin: 8px 0;
   font-size: 13px;
 }
 .md th,
 .md td {
-  border: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
   padding: 4px 8px;
+}
+.md th:last-child,
+.md td:last-child {
+  border-right: none;
+}
+.md tr:last-child td {
+  border-bottom: none;
+}
+.md th {
+  background: var(--fill-muted);
+  font-weight: 600;
+  text-align: left;
 }
 .md blockquote {
   margin: 8px 0;

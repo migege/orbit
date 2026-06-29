@@ -26,13 +26,64 @@ public enum TranscriptItem: Identifiable, Equatable, Sendable, Codable {
     }
 }
 
+/// One attachment ref carried on a user turn (`{id, mime, name}`). The durable `user` event echoes
+/// these so the bubble can render image thumbnails / file chips after a reload — mirroring the web,
+/// which reads `ev.payload.attachments`. The bytes are fetched on demand via GET /attachments/:id.
+public struct TurnAttachment: Equatable, Sendable, Codable, Identifiable {
+    public let id: String
+    public let mime: String?
+    public let name: String?
+    public init(id: String, mime: String? = nil, name: String? = nil) {
+        self.id = id
+        self.mime = mime
+        self.name = name
+    }
+    /// Inline-renderable image. An unknown mime (optimistic bubble, before the durable event lands)
+    /// is treated as an image — the common case (the composer's primary attach path) — and the
+    /// loader falls back to a file chip if the bytes don't decode.
+    public var isImage: Bool { mime.map { $0.hasPrefix("image/") } ?? true }
+}
+
 public struct UserBubble: Equatable, Sendable, Codable {
     public let id: String
     public var text: String
-    public var attachmentIds: [String]
+    /// Image/file attachments sent with this turn (web parity: rendered above the text).
+    public var attachments: [TurnAttachment]
+    /// Wall-clock of the source `user` event (ISO-8601), shown as a relative time under the bubble.
+    /// Nil on the optimistic bubble until the durable event reconciles it.
+    public var ts: String?
     public var clientTurnId: String?
+    /// Server-assigned turn id, learned from the POST /turns (or /resume) response. The durable
+    /// `user` event echoes this on `ev.turnId` — not `clientTurnId` — so it's the key that
+    /// reconciles the optimistic bubble (web parity). Nil until that response lands.
+    public var turnId: String?
     /// Optimistically shown before the server's `user` event confirms it.
     public var pending: Bool
+
+    public init(id: String, text: String, attachments: [TurnAttachment] = [], ts: String? = nil,
+                clientTurnId: String? = nil, turnId: String? = nil, pending: Bool) {
+        self.id = id
+        self.text = text
+        self.attachments = attachments
+        self.ts = ts
+        self.clientTurnId = clientTurnId
+        self.turnId = turnId
+        self.pending = pending
+    }
+
+    // Tolerant decode so transcript snapshots written before `attachments`/`ts` existed still
+    // rehydrate (those keys just default) instead of discarding the whole cached session.
+    enum CodingKeys: String, CodingKey { case id, text, attachments, ts, clientTurnId, turnId, pending }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        text = try c.decode(String.self, forKey: .text)
+        attachments = (try? c.decodeIfPresent([TurnAttachment].self, forKey: .attachments)) ?? []
+        ts = try? c.decodeIfPresent(String.self, forKey: .ts)
+        clientTurnId = try? c.decodeIfPresent(String.self, forKey: .clientTurnId)
+        turnId = try? c.decodeIfPresent(String.self, forKey: .turnId)
+        pending = (try? c.decodeIfPresent(Bool.self, forKey: .pending)) ?? false
+    }
 }
 
 public struct AssistantBubble: Equatable, Sendable, Codable {

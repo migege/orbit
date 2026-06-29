@@ -4,8 +4,9 @@ import OrbitKit
 // Batch D + Agents-in-sidebar refinement: the agent *list* (grouped by runner) now lives in the
 // sidebar source list (see `SectionSidebar`), folding away the old middle column. What remains
 // here is the selected agent's detail, split across the two right panes to mirror Active:
-//   • content column → the agent's sessions (Active/Completed/System); a toolbar gear opens the
-//                       agent's Settings form in a sheet
+//   • content column → the agent's sessions as a plain list; the window toolbar hosts the
+//                       Active/Completed/System scope switcher (principal), a New-session button
+//                       (leading), and a gear that opens the agent's Settings sheet (trailing)
 //   • detail column  → the live console for the session picked in the content column
 // Grouping + effective-model logic come from the verified OrbitKit `AgentListLogic`; pickers reuse
 // `AgentDefaults`. SwiftUI here is parse-checked only — verify on a Mac.
@@ -60,36 +61,19 @@ struct AgentPanes: View {
     @State private var showSettings = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            // "New session" header (mirrors web's session-new row): enters the draft compose state
-            // shown in the detail pane. Selecting an existing session clears it (onChange below).
-            Button {
-                app.composingAgentSession = true
-                selectedSessionID = nil
-            } label: {
-                Label("New session", systemImage: "square.and.pencil")
-                    .frame(maxWidth: .infinity, alignment: .leading)
+        // Option B: the column is just the session list. The scope switcher and New-session action
+        // live in the window toolbar (below) — like Finder/Mail hosting view controls in the toolbar
+        // rather than stacking chrome bands above the list.
+        List(selection: $selectedSessionID) {
+            ForEach(agents.agentSessions) { s in
+                AgentSessionRow(session: s).tag(s.id)
             }
-            .buttonStyle(.plain)
-            .padding(.horizontal, 12).padding(.vertical, 8)
-            .background(app.composingAgentSession ? Color.accentColor.opacity(0.15) : .clear)
-            .contentShape(Rectangle())
-            Divider()
-            Picker("", selection: $view) {
-                ForEach(SessionView.allCases) { Text($0.title).tag($0) }
-            }
-            .pickerStyle(.segmented).labelsHidden().padding(8)
-            List(selection: $selectedSessionID) {
-                ForEach(agents.agentSessions) { s in
-                    AgentSessionRow(session: s).tag(s.id)
-                }
-            }
-            .overlay {
-                if agents.agentSessions.isEmpty {
-                    ContentUnavailableView(
-                        agents.sessionsLoading ? "Loading…" : "No \(view.title.lowercased()) sessions",
-                        systemImage: "bubble.left.and.bubble.right")
-                }
+        }
+        .overlay {
+            if agents.agentSessions.isEmpty {
+                ContentUnavailableView(
+                    agents.sessionsLoading ? "Loading…" : "No \(view.title.lowercased()) sessions",
+                    systemImage: "bubble.left.and.bubble.right")
             }
         }
         // Picking a session leaves the compose state (the console takes over the detail pane).
@@ -109,9 +93,29 @@ struct AgentPanes: View {
                 await agents.loadSessions(agentID: agent.id, view: view)
             }
         }
-        // The edit form moved off a Sessions/Settings segmented switch into this toolbar gear → sheet,
-        // leaving the content column to show only the session list.
         .toolbar {
+            // New session — leading, mirroring Mail's compose: enters the draft compose state shown
+            // in the detail pane (NewSessionView). Clearing the selection makes room for it.
+            ToolbarItem(placement: .navigation) {
+                Button {
+                    app.composingAgentSession = true
+                    selectedSessionID = nil
+                } label: {
+                    Label("New session", systemImage: "square.and.pencil")
+                }
+                .help("Start a new session with \(agent.name)")
+            }
+            // Scope switcher — centered (principal), content-hugging via fixedSize so it renders as a
+            // compact native segmented control instead of the old full-width band above the list.
+            ToolbarItem(placement: .principal) {
+                Picker("View", selection: $view) {
+                    ForEach(SessionView.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+            }
+            // Agent settings — trailing gear → sheet (unchanged).
             ToolbarItem(placement: .primaryAction) {
                 Button { showSettings = true } label: {
                     Label("Agent settings", systemImage: "gearshape")
@@ -304,13 +308,18 @@ struct NewSessionView: View {
 
 struct AgentSessionRow: View {
     let session: Session
+    // Second line: the last-reply / live-state preview (mirrors the web Agent console). Rows here
+    // are always openable (macOS has no Trash tab), so `live: true` — matching web's `openable`.
+    private var line: SessionLine? { SessionLine.make(for: session, live: true) }
+
     var body: some View {
         HStack(spacing: 8) {
             Circle().fill(color).frame(width: 6, height: 6)
             VStack(alignment: .leading, spacing: 2) {
                 Text(session.title ?? "Untitled session").lineLimit(1)
-                Text(session.status.rawValue.replacingOccurrences(of: "_", with: " ").capitalized)
-                    .font(.caption).foregroundStyle(.secondary)
+                if let line {
+                    Text(line.text).font(.caption).foregroundStyle(lineColor(line.tone)).lineLimit(1)
+                }
             }
             Spacer()
             if let n = session.pendingApprovals, n > 0 {
@@ -328,6 +337,13 @@ struct AgentSessionRow: View {
         case .succeeded:     return .green
         case .failed:        return .red
         default:             return .secondary
+        }
+    }
+    private func lineColor(_ tone: SessionLine.Tone) -> Color {
+        switch tone {
+        case .preview, .queued: return .secondary
+        case .running:          return .blue
+        case .approval:         return .orange
         }
     }
 }

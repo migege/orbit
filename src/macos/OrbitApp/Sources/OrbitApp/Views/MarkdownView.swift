@@ -91,12 +91,14 @@ private struct MarkdownBlockView: View {
     }
 }
 
-/// A GFM table rendered as a bordered grid — the desktop analogue of the web `.md table`. The
-/// header row is bold over a faint fill; cells carry inline Markdown, honour per-column alignment,
-/// and wrap to fit the available width.
+/// A GFM table rendered as a rounded, bordered grid — the desktop analogue of the web `.md table`.
+/// The header row is semibold over a gray fill; cells carry inline Markdown, honour per-column
+/// alignment, and size each column to its content so the grid hugs its width instead of filling the
+/// pane. Wide tables overflow rather than wrap.
 private struct MarkdownTableView: View {
     let table: MarkdownTable
     private let border = Color.secondary.opacity(0.3)
+    private let cornerRadius: CGFloat = 6
 
     var body: some View {
         Grid(alignment: .topLeading, horizontalSpacing: 0, verticalSpacing: 0) {
@@ -114,19 +116,20 @@ private struct MarkdownTableView: View {
                 }
             }
         }
-        .overlay(Rectangle().stroke(border, lineWidth: 1))
-        .fixedSize(horizontal: false, vertical: true)
+        .fixedSize(horizontal: true, vertical: true)
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+        .overlay(RoundedRectangle(cornerRadius: cornerRadius).stroke(border, lineWidth: 1))
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func cell(_ text: String, column: Int, header: Bool) -> some View {
         inlineMarkdown(text)
             .font(.system(size: 13))
-            .fontWeight(header ? .bold : .regular)
+            .fontWeight(header ? .semibold : .regular)
             .frame(maxWidth: .infinity, alignment: frameAlignment(column))
             .padding(.vertical, 4)
             .padding(.horizontal, 8)
-            .background(header ? Color.secondary.opacity(0.08) : Color.clear)
+            .background(header ? Color.primary.opacity(0.06) : Color.clear)
             .overlay(Rectangle().stroke(border, lineWidth: 0.5))
     }
 
@@ -180,11 +183,22 @@ private struct CodeBlockView: View {
 /// Inline-only Markdown (bold/italic/code/links/strikethrough), newlines preserved. Used for the
 /// text inside a single block; block structure is handled by `MarkdownBlockView`.
 func inlineMarkdown(_ s: String) -> Text {
-    if let attributed = try? AttributedString(
+    guard var attributed = try? AttributedString(
         markdown: s,
         options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-    ) {
-        return Text(attributed)
+    ) else {
+        return Text(s)
     }
-    return Text(s)
+    // SwiftUI renders the `.code` inline intent as monospace but draws no fill, so inline code
+    // blends into prose. Mirror the web `.md code` chip by tinting those runs. Ranges are captured
+    // before mutating: attribute-only edits leave the text — and thus these indices — stable, and a
+    // single Text keeps wrapping/selection intact. SwiftUI can't round or pad a per-run background,
+    // so this is a flat tint rather than web's rounded, bordered pill.
+    let codeRanges = attributed.runs
+        .filter { $0.inlinePresentationIntent?.contains(.code) == true }
+        .map(\.range)
+    for range in codeRanges {
+        attributed[range].backgroundColor = Color.secondary.opacity(0.2)
+    }
+    return Text(attributed)
 }

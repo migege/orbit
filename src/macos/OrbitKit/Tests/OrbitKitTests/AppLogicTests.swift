@@ -13,9 +13,10 @@ final class AppLogicTests: XCTestCase {
         XCTAssertNil(ServerURL.normalize("ftp://nope.com"))
     }
 
-    private func session(_ id: String, _ status: RunStatus, approvals: Int = 0) -> Session {
+    private func session(_ id: String, _ status: RunStatus, approvals: Int = 0,
+                         source: String? = nil) -> Session {
         Session(id: id, title: id, status: status, agentId: nil, assignedRunnerId: nil,
-                pendingApprovals: approvals, branch: nil, updatedAt: nil, agent: nil)
+                pendingApprovals: approvals, branch: nil, updatedAt: nil, source: source, agent: nil)
     }
 
     func testActiveGroupingOrdersAndBuckets() {
@@ -32,6 +33,22 @@ final class AppLogicTests: XCTestCase {
         XCTAssertEqual(g.running.map(\.id), ["a", "d"])
         XCTAssertEqual(g.queued.map(\.id), ["c"])
         XCTAssertFalse(g.isEmpty)
+    }
+
+    /// System (auto-created) sessions ride the `view=active` payload but must not show in the Active
+    /// list — they have their own System tab (web parity). Excluded from every bucket.
+    func testActiveGroupingExcludesSystemSessions() {
+        let sessions = [
+            session("live", .running),
+            session("sysRun", .running, source: "system"),               // live but system → dropped
+            session("sysNeeds", .running, approvals: 3, source: "system"), // even with approvals
+            session("queued", .pending),
+            session("sysQueued", .pending, source: "system"),            // queued but system → dropped
+        ]
+        let g = SessionGrouping.group(sessions)
+        XCTAssertEqual(g.needsYou.map(\.id), [])
+        XCTAssertEqual(g.running.map(\.id), ["live"])
+        XCTAssertEqual(g.queued.map(\.id), ["queued"])
     }
 
     func testEmptyGrouping() {
