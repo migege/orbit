@@ -25,11 +25,29 @@ struct OrbitApp: App {
                 }
         }
         .defaultSize(width: 1100, height: 720)
-        // Standard "Check for Updates…" in the app menu (right after "About Orbit").
         .commands {
+            // ⌘N → New Session for the current agent. Replaces SwiftUI's default File ▸ New Window
+            // (Orbit is single-window), so the standard "New" slot now starts a session instead.
+            CommandGroup(replacing: .newItem) {
+                Button("New Session") { model.newSessionInCurrentAgent() }
+                    .keyboardShortcut("n", modifiers: .command)
+                    .disabled(!model.signedIn || model.orderedAgents.isEmpty)
+            }
+            // Standard "Check for Updates…" in the app menu (right after "About Orbit").
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates…") { updater.checkForUpdates() }
                     .disabled(!updater.canCheckForUpdates)
+            }
+            // ⌘1…⌘9 → jump to the Nth agent in sidebar order. Registered as menu commands so the
+            // shortcuts fire from any view (not just the sidebar) and are discoverable in the menu
+            // bar. The list past nine agents is reachable from the sidebar only.
+            CommandMenu("Go") {
+                ForEach(Array(model.orderedAgents.prefix(9).enumerated()), id: \.element.id) { pair in
+                    Button("\(pair.offset + 1)  \(pair.element.name)") {
+                        model.selectAgent(at: pair.offset)
+                    }
+                    .keyboardShortcut(KeyEquivalent(Character("\(pair.offset + 1)")), modifiers: .command)
+                }
             }
         }
 

@@ -221,6 +221,61 @@ final class AppModel {
         return s.agent?.id ?? s.agentId
     }
 
+    // MARK: keyboard commands (⌘N new session · ⌘1…⌘9 switch agent)
+
+    /// Agents in sidebar display order — the order ⌘1…⌘9 index into (and the sidebar renders).
+    /// Empty until the agent list loads.
+    var orderedAgents: [Agent] { AgentListLogic.ordered(agents?.items ?? []) }
+
+    /// agentID → 0-based position for the first nine agents, so the sidebar can show a faint "⌘N"
+    /// hint on each shortcut-addressable row. Agents past the ninth get none.
+    var agentShortcutIndex: [String: Int] {
+        var map: [String: Int] = [:]
+        for (i, a) in orderedAgents.prefix(9).enumerated() { map[a.id] = i }
+        return map
+    }
+
+    /// The agent ⌘N opens a new session for: the one selected in the Agents section, else the agent
+    /// behind the session open in Active, else the first agent. nil only when no agents exist — ⌘N
+    /// is disabled then.
+    var currentAgentID: String? {
+        let all = orderedAgents
+        guard !all.isEmpty else { return nil }
+        if selectedSection == .agents, let id = selectedAgentID, all.contains(where: { $0.id == id }) {
+            return id
+        }
+        if let sid = activeConsoleSessionID ?? selectedSessionID, let aid = agentID(for: sid),
+           all.contains(where: { $0.id == aid }) {
+            return aid
+        }
+        return all.first?.id
+    }
+
+    /// ⌘N: open the draft composer for `currentAgentID`, navigating into the Agents section.
+    /// Mirrors the "New session" button in `AgentPanes`.
+    func newSessionInCurrentAgent() {
+        guard let id = currentAgentID else { return }
+        selectedSection = .agents
+        selectedAgentID = id
+        selectedAgentSessionID = nil
+        composingAgentSession = true
+    }
+
+    /// ⌘1…⌘9: select the agent at `index` (0-based) in sidebar order, navigating into the Agents
+    /// section. Out of range (fewer agents than the digit pressed) is a no-op. Mirrors the sidebar's
+    /// agent-selection binding.
+    func selectAgent(at index: Int) {
+        let all = orderedAgents
+        guard all.indices.contains(index) else { return }
+        let id = all[index].id
+        selectedSection = .agents
+        if selectedAgentID != id {
+            selectedAgentID = id
+            selectedAgentSessionID = nil
+            composingAgentSession = false
+        }
+    }
+
     // MARK: routing + notification intents
 
     func route(to route: Route) {

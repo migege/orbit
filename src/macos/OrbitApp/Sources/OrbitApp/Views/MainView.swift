@@ -97,10 +97,11 @@ struct SectionSidebar: View {
         // Touch the driving fields so Observation re-renders the rail (and re-reads `selection`)
         // when the section/agent changes from outside the sidebar, e.g. a deep-link route.
         _ = (model.selectedSection, model.selectedAgentID)
+        let shortcutIndex = model.agentShortcutIndex   // agentID → ⌘N slot, computed once per render
         return List(selection: selection) {
             ForEach(AppSection.visible(isAdmin: isAdmin)) { section in
                 if section == .agents {
-                    agentsDisclosure
+                    agentsDisclosure(shortcutIndex: shortcutIndex)
                 } else {
                     Label(section.title, systemImage: section.systemImage)
                         .badge(section == .active ? needsYou : 0)   // .badge(0) renders nothing
@@ -112,14 +113,15 @@ struct SectionSidebar: View {
         .task { await model.agents?.load() }
     }
 
-    private var agentsDisclosure: some View {
+    private func agentsDisclosure(shortcutIndex: [String: Int]) -> some View {
         DisclosureGroup(isExpanded: $agentsExpanded) {
             if let agents = model.agents, !agents.items.isEmpty {
                 ForEach(agents.groups) { group in
                     Text(agents.runnerLabel(group.runnerId))
                         .font(.caption).foregroundStyle(.secondary)
                     ForEach(group.agents) { a in
-                        AgentRowView(agent: a).tag(SidebarSelection.agent(a.id))
+                        AgentRowView(agent: a, shortcutIndex: shortcutIndex[a.id])
+                            .tag(SidebarSelection.agent(a.id))
                     }
                 }
             } else {

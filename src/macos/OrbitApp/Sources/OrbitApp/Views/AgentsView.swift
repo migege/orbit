@@ -15,21 +15,32 @@ import OrbitKit
 // this surfaces a flatter Agents nav whose items are the agents themselves.
 
 /// A row for an agent in the sidebar disclosure: name (+ disabled pill) over model · workDir.
+/// `shortcutIndex`, when set (the first nine agents), shows a faint "⌘N" hint for the switch
+/// shortcut so it's learnable.
 struct AgentRowView: View {
     let agent: Agent
+    var shortcutIndex: Int? = nil
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 6) {
-                Text(agent.name).lineLimit(1)
-                if agent.enabled == false {
-                    Text("disabled").font(.caption2)
-                        .padding(.horizontal, 5).padding(.vertical, 1)
-                        .background(.quaternary, in: Capsule())
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(agent.name).lineLimit(1)
+                    if agent.enabled == false {
+                        Text("disabled").font(.caption2)
+                            .padding(.horizontal, 5).padding(.vertical, 1)
+                            .background(.quaternary, in: Capsule())
+                    }
                 }
+                Text(AgentDefaults.friendlyName(AgentListLogic.effectiveModel(model: agent.model, env: agent.env))
+                     + (agent.workDir.map { " · \($0)" } ?? ""))
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
-            Text(AgentDefaults.friendlyName(AgentListLogic.effectiveModel(model: agent.model, env: agent.env))
-                 + (agent.workDir.map { " · \($0)" } ?? ""))
-                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            if let shortcutIndex {
+                Spacer(minLength: 4)
+                Text("⌘\(shortcutIndex + 1)")
+                    .font(.caption2).monospacedDigit()
+                    .foregroundStyle(.tertiary)
+            }
         }
         .padding(.vertical, 2)
     }
