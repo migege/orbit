@@ -115,6 +115,19 @@ final class TranscriptReducerTests: XCTestCase {
         XCTAssertEqual(r.state.items[0].asUser?.pending, false)
     }
 
+    /// A message sent while another turn is in flight is flagged `queued` so the bubble reads
+    /// "Queued" instead of "Sending…" (web parity); reconciling the durable event clears `pending`
+    /// (which hides the indicator regardless of `queued`). An idle send leaves `queued` false.
+    func testOptimisticUserCarriesQueuedFlag() {
+        var r = TranscriptReducer()
+        r.addOptimisticUser(clientTurnId: "c1", text: "do this next", queued: true)
+        XCTAssertEqual(r.state.items[0].asUser?.pending, true)
+        XCTAssertEqual(r.state.items[0].asUser?.queued, true)
+
+        r.addOptimisticUser(clientTurnId: "c2", text: "right away")   // idle send → default false
+        XCTAssertEqual(r.state.items[1].asUser?.queued, false)
+    }
+
     /// The durable `user` event carries `attachments` ([{id,mime,name}]) and a `ts` — both must
     /// land on the bubble so it can render image thumbnails / file chips and a relative time
     /// (web parity; the runner echoes `attachments`, not `attachmentIds`).

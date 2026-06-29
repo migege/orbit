@@ -328,9 +328,13 @@ final class ConsoleModel {
             TurnAttachment(id: $0.id, mime: $0.mimeType, name: $0.filename)
         }
 
+        // A turn already in flight ⇒ this message waits its turn, so label it "Queued" rather than
+        // "Sending…" (web parity). Captured now, before the send revives/advances the status.
+        let willQueue = availability == .queue
         // Optimistic bubble; reconciled by the server's `user` event (matched by the turnId
         // tagged below once POST returns — the runner echoes turnId, not clientTurnId).
-        reducer.addOptimisticUser(clientTurnId: clientTurnId, text: text, attachments: turnAttachments)
+        reducer.addOptimisticUser(clientTurnId: clientTurnId, text: text, attachments: turnAttachments,
+                                  queued: willQueue)
         state = reducer.state
         composerText = ""
         pendingAttachments = []

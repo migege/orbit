@@ -67,10 +67,10 @@ public struct TranscriptReducer: Sendable, Codable {
     /// Reconciled by the server `turnId` (tagged via `setOptimisticTurnId` once POST /turns
     /// returns) — or by `clientTurnId` if the server ever echoes it — when that durable event arrives.
     public mutating func addOptimisticUser(clientTurnId: String, text: String,
-                                           attachments: [TurnAttachment] = []) {
+                                           attachments: [TurnAttachment] = [], queued: Bool = false) {
         flushStreaming()
         state.items.append(.user(UserBubble(id: nextID(), text: text, attachments: attachments,
-                                            clientTurnId: clientTurnId, turnId: nil, pending: true)))
+                                            clientTurnId: clientTurnId, turnId: nil, pending: true, queued: queued)))
     }
 
     /// Tag the optimistic bubble (found by its `clientTurnId`) with the server-assigned `turnId`

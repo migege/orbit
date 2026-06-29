@@ -177,10 +177,10 @@ struct UserBubbleView: View {
         HStack(alignment: .top, spacing: 6) { content() }
     }
 
-    // Copy + relative time, hidden until hover (web's `.chat-user-meta`). `Sending…` replaces the
-    // time while the turn is unconfirmed. Always laid out so revealing it doesn't move the bubble.
-    // An image-only turn (empty text) has nothing to copy, so the row is suppressed — web parity
-    // (`{node.text && <div className="chat-user-meta">…}`).
+    // Copy + relative time, hidden until hover (web's `.chat-user-meta`). While the turn is
+    // unconfirmed this shows "Queued" (a turn was already in flight) or "Sending…" in place of the
+    // time. Always laid out so revealing it doesn't move the bubble. An image-only turn (empty text)
+    // has nothing to copy, so the row is suppressed — web parity (`{node.text && …}`).
     @ViewBuilder
     private var meta: some View {
         if !bubble.text.isEmpty || bubble.pending {
@@ -192,13 +192,13 @@ struct UserBubbleView: View {
                     .buttonStyle(.plain).foregroundStyle(.secondary).help("Copy message")
                 }
                 if bubble.pending {
-                    Text("Sending…").font(.caption2).foregroundStyle(.secondary)
+                    Text(bubble.queued ? "Queued" : "Sending…").font(.caption2).foregroundStyle(.secondary)
                 } else if let ts = bubble.ts, let rel = RelativeTime.format(ts) {
                     Text(rel).font(.caption2).foregroundStyle(.secondary)
                 }
             }
             .frame(height: 16)
-            // `Sending…` should always show; the copy/time row only on hover (web parity).
+            // The pending indicator (Queued/Sending…) always shows; the copy/time row only on hover (web parity).
             .opacity(bubble.pending || hovering ? 1 : 0)
             .allowsHitTesting(bubble.pending || hovering)
             .animation(.easeOut(duration: 0.12), value: hovering)

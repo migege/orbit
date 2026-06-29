@@ -59,9 +59,13 @@ public struct UserBubble: Equatable, Sendable, Codable {
     public var turnId: String?
     /// Optimistically shown before the server's `user` event confirms it.
     public var pending: Bool
+    /// True when this turn was sent while another was already in flight, so it's waiting its turn
+    /// rather than being delivered immediately — drives a "Queued" indicator instead of "Sending…"
+    /// (web parity). Captured once at send time; only read while `pending`.
+    public var queued: Bool
 
     public init(id: String, text: String, attachments: [TurnAttachment] = [], ts: String? = nil,
-                clientTurnId: String? = nil, turnId: String? = nil, pending: Bool) {
+                clientTurnId: String? = nil, turnId: String? = nil, pending: Bool, queued: Bool = false) {
         self.id = id
         self.text = text
         self.attachments = attachments
@@ -69,11 +73,12 @@ public struct UserBubble: Equatable, Sendable, Codable {
         self.clientTurnId = clientTurnId
         self.turnId = turnId
         self.pending = pending
+        self.queued = queued
     }
 
     // Tolerant decode so transcript snapshots written before `attachments`/`ts` existed still
     // rehydrate (those keys just default) instead of discarding the whole cached session.
-    enum CodingKeys: String, CodingKey { case id, text, attachments, ts, clientTurnId, turnId, pending }
+    enum CodingKeys: String, CodingKey { case id, text, attachments, ts, clientTurnId, turnId, pending, queued }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
@@ -83,6 +88,7 @@ public struct UserBubble: Equatable, Sendable, Codable {
         clientTurnId = try? c.decodeIfPresent(String.self, forKey: .clientTurnId)
         turnId = try? c.decodeIfPresent(String.self, forKey: .turnId)
         pending = (try? c.decodeIfPresent(Bool.self, forKey: .pending)) ?? false
+        queued = (try? c.decodeIfPresent(Bool.self, forKey: .queued)) ?? false
     }
 }
 
