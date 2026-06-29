@@ -1,6 +1,6 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { RunStatus, TaskStatus } from '@prisma/client';
-import { RunEventType, SessionEndReason, isApiErrorText } from '@orbit/shared';
+import { AgentProvider, RunEventType, SessionEndReason, isApiErrorText } from '@orbit/shared';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { postRunFailureComment, reclaimStalledTask } from '../tasks/reclaim-stalled-task';
@@ -14,6 +14,7 @@ const IDLE_AFTER_MS = 30 * 60_000; // gracefully end a session idle this long
 // so it can't see the inbox 'end' or the heartbeat cancel. Force-finalize it so the
 // leaked AWAITING_INPUT session can't hold a concurrency slot forever.
 const CANCEL_GRACE_MS = 2 * 60_000;
+const CODEX_STARTUP_GRACE_MS = 2 * 60_000;
 
 const LIVE: RunStatus[] = [RunStatus.RUNNING, RunStatus.AWAITING_INPUT, RunStatus.INTERRUPTED];
 
@@ -67,9 +68,13 @@ export class ReaperService implements OnModuleInit, OnModuleDestroy {
         taskId: true,
         assignedRunnerId: true,
         status: true,
+        provider: true,
+        runtimeSessionId: true,
+        claudeSessionId: true,
         lastTurnAt: true,
         cancelRequestedAt: true,
         task: { select: { status: true } },
+        agent: { select: { provider: true } },
         assignedRunner: { select: { lastHeartbeatAt: true, status: true } },
       },
     });
@@ -88,6 +93,18 @@ export class ReaperService implements OnModuleInit, OnModuleDestroy {
         const cancelAt = s.cancelRequestedAt?.getTime() ?? 0;
         if (cancelAt && now - cancelAt > CANCEL_GRACE_MS) {
           await this.forceFail(s.id, s.assignedRunnerId, s.taskId, 'cancel not honored');
+          continue;
+        }
+        const provider = s.provider ?? s.agent?.provider;
+        const lastTurn = s.lastTurnAt?.getTime() ?? 0;
+        if (
+          provider === AgentProvider.CODEX &&
+          s.status === RunStatus.RUNNING &&
+          !s.runtimeSessionId &&
+          !s.claudeSessionId &&
+          now - lastTurn > CODEX_STARTUP_GRACE_MS
+        ) {
+          await this.forceFail(s.id, s.assignedRunnerId, s.taskId, 'codex runtime not initialized');
           continue;
         }
         // Backstop for a task run whose last turn ended in a Claude API error (e.g.
@@ -115,7 +132,6 @@ export class ReaperService implements OnModuleInit, OnModuleDestroy {
             continue;
           }
         }
-        const lastTurn = s.lastTurnAt?.getTime() ?? 0;
         // Tear a parked session down when its task is already finished (recycle the
         // slot now) or when it has sat idle past IDLE_AFTER_MS.
         const taskDone = !!s.task && TASK_TERMINAL.includes(s.task.status);

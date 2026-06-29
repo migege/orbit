@@ -52,6 +52,7 @@ import { RealtimeService } from '../realtime/realtime.service';
 import { normalizeStoredRememberRules } from '../sessions/remember-rules';
 import { postRunFailureComment, reclaimStalledTask } from '../tasks/reclaim-stalled-task';
 import { CurrentRunner } from './current-runner.decorator';
+import { reclaimRuntimeIds } from './reclaim-runtime';
 import { RunnerAuthGuard } from './runner-auth.guard';
 
 const LONG_POLL_MS = 25_000;
@@ -342,10 +343,13 @@ export class RunnerApiController {
     for (const s of sessions) {
       const agent = s.agent;
       const provider = normalizeProvider(s.provider ?? agent?.provider);
-      const runtimeSessionId = s.runtimeSessionId ?? s.claudeSessionId;
-      if (!runtimeSessionId) continue;
-      const sessionUuid =
-        provider === AgentProvider.CLAUDE ? (s.claudeSessionId ?? runtimeSessionId) : runtimeSessionId;
+      const runtime = reclaimRuntimeIds({
+        provider,
+        sessionId: s.id,
+        runtimeSessionId: s.runtimeSessionId,
+        claudeSessionId: s.claudeSessionId,
+      });
+      if (!runtime) continue;
       const agg = await this.prisma.runEvent.aggregate({
         where: { sessionId: s.id },
         _max: { seq: true },
@@ -372,9 +376,9 @@ export class RunnerApiController {
       out.push({
         sessionId: s.id,
         provider,
-        runtimeSessionId,
+        runtimeSessionId: runtime.runtimeSessionId,
         title: s.title,
-        sessionUuid,
+        sessionUuid: runtime.sessionUuid,
         maxSeq: agg._max.seq ?? 0,
         agent: agentCfg,
         workDir: agent?.workDir ?? undefined,
