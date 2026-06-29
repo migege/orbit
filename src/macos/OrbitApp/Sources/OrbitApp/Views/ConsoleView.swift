@@ -46,40 +46,25 @@ struct ConsoleView: View {
 
 struct TranscriptView: View {
     let console: ConsoleModel
-    private let bottomAnchor = "bottom-anchor"
-
-    // Maps the model's `nil` (= pinned to the bottom) to the bottom anchor's id and back. Because
-    // the anchor lives in the per-session model and this view persists across session switches,
-    // switching to a session you'd scrolled up in restores your place instead of yanking to the
-    // bottom; the value is `nil` only while you're at the latest message, so live content still
-    // follows there.
-    private var anchorBinding: Binding<String?> {
-        Binding(
-            get: { console.scrollAnchorID ?? bottomAnchor },
-            set: { console.scrollAnchorID = ($0 == bottomAnchor) ? nil : $0 }
-        )
-    }
 
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 12) {
-                    ForEach(console.state.items) { TranscriptItemView(item: $0) }
-                    Color.clear.frame(height: 1).id(bottomAnchor)
-                }
-                .scrollTargetLayout()
-                .padding()
-            }
-            // macOS 15+: `scrollPosition` restores each session's saved anchor on switch and keeps
-            // the bottom pinned (anchor: .bottom) as content streams — so already-read sessions are
-            // not re-scrolled. macOS 14 lacks the `anchor:` overload, so it falls back to the
-            // jump-to-bottom below (only while pinned).
-            .transcriptScrollPosition(anchorBinding)
-            .onChange(of: console.state.items.count) {
-                if #available(macOS 15.0, *) { return }            // handled by scrollPosition above
-                if console.scrollAnchorID == nil { proxy.scrollTo(bottomAnchor, anchor: .bottom) }
+        // A `List` is NSTableView-backed on macOS, so it recycles rows: a long transcript stays
+        // cheap to lay out no matter how many items it holds. A `LazyVStack` can't — pairing it
+        // with `scrollPosition(id:anchor:)`/`scrollTargetLayout()` (needed to anchor the bottom)
+        // made SwiftUI re-measure and re-place *every* row on each streamed update, which froze the
+        // UI on long sessions. `.defaultScrollAnchor(.bottom)` keeps the newest message pinned as
+        // content streams without that per-row tracking.
+        List {
+            ForEach(console.state.items) { item in
+                TranscriptItemView(item: item)
+                    .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
             }
         }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)   // show the window background, not the List's own
+        .defaultScrollAnchor(.bottom)
         .safeAreaInset(edge: .top, spacing: 0) { statusBar }
     }
 
@@ -100,19 +85,6 @@ struct TranscriptView: View {
         }
         .padding(.horizontal, 12).padding(.vertical, 6)
         .background(.bar)
-    }
-}
-
-private extension View {
-    /// Per-session bottom-anchored scroll position. Uses the `scrollPosition(id:anchor:)` overload,
-    /// gated to macOS 15+ so it compiles against the macOS 14 floor; on 14 it's a no-op and the
-    /// caller's `onChange` fallback keeps the bottom followed.
-    @ViewBuilder func transcriptScrollPosition(_ id: Binding<String?>) -> some View {
-        if #available(macOS 15.0, *) {
-            self.scrollPosition(id: id, anchor: .bottom)
-        } else {
-            self
-        }
     }
 }
 
