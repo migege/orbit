@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import OrbitKit
 
 @main
@@ -45,6 +46,15 @@ struct OrbitApp: App {
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates…") { updater.checkForUpdates() }
                     .disabled(!updater.canCheckForUpdates)
+            }
+            // ⌘⇧F → toggle the main window in/out of full screen. macOS's built-in "Enter Full
+            // Screen" lives in the View menu under ⌃⌘F; this adds the ⌘⇧F combo as well and keeps
+            // it next to the system item.
+            CommandGroup(after: .sidebar) {
+                Button("Toggle Full Screen") {
+                    (NSApp.keyWindow ?? NSApp.mainWindow)?.toggleFullScreen(nil)
+                }
+                .keyboardShortcut("f", modifiers: [.command, .shift])
             }
             // ⌘1…⌘9 → jump to the Nth agent in sidebar order. Registered as menu commands so the
             // shortcuts fire from any view (not just the sidebar) and are discoverable in the menu
