@@ -166,6 +166,10 @@ final class AppModel {
     func startPolling() {
         guard pollTask == nil else { return }
         pollTask = Task { @MainActor [weak self] in
+            // A restored-token launch sets `signedIn` in `init` without going through `login()`, so
+            // `user` is still nil — prime it once so the sidebar account footer shows the real name
+            // instead of the "Account" placeholder.
+            if let self, self.user == nil { self.user = try? await self.api?.me() }
             while !Task.isCancelled {
                 await self?.loadSessions()
                 if let self { self.consoleRegistry?.flush(self.activeConsoleSessionID) }
