@@ -219,6 +219,11 @@ export const updateSessionConfig = (
   config: { model?: string; permissionMode?: string; effort?: string },
 ) => api(`/sessions/${sessionId}/config`, { method: 'PATCH', body: config });
 
+/** Rename a session's display title. Works on any session (live or ended) and never
+ *  touches the runner — purely a metadata update. */
+export const renameSession = (sessionId: string, title: string) =>
+  api(`/sessions/${sessionId}`, { method: 'PATCH', body: { title } });
+
 export const interruptSession = (sessionId: string) =>
   api(`/sessions/${sessionId}/interrupt`, { method: 'POST' });
 

@@ -52,6 +52,12 @@ export interface MergeToMainDto {
   targetBranch?: string;
 }
 
+export interface SessionRenameDto {
+  /** New display title for the session. Trimmed; must be non-empty. Renaming works on any
+   *  session regardless of status and never touches the runner. */
+  title: string;
+}
+
 export interface SessionConfigDto {
   /** Change the model, permission mode and/or effort of an already-started session.
    *  The runner re-spawns claude with --resume so the change takes effect on the next

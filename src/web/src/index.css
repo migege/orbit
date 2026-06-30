@@ -1695,6 +1695,20 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* Inline rename editor that replaces .agent-name on double-click — matches the title's
+   type so the swap is seamless, with a brand underline to signal edit mode. */
+.agent-name-input {
+  width: 100%;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-1);
+  padding: 0;
+  margin: 0;
+  border: none;
+  border-bottom: 1px solid var(--brand);
+  background: transparent;
+  outline: none;
+}
 .agent-header-task {
   display: inline-flex;
   align-items: center;

@@ -55,6 +55,7 @@ import {
   listQueuedTurns,
   mergeSessionToMain,
   type PermissionRule,
+  renameSession,
   restoreSession,
   resumeSession,
   sendTurn,
@@ -484,6 +485,12 @@ export function AgentView({ runner }: { runner: Runner }) {
   // it deep-links and survives a refresh; selecting a session = navigation.
   // Decode once here; everything downstream works with the raw session UUID.
   const selectedId = decodeId(useMatch('/sessions/:id')?.params.id);
+  // Inline header-title rename: double-click swaps the title for an input. `editingTitle`
+  // gates the editor, `titleDraft` holds the in-progress text, `cancelTitleEdit` lets
+  // Escape skip the blur-commit. Switching sessions closes any open editor (effect below).
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState('');
+  const cancelTitleEdit = useRef(false);
   // /agents/<id> names the agent this console is scoped to: the picker is locked
   // to it and the session list is filtered to that agent's conversations.
   // /agents/<id>/new is the "compose a new session" draft state (the splat is 'new').
@@ -623,6 +630,9 @@ export function AgentView({ runner }: { runner: Runner }) {
     [sessionsQ.data],
   );
   const selected = useMemo(() => sessions.find((s) => s.id === selectedId) ?? null, [sessions, selectedId]);
+  // Close the header-title editor whenever the open session changes — a stale draft must
+  // never commit onto a different session.
+  useEffect(() => setEditingTitle(false), [selectedId]);
   // Detail of the open session, keyed the same as TasksSidePanel so React Query dedupes
   // the fetch. Its only job here is to resolve the session's agent the instant it's opened:
   // a freshly created session isn't in the list query yet (so `selected` is null), but its
@@ -1316,6 +1326,18 @@ export function AgentView({ runner }: { runner: Runner }) {
     },
     onError: (e: Error) => message.error(e.message),
   });
+  // Double-click the header title to rename. Optimistically patch the title into every
+  // cached session list (the header reads `selected.title` off that list, not the detail
+  // query) so the new name shows instantly; reconcile or roll back on settle.
+  const renameMut = useMutation({
+    mutationFn: ({ id, title }: { id: string; title: string }) => renameSession(id, title),
+    onMutate: ({ id, title }) =>
+      qc.setQueriesData<any[]>({ queryKey: ['sessions'] }, (old) =>
+        Array.isArray(old) ? old.map((s) => (s.id === id ? { ...s, title } : s)) : old,
+      ),
+    onError: (e: Error) => message.error(e.message),
+    onSettled: () => qc.invalidateQueries({ queryKey: ['sessions'] }),
+  });
   // Enable worktree isolation for a non-git agent: flip autoInitGit so the runner `git
   // init`s the workDir on the next run (the shared-nogit nudge clears once a run isolates).
   const enableIsoMut = useMutation({
@@ -1885,9 +1907,50 @@ export function AgentView({ runner }: { runner: Runner }) {
                 <span className="agent-header-task-name">{selected.taskTitle ?? 'Back to task'}</span>
               </button>
             )}
-            <div className="agent-name">
-              {composing ? 'New session' : (selected?.title ?? (selectedId ? 'Starting…' : headAgentName))}
-            </div>
+            {editingTitle && selected && !composing ? (
+              <input
+                className="agent-name-input"
+                autoFocus
+                value={titleDraft}
+                onChange={(e) => setTitleDraft(e.target.value)}
+                onFocus={(e) => e.currentTarget.select()}
+                onKeyDown={(e) => {
+                  if (e.nativeEvent.isComposing) return; // let the IME (e.g. pinyin) keep Enter
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    e.currentTarget.blur();
+                  } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    cancelTitleEdit.current = true;
+                    e.currentTarget.blur();
+                  }
+                }}
+                onBlur={() => {
+                  setEditingTitle(false);
+                  if (cancelTitleEdit.current) {
+                    cancelTitleEdit.current = false;
+                    return;
+                  }
+                  const t = titleDraft.trim();
+                  if (t && t !== selected.title) renameMut.mutate({ id: selected.id, title: t });
+                }}
+              />
+            ) : (
+              <div
+                className="agent-name"
+                {...(selected && !composing
+                  ? {
+                      onDoubleClick: () => {
+                        setTitleDraft(selected.title);
+                        setEditingTitle(true);
+                      },
+                      title: 'Double-click to rename',
+                    }
+                  : {})}
+              >
+                {composing ? 'New session' : (selected?.title ?? (selectedId ? 'Starting…' : headAgentName))}
+              </div>
+            )}
             <div className="agent-sub">{headSub}</div>
           </div>
           {selected && !composing && (

@@ -1064,6 +1064,21 @@ export class SessionsService {
   }
 
   /**
+   * Rename a session's display title. Unlike updateConfig this carries no runner side
+   * effects and is allowed in any status (a dormant/ended session can still be renamed),
+   * so there's no terminal guard and no reload turn.
+   */
+  async rename(ownerId: string, id: string, rawTitle: string) {
+    const title = (rawTitle ?? '').trim();
+    if (!title) throw new BadRequestException('title must not be empty');
+    if (title.length > 200) throw new BadRequestException('title is too long (max 200 chars)');
+    const session = await this.prisma.session.findFirst({ where: { id, ownerId } });
+    if (!session) throw new NotFoundException('session not found');
+    await this.prisma.session.update({ where: { id }, data: { title } });
+    return { ok: true, title };
+  }
+
+  /**
    * Soft-delete a session (moves it to the trash view). No data is removed — the
    * transcript and billing stay; restore brings it back. There is no hard delete.
    * A session that hasn't ended is deleted too: like `archive`, we recycle its runner
