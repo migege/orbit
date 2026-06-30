@@ -46,41 +46,82 @@ struct ConsoleView: View {
 
 struct TranscriptView: View {
     let console: ConsoleModel
-    private let bottomAnchor = "bottom-anchor"
-
-    // Maps the model's `nil` (= pinned to the bottom) to the bottom anchor's id and back. Because
-    // the anchor lives in the per-session model and this view persists across session switches,
-    // switching to a session you'd scrolled up in restores your place instead of yanking to the
-    // bottom; the value is `nil` only while you're at the latest message, so live content still
-    // follows there.
-    private var anchorBinding: Binding<String?> {
-        Binding(
-            get: { console.scrollAnchorID ?? bottomAnchor },
-            set: { console.scrollAnchorID = ($0 == bottomAnchor) ? nil : $0 }
-        )
-    }
+    private let bottomID = "transcript-bottom"
+    // Mirrors web's `atBottom` (AgentView.tsx): flips false once the user scrolls up off the live
+    // tail. Drives the floating jump-to-latest button AND gates the auto-follow below, so reading
+    // history isn't yanked back down by streaming updates. Maintained by `BottomTracker` (macOS 15+);
+    // on the macOS 14 floor it stays true — the view keeps the unconditional follow and hides the button.
+    @State private var atBottom = true
 
     var body: some View {
+        // `List` is NSTableView-backed on macOS → true row recycling, so a long transcript stays
+        // cheap to lay out. (A `LazyVStack` paired with `scrollPosition(id:anchor:)` /
+        // `scrollTargetLayout()` re-measured and re-placed *every* row on each streamed update and
+        // froze the UI — never reintroduce those here.)
+        //
+        // `.defaultScrollAnchor(.bottom)` only positions the bottom on *first* appearance; it does
+        // not follow new content. So an explicit, non-animated `scrollTo` on every content change
+        // keeps the latest message — and a streaming reply — in view, and re-pins the bottom when
+        // you switch sessions (the view is reused, only `console` swaps). This is cheap on a
+        // recycling List: a single one-shot scroll per change, not the per-frame *animated* scroll
+        // that froze the old LazyVStack build.
         ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 12) {
-                    ForEach(console.state.items) { TranscriptItemView(item: $0) }
-                    Color.clear.frame(height: 1).id(bottomAnchor)
+            List {
+                ForEach(console.state.items) { item in
+                    TranscriptItemView(item: item)
+                        .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
                 }
-                .scrollTargetLayout()
-                .padding()
+                // Zero-height tail row: a stable `scrollTo` target that always sits below the last
+                // message (the last item's own id moves as it streams).
+                Color.clear.frame(height: 1)
+                    .listRowInsets(EdgeInsets())
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
+                    .id(bottomID)
             }
-            // macOS 15+: `scrollPosition` restores each session's saved anchor on switch and keeps
-            // the bottom pinned (anchor: .bottom) as content streams — so already-read sessions are
-            // not re-scrolled. macOS 14 lacks the `anchor:` overload, so it falls back to the
-            // jump-to-bottom below (only while pinned).
-            .transcriptScrollPosition(anchorBinding)
-            .onChange(of: console.state.items.count) {
-                if #available(macOS 15.0, *) { return }            // handled by scrollPosition above
-                if console.scrollAnchorID == nil { proxy.scrollTo(bottomAnchor, anchor: .bottom) }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)   // show the window background, not the List's own
+            .defaultScrollAnchor(.bottom)
+            .modifier(BottomTracker(atBottom: $atBottom))
+            // Follow new/streaming content only while pinned at the bottom (web's smart auto-scroll):
+            // if the user has scrolled up to read, don't drag them back. A session switch always
+            // re-pins. One-shot, non-animated scrollTo — never the per-frame animated scroll that froze
+            // the old build.
+            .onChange(of: console.state.items) { if atBottom { proxy.scrollTo(bottomID, anchor: .bottom) } }
+            .onChange(of: console.sessionID) { atBottom = true; proxy.scrollTo(bottomID, anchor: .bottom) }
+            .onAppear { proxy.scrollTo(bottomID, anchor: .bottom) }
+            // Floating jump-to-latest button, shown only while scrolled up (web's `.scroll-to-bottom`).
+            .overlay(alignment: .bottom) {
+                if !atBottom {
+                    scrollToBottomButton(proxy: proxy)
+                        .transition(.opacity.combined(with: .move(edge: .bottom)))
+                }
             }
+            .animation(.easeOut(duration: 0.15), value: atBottom)
         }
         .safeAreaInset(edge: .top, spacing: 0) { statusBar }
+    }
+
+    // Circular "scroll to latest" control (web parity). One user-initiated scroll — not the per-frame
+    // animated scroll that previously froze the transcript — so animating this one is safe.
+    private func scrollToBottomButton(proxy: ScrollViewProxy) -> some View {
+        Button {
+            withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(bottomID, anchor: .bottom) }
+            atBottom = true
+        } label: {
+            Image(systemName: "arrow.down")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.primary)
+                .frame(width: 32, height: 32)
+                .background(.regularMaterial, in: Circle())
+                .overlay { Circle().strokeBorder(.primary.opacity(0.12)) }
+                .shadow(color: .black.opacity(0.18), radius: 4, y: 1)
+        }
+        .buttonStyle(.plain)
+        .padding(.bottom, 12)
+        .help("Scroll to latest")
     }
 
     private var statusBar: some View {
@@ -103,15 +144,31 @@ struct TranscriptView: View {
     }
 }
 
-private extension View {
-    /// Per-session bottom-anchored scroll position. Uses the `scrollPosition(id:anchor:)` overload,
-    /// gated to macOS 15+ so it compiles against the macOS 14 floor; on 14 it's a no-op and the
-    /// caller's `onChange` fallback keeps the bottom followed.
-    @ViewBuilder func transcriptScrollPosition(_ id: Binding<String?>) -> some View {
-        if #available(macOS 15.0, *) {
-            self.scrollPosition(id: id, anchor: .bottom)
+/// Tracks whether the transcript is pinned to the bottom, to drive the jump-to-latest button and
+/// the auto-follow gate. `onScrollGeometryChange` (macOS 15+) is a read-only geometry observer —
+/// unlike `scrollPosition(id:)` + `scrollTargetLayout()` it registers no per-row scroll targets, so
+/// it won't re-break `List` virtualization (see the transcript-freeze history). On the macOS 14 floor
+/// it's a no-op, leaving `atBottom` true. Mirrors web's `measure()`: pin while near the bottom, and
+/// un-pin only on an *upward* scroll — a downward content-growth delta must never strand the view.
+private struct BottomTracker: ViewModifier {
+    @Binding var atBottom: Bool
+    @State private var lastOffset: CGFloat = 0
+    // Within this many points of the bottom still counts as pinned (web uses 80px).
+    private let nearBottom: CGFloat = 80
+
+    private struct Metrics: Equatable { let distance: CGFloat; let offset: CGFloat }
+
+    func body(content: Content) -> some View {
+        if #available(macOS 15, *) {
+            content.onScrollGeometryChange(for: Metrics.self) { geo in
+                Metrics(distance: geo.contentSize.height - geo.visibleRect.maxY, offset: geo.contentOffset.y)
+            } action: { _, m in
+                if m.distance <= nearBottom { atBottom = true }
+                else if m.offset < lastOffset - 1 { atBottom = false }   // genuine upward scroll
+                lastOffset = m.offset
+            }
         } else {
-            self
+            content
         }
     }
 }
@@ -172,6 +229,11 @@ struct UserBubbleView: View {
                 meta
             }
             // Hover over the bubble column (not the full-width row) reveals the meta — web parity.
+            // contentShape makes the WHOLE column rect (incl. the 3pt spacing gaps and the meta's
+            // reserved height) one contiguous hover region; without it `.onHover` only fires over
+            // the children's drawn glyphs, so moving the cursor down toward the copy button crosses
+            // a dead gap, drops hover, and dismisses the row before the click can land.
+            .contentShape(Rectangle())
             .onHover { hovering = $0 }
         }
     }
@@ -182,10 +244,10 @@ struct UserBubbleView: View {
         HStack(alignment: .top, spacing: 6) { content() }
     }
 
-    // Copy + relative time, hidden until hover (web's `.chat-user-meta`). `Sending…` replaces the
-    // time while the turn is unconfirmed. Always laid out so revealing it doesn't move the bubble.
-    // An image-only turn (empty text) has nothing to copy, so the row is suppressed — web parity
-    // (`{node.text && <div className="chat-user-meta">…}`).
+    // Copy + relative time, hidden until hover (web's `.chat-user-meta`). While the turn is
+    // unconfirmed this shows "Queued" (a turn was already in flight) or "Sending…" in place of the
+    // time. Always laid out so revealing it doesn't move the bubble. An image-only turn (empty text)
+    // has nothing to copy, so the row is suppressed — web parity (`{node.text && …}`).
     @ViewBuilder
     private var meta: some View {
         if !bubble.text.isEmpty || bubble.pending {
@@ -197,13 +259,13 @@ struct UserBubbleView: View {
                     .buttonStyle(.plain).foregroundStyle(.secondary).help("Copy message")
                 }
                 if bubble.pending {
-                    Text("Sending…").font(.caption2).foregroundStyle(.secondary)
+                    Text(bubble.queued ? "Queued" : "Sending…").font(.caption2).foregroundStyle(.secondary)
                 } else if let ts = bubble.ts, let rel = RelativeTime.format(ts) {
                     Text(rel).font(.caption2).foregroundStyle(.secondary)
                 }
             }
             .frame(height: 16)
-            // `Sending…` should always show; the copy/time row only on hover (web parity).
+            // The pending indicator (Queued/Sending…) always shows; the copy/time row only on hover (web parity).
             .opacity(bubble.pending || hovering ? 1 : 0)
             .allowsHitTesting(bubble.pending || hovering)
             .animation(.easeOut(duration: 0.12), value: hovering)
@@ -272,7 +334,10 @@ struct AssistantBubbleView: View {
     // `padding: 0 12px` and keeps the left edge aligned with the tool-card rail.
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            MarkdownView(source: bubble.displayText).textSelection(.enabled)
+            MarkdownView(source: bubble.displayText)
+                .font(.system(size: 14))
+                .foregroundStyle(Color.transcriptInk)
+                .textSelection(.enabled)
             if !bubble.isFinalized { TypingDots() }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

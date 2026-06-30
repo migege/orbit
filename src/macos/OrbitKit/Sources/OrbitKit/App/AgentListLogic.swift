@@ -29,6 +29,12 @@ public enum AgentListLogic {
         return groups
     }
 
+    /// Agents flattened in sidebar display order — runner groups (first-seen) then host "Shared".
+    /// This is the order ⌘1…⌘9 index into, so it stays in lockstep with what `grouped` renders.
+    public static func ordered(_ agents: [Agent]) -> [Agent] {
+        grouped(agents).flatMap(\.agents)
+    }
+
     /// The model an agent actually runs: an `ANTHROPIC_MODEL` env override wins over the static
     /// `model` field (an agent can point at a DeepSeek-compatible endpoint via env), then the app
     /// default. Mirrors web RunnerDetailPage's `effectiveModel`.

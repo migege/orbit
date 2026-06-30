@@ -20,6 +20,19 @@ final class AgentListLogicTests: XCTestCase {
         XCTAssertEqual(groups.last?.agents.map(\.id), ["2"])       // host group
     }
 
+    func testOrderedFlattensGroupsHostLast() {
+        let agents = [
+            agent(#"{"id":"1","name":"a","runnerId":"r1"}"#),
+            agent(#"{"id":"2","name":"b"}"#),                      // host-level
+            agent(#"{"id":"3","name":"c","runnerId":"r2"}"#),
+            agent(#"{"id":"4","name":"d","runnerId":"r1"}"#),
+        ]
+        // The ⌘1…⌘9 index order: r1 group (1,4), then r2 (3), then host (2) — i.e. exactly the
+        // order the sidebar renders its grouped rows.
+        XCTAssertEqual(AgentListLogic.ordered(agents).map(\.id), ["1", "4", "3", "2"])
+        XCTAssertEqual(AgentListLogic.ordered([]).map(\.id), [])
+    }
+
     func testEffectiveModelEnvOverrideWins() {
         XCTAssertEqual(
             AgentListLogic.effectiveModel(model: "claude-opus-4-8", env: ["ANTHROPIC_MODEL": "deepseek-chat"]),

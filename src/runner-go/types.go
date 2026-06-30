@@ -173,6 +173,7 @@ type RunnerAgent struct {
 }
 
 type AgentExecConfig struct {
+	Provider           string                 `json:"provider,omitempty"`
 	Model              string                 `json:"model"`
 	AppendSystemPrompt string                 `json:"appendSystemPrompt"`
 	SystemPrompt       string                 `json:"systemPrompt"`
@@ -191,12 +192,14 @@ type AgentExecConfig struct {
 type ClaimedSession struct {
 	SessionID string          `json:"sessionId"`
 	Title     string          `json:"title"`
+	Provider  string          `json:"provider,omitempty"`
 	Prompt    string          `json:"prompt"`
 	Agent     AgentExecConfig `json:"agent"`
 	// WorkDir is claude's cwd for this session, from the session's agent.
-	WorkDir     string `json:"workDir,omitempty"`
-	SessionUUID string `json:"sessionUuid"`
-	MaxSeq      int    `json:"maxSeq"`
+	WorkDir          string `json:"workDir,omitempty"`
+	SessionUUID      string `json:"sessionUuid"`
+	RuntimeSessionID string `json:"runtimeSessionId,omitempty"`
+	MaxSeq           int    `json:"maxSeq"`
 	// Resume marks a session revived from an ended state: like a reclaim, claude's
 	// session already exists, so even the first spawn must --resume. Server-set.
 	Resume bool `json:"resume"`
@@ -244,11 +247,13 @@ type RunInboxResponse struct {
 }
 
 type ReclaimSession struct {
-	SessionID   string          `json:"sessionId"`
-	Title       string          `json:"title"`
-	SessionUUID string          `json:"sessionUuid"`
-	MaxSeq      int             `json:"maxSeq"`
-	Agent       AgentExecConfig `json:"agent"`
+	SessionID        string          `json:"sessionId"`
+	Title            string          `json:"title"`
+	Provider         string          `json:"provider,omitempty"`
+	SessionUUID      string          `json:"sessionUuid"`
+	RuntimeSessionID string          `json:"runtimeSessionId,omitempty"`
+	MaxSeq           int             `json:"maxSeq"`
+	Agent            AgentExecConfig `json:"agent"`
 	// WorkDir is claude's cwd for this session, from the session's agent.
 	WorkDir string `json:"workDir,omitempty"`
 	// Injected into the claude process, cf. ClaimedSession.AgentID/TaskID.
@@ -273,6 +278,8 @@ type TurnCompleteRequest struct {
 	CostUsd    float64                `json:"costUsd"`
 	Usage      *TokenUsage            `json:"usage,omitempty"`
 	ModelUsage map[string]interface{} `json:"modelUsage,omitempty"`
+	// Provider-neutral runtime session/thread id discovered during this turn.
+	RuntimeSessionID string `json:"runtimeSessionId,omitempty"`
 	// Worktree isolation, reported each turn so the web can show a LIVE status bar (branch +
 	// running diff) while the session is still going — not just at terminal /complete.
 	IsolationStatus string        `json:"isolationStatus,omitempty"`
@@ -327,16 +334,17 @@ type FilePatch struct {
 }
 
 type CompleteRequest struct {
-	Status          string                 `json:"status"`
-	Result          string                 `json:"result,omitempty"`
-	Subtype         string                 `json:"subtype,omitempty"`
-	Error           string                 `json:"error,omitempty"`
-	ClaudeSessionID string                 `json:"claudeSessionId,omitempty"`
-	NumTurns        int                    `json:"numTurns"`
-	DurationMs      int                    `json:"durationMs"`
-	CostUsd         float64                `json:"costUsd"`
-	Usage           *TokenUsage            `json:"usage,omitempty"`
-	ModelUsage      map[string]interface{} `json:"modelUsage,omitempty"`
+	Status           string                 `json:"status"`
+	Result           string                 `json:"result,omitempty"`
+	Subtype          string                 `json:"subtype,omitempty"`
+	Error            string                 `json:"error,omitempty"`
+	ClaudeSessionID  string                 `json:"claudeSessionId,omitempty"`
+	RuntimeSessionID string                 `json:"runtimeSessionId,omitempty"`
+	NumTurns         int                    `json:"numTurns"`
+	DurationMs       int                    `json:"durationMs"`
+	CostUsd          float64                `json:"costUsd"`
+	Usage            *TokenUsage            `json:"usage,omitempty"`
+	ModelUsage       map[string]interface{} `json:"modelUsage,omitempty"`
 	// Worktree isolation outcome (see worktree.go): the branch the work was committed to,
 	// the base it forked from, what the runner did, and the per-file diff summary.
 	Branch          string        `json:"branch,omitempty"`
@@ -374,8 +382,24 @@ type ApprovalDecisionResponse struct {
 	// option labels. Fed back to claude as the tool's updatedInput.answers.
 	Answers map[string][]string `json:"answers,omitempty"`
 	// Set when the human chose "allow + remember same kind": fed back to claude as
-	// updatedPermissions so its engine auto-allows matching calls for the session.
+	// updatedPermissions so its engine auto-allows matching calls for the session. A
+	// compound Bash line yields one rule per distinct sub-command.
+	RememberRules []PermissionRule `json:"rememberRules,omitempty"`
+	// Deprecated: the primary (first) rule, kept for forward-compat with control planes
+	// that don't send the array yet. Prefer RememberRules.
 	RememberRule *PermissionRule `json:"rememberRule,omitempty"`
+}
+
+// resolveRememberRules prefers the array form, falling back to the deprecated singular
+// RememberRule so a control plane that hasn't adopted the array yet still works.
+func (d ApprovalDecisionResponse) resolveRememberRules() []PermissionRule {
+	if len(d.RememberRules) > 0 {
+		return d.RememberRules
+	}
+	if d.RememberRule != nil {
+		return []PermissionRule{*d.RememberRule}
+	}
+	return nil
 }
 
 // Run-event type strings — mirror RunEventType in @orbit/shared.

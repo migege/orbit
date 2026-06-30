@@ -13,21 +13,23 @@ struct MarkdownView: View {
     let source: String
 
     var body: some View {
-        // Very large strings: skip block + inline Markdown parsing — both run synchronously on
-        // the main actor and stall the UI on huge replies. Plain text suffices at that size.
-        if source.count > 8000 {
-            Text(source)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        } else {
-            let blocks = parseMarkdownBlocks(source)
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(blocks.indices, id: \.self) { i in
-                    MarkdownBlockView(block: blocks[i])
-                }
+        // Parse unconditionally — no length cap. The transcript renders in a `List` (NSTableView-
+        // backed real row recycling), so a long reply is one row whose Markdown is parsed once when
+        // it scrolls into view, not per frame. The earlier freezes were scroll mechanics (animated
+        // LazyVStack re-layout, then scrollPosition/scrollTargetLayout), proven by samples that
+        // showed zero parseMarkdownBlocks calls — capping length here only dropped formatting on
+        // long messages without fixing anything.
+        let blocks = parseMarkdownBlocks(source)
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(blocks.indices, id: \.self) { i in
+                MarkdownBlockView(block: blocks[i])
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        // Opens the lines up to ~1.55 (SF's default leading is a cramped ~1.17), mirroring
+        // web's `.md { line-height: 1.6 }`. Propagates to all prose Text; code blocks tighten
+        // it back down to stay dense.
+        .lineSpacing(5)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -82,11 +84,14 @@ private struct MarkdownBlockView: View {
     }
 
     private func headingFont(_ level: Int) -> Font {
+        // Explicit sizes (not semantic tokens) so the scale stays a notch above the 14pt body the
+        // assistant call site sets — otherwise an h4 (`.body` = 13pt) renders smaller than the
+        // prose it heads. Roughly mirrors web's 1.3 / 1.18 / 1.05 em heading ramp.
         switch level {
-        case 1:  return .title2
-        case 2:  return .title3
-        case 3:  return .headline
-        default: return .body
+        case 1:  return .system(size: 20)
+        case 2:  return .system(size: 17)
+        case 3:  return .system(size: 15)
+        default: return .system(size: 14)
         }
     }
 }
@@ -154,6 +159,7 @@ private struct CodeBlockView: View {
         ScrollView(.horizontal, showsIndicators: false) {
             Text(code)
                 .font(.system(.caption, design: .monospaced))
+                .lineSpacing(2)
                 .textSelection(.enabled)
                 .padding(10)
         }
@@ -201,4 +207,15 @@ func inlineMarkdown(_ s: String) -> Text {
         attributed[range].backgroundColor = Color.secondary.opacity(0.2)
     }
     return Text(attributed)
+}
+
+extension Color {
+    /// Long-form transcript ink, matching web's `--text-1` (#1f2329 light / #c9ced5 dark). A hair
+    /// softer and cooler than the system label — over a long reply, full-strength label reads
+    /// harsher, and on dark the system white is brighter than web's muted grey.
+    static let transcriptInk = Color(nsColor: NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            ? NSColor(srgbRed: 0xC9 / 255, green: 0xCE / 255, blue: 0xD5 / 255, alpha: 1)
+            : NSColor(srgbRed: 0x1F / 255, green: 0x23 / 255, blue: 0x29 / 255, alpha: 1)
+    })
 }

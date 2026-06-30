@@ -48,13 +48,24 @@ func setupService(orbitHome string, proxyVars []envVar) error {
 func uninstallService() {
 	switch runtime.GOOS {
 	case "linux":
-		svc := systemdService
+		// Remove this OS user's per-user unit (orbit-runner-<user>); fall back to the
+		// bare legacy name if the user can't be resolved.
+		svc, username := systemdService, ""
+		if u, err := registeringUser(); err == nil {
+			username = u.Username
+			svc = systemdServiceFor(username)
+		}
 		if os.Geteuid() != 0 {
 			fmt.Fprintf(os.Stderr, "note: removing the systemd service needs root — run: sudo systemctl disable --now %s\n", svc)
 			return
 		}
 		runQuiet("systemctl", "disable", "--now", svc)
 		_ = os.Remove("/etc/systemd/system/" + svc + ".service")
+		// Also drop a leftover legacy single-runner unit, but only if it's this user's.
+		if svc != systemdService && unitRunsAsUser(systemdService, username) {
+			runQuiet("systemctl", "disable", "--now", systemdService)
+			_ = os.Remove("/etc/systemd/system/" + systemdService + ".service")
+		}
 		runQuiet("systemctl", "daemon-reload")
 		fmt.Printf("✓ removed the %s service\n", svc)
 	case "darwin":
@@ -79,8 +90,6 @@ func uninstallService() {
 }
 
 func installSystemd(exe, orbitHome, svc string, proxyVars []envVar) error {
-	unitPath := "/etc/systemd/system/" + svc + ".service"
-
 	// The runner — and the `claude` processes it spawns — should operate as the
 	// user who ran `orbit register`, not root, so files and git ops are owned by
 	// that user and claude reads that user's ~/.claude login.
@@ -89,6 +98,14 @@ func installSystemd(exe, orbitHome, svc string, proxyVars []envVar) error {
 		return fmt.Errorf("cannot determine the user to run the service as: %w", err)
 	}
 	grp := primaryGroup(u)
+
+	// One runner per OS user, not per machine: name the unit after the user so two
+	// users on one host run independent services instead of overwriting a single
+	// system-wide unit. `svc` (the bare "orbit-runner") is the legacy pre-naming name,
+	// kept only to migrate an older single-runner install below.
+	legacySvc := svc
+	svc = systemdServiceFor(u.Username)
+	unitPath := "/etc/systemd/system/" + svc + ".service"
 
 	// systemd gives services a minimal PATH and does not source the user's shell,
 	// so the `claude` CLI (installed in ~/.local/bin) isn't found. Bake in the
@@ -101,7 +118,7 @@ func installSystemd(exe, orbitHome, svc string, proxyVars []envVar) error {
 	}
 
 	unit := fmt.Sprintf(`[Unit]
-Description=Orbit runner
+Description=Orbit runner (%s)
 After=network-online.target
 Wants=network-online.target
 
@@ -124,31 +141,35 @@ Environment=PATH=%s
 %s
 [Install]
 WantedBy=multi-user.target
-`, u.Username, grp, exe, u.HomeDir, orbitHome, pathEnv, systemdProxyEnv(proxyVars))
+`, u.Username, u.Username, grp, exe, u.HomeDir, orbitHome, pathEnv, systemdProxyEnv(proxyVars))
 
-	// Writing the unit + enabling it needs root. When we aren't root, do just
-	// those steps via sudo (prompts once) so `orbit register` ends with a live
-	// service without a separate command.
-	if os.Geteuid() == 0 {
+	// Writing the unit + enabling it needs root. When we aren't root, run the install
+	// step and every systemctl call via sudo (prompts once) so `orbit register` ends
+	// with a live service without a separate command.
+	root := os.Geteuid() == 0
+	var sudo string
+	if !root {
+		s, err := exec.LookPath("sudo")
+		if err != nil || !interactive() {
+			return fmt.Errorf("installing the systemd service needs root: write %s then run `systemctl enable %s && systemctl restart %s`", unitPath, svc, svc)
+		}
+		sudo = s
+		fmt.Printf("\nInstalling the %s service needs root — you may be prompted for your password.\n", svc)
+	}
+	// systemctl, as root directly or via sudo.
+	sctl := func(args ...string) error {
+		if root {
+			return run("systemctl", args...)
+		}
+		return run(sudo, append([]string{"systemctl"}, args...)...)
+	}
+
+	// Write the unit file (root writes it directly; non-root installs it via sudo).
+	if root {
 		if err := os.WriteFile(unitPath, []byte(unit), 0o644); err != nil {
 			return fmt.Errorf("failed to write %s: %w", unitPath, err)
 		}
-		if err := run("systemctl", "daemon-reload"); err != nil {
-			return errors.New("systemctl daemon-reload failed — is this a systemd host?")
-		}
-		if err := run("systemctl", "enable", "--now", svc); err != nil {
-			return errors.New("systemctl enable failed — is this a systemd host?")
-		}
-		// Dropping privileges to another user: hand them the runner's config + run
-		// scratch so the service (now that user) can read/write them.
-		if u.Uid != "0" {
-			_ = run("chown", "-R", u.Username+":"+grp, orbitHome)
-		}
 	} else {
-		sudo, err := exec.LookPath("sudo")
-		if err != nil || !interactive() {
-			return fmt.Errorf("installing the systemd service needs root: write %s then run `systemctl enable --now %s`", unitPath, svc)
-		}
 		tmp, err := os.CreateTemp("", svc+"-*.service")
 		if err != nil {
 			return err
@@ -160,21 +181,90 @@ WantedBy=multi-user.target
 			return err
 		}
 		tmp.Close()
-		fmt.Printf("\nInstalling the %s service needs root — you may be prompted for your password.\n", svc)
 		if err := run(sudo, "install", "-m", "0644", tmpPath, unitPath); err != nil {
 			return fmt.Errorf("failed to install %s", unitPath)
 		}
-		if err := run(sudo, "systemctl", "daemon-reload"); err != nil {
-			return errors.New("systemctl daemon-reload failed")
-		}
-		if err := run(sudo, "systemctl", "enable", "--now", svc); err != nil {
-			return errors.New("systemctl enable failed")
-		}
 	}
+
+	// Migrate a pre-naming install: older orbit used a single `orbit-runner` unit. If
+	// it's this same user's, stop + remove it so we don't double-run (the old one would
+	// 401 forever on its now-rotated token). A legacy unit owned by a different user is
+	// that user's runner — leave it.
+	migrateLegacyUnit(sctl, root, sudo, legacySvc, svc, u.Username)
+
+	if err := sctl("daemon-reload"); err != nil {
+		return errors.New("systemctl daemon-reload failed — is this a systemd host?")
+	}
+	if err := sctl("enable", svc); err != nil {
+		return errors.New("systemctl enable failed — is this a systemd host?")
+	}
+	// Dropping privileges to another user: hand them the runner's config + run scratch
+	// so the service (now that user) can read/write them. Do this before the (re)start
+	// below so the service comes up able to read the new config. Only when we're root —
+	// a non-root register already runs as the owning user.
+	if root && u.Uid != "0" {
+		_ = run("chown", "-R", u.Username+":"+grp, orbitHome)
+	}
+	// restart, not just start: a re-register rewrites config.json with a freshly issued
+	// credential, but `enable --now`/`start` is a no-op on an already-running unit — the
+	// live runner would keep its stale in-memory token and 401 until restarted. restart
+	// starts a stopped unit and replaces a running one.
+	if err := sctl("restart", svc); err != nil {
+		return errors.New("systemctl restart failed — is this a systemd host?")
+	}
+
 	fmt.Printf("\n✓ %s service installed and started as user %q.\n"+
 		"  Status:  systemctl status %s\n"+
 		"  Logs:    journalctl -u %s -f\n", svc, u.Username, svc, svc)
 	return nil
+}
+
+// systemdServiceFor returns the per-OS-user runner unit name (e.g. "orbit-runner-alice"),
+// so different users on one host get independent services. Characters a systemd unit name
+// disallows are mapped to '_'.
+func systemdServiceFor(username string) string {
+	var b strings.Builder
+	b.WriteString(systemdService)
+	b.WriteByte('-')
+	for _, r := range username {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('_')
+		}
+	}
+	return b.String()
+}
+
+// migrateLegacyUnit removes the pre-naming single `orbit-runner` unit when it belongs to
+// the user we're installing a per-user unit for, so the two don't double-run. No-op when
+// the new name is the legacy name, the legacy unit is absent, or it runs as a different
+// user (that's their runner).
+func migrateLegacyUnit(sctl func(...string) error, root bool, sudo, legacySvc, newSvc, username string) {
+	if newSvc == legacySvc || !unitRunsAsUser(legacySvc, username) {
+		return
+	}
+	_ = sctl("disable", "--now", legacySvc)
+	legacyPath := "/etc/systemd/system/" + legacySvc + ".service"
+	if root {
+		_ = os.Remove(legacyPath)
+	} else {
+		_ = run(sudo, "rm", "-f", legacyPath)
+	}
+}
+
+// unitRunsAsUser reports whether the given systemd unit exists and its User= is username.
+// Used to decide whether a legacy `orbit-runner` unit is safe to migrate/remove on behalf
+// of that user, without disturbing another user's runner.
+func unitRunsAsUser(svc, username string) bool {
+	if username == "" {
+		return false
+	}
+	if _, err := os.Stat("/etc/systemd/system/" + svc + ".service"); err != nil {
+		return false
+	}
+	out, _ := exec.Command("systemctl", "show", svc+".service", "-p", "User", "--value").Output()
+	return strings.TrimSpace(string(out)) == username
 }
 
 // registeringUser is the account the runner service should run as: the human who

@@ -7,13 +7,13 @@ import OrbitKit
 /// `MenuBar.summary`).
 struct MenuBarContent: View {
     @Environment(AppModel.self) private var model
-    @EnvironmentObject private var updater: UpdaterModel
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if !model.signedIn {
                 Text("Not signed in").foregroundStyle(.secondary)
                 Button("Open Orbit") { activate() }
+                    .buttonStyle(MenuRowButtonStyle())
             } else {
                 Text(headline).font(.headline)
                 Divider()
@@ -24,23 +24,32 @@ struct MenuBarContent: View {
                         Button { open(item.route) } label: {
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(item.title).lineLimit(1)
-                                Text(item.subtitle).font(.caption).foregroundStyle(.secondary)
+                                // `.opacity` (not `.secondary`) so the subtitle tracks the row's
+                                // foreground and dims to white-on-accent when the row highlights.
+                                Text(item.subtitle).font(.caption).opacity(0.6)
                             }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .contentShape(Rectangle())
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(MenuRowButtonStyle())
                     }
                 }
-                Divider()
-                Button("Open Orbit") { activate() }
+                if let control = model.runnerControl {
+                    Divider()
+                    RunnerTraySection(control: control)
+                }
             }
             Divider()
-            Button("Check for Updates…") { updater.checkForUpdates() }
-                .disabled(!updater.canCheckForUpdates)
-            Toggle("Receive beta updates", isOn: $updater.betaChannel)
-                .toggleStyle(.checkbox)
-            Button("Quit Orbit") { NSApp.terminate(nil) }
+            // Native menu-item-style Quit row (à la OrbStack): full-width row with the ⌘Q hint
+            // trailing and an accent hover highlight. ⌘Q itself is already wired by SwiftUI's
+            // standard app menu. The ⌘Q opacity (not `.secondary`) lets it track the row's
+            // foreground so it turns white-dim when the row highlights.
+            Button { NSApp.terminate(nil) } label: {
+                HStack(spacing: 8) {
+                    Text("Quit Orbit")
+                    Spacer(minLength: 12)
+                    Text("⌘Q").opacity(0.55)
+                }
+            }
+            .buttonStyle(MenuRowButtonStyle())
         }
         .padding(12)
         .frame(width: 300)
@@ -58,6 +67,79 @@ struct MenuBarContent: View {
     }
 
     private func activate() {
+        NSApp.activate(ignoringOtherApps: true)
+    }
+}
+
+/// A native-menu-style row: transparent at rest, accent highlight + white text on hover, like a
+/// real `NSMenuItem`. The `.window`-style `MenuBarExtra` (which we need for the runner controls)
+/// doesn't get AppKit's free menu hover highlight, so `.buttonStyle(.plain)` rows feel dead —
+/// this restores it. Nested `Row` carries the hover `@State`, since a ButtonStyle struct can't.
+struct MenuRowButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Row(configuration: configuration)
+    }
+
+    private struct Row: View {
+        let configuration: Configuration
+        @State private var hovering = false
+
+        var body: some View {
+            configuration.label
+                .padding(.horizontal, 6)
+                .padding(.vertical, 4)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .foregroundStyle(hovering ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+                .background(
+                    RoundedRectangle(cornerRadius: 5)
+                        .fill(hovering ? Color.accentColor : .clear)
+                )
+                .contentShape(Rectangle())
+                .opacity(configuration.isPressed ? 0.7 : 1)
+                .onHover { hovering = $0 }
+        }
+    }
+}
+
+/// The local-runner status block in the menu-bar dropdown — the runner's home now that it's off the
+/// window toolbar. Glanceable state + Start/Stop/Restart for the runner on this Mac, plus "Manage…"
+/// for the detailed window (log + enroll). Refreshes its launchd/server state each time the menu
+/// opens. Hidden entirely when this Mac hosts no runner config (only "Set up…" remains).
+private struct RunnerTraySection: View {
+    let control: RunnerControl
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Runner").font(.caption).foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                Circle().fill(control.status.running ? .green : .secondary).frame(width: 8, height: 8)
+                Text(control.hasLocalRunner ? (control.config?.name ?? "Runner") : "No runner on this Mac")
+                    .fontWeight(.medium).lineLimit(1)
+                Spacer(minLength: 4)
+                Text(LocalRunnerStatus.line(hasConfig: control.hasLocalRunner, installed: control.serviceInstalled, status: control.status))
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            if control.hasLocalRunner {
+                HStack(spacing: 6) {
+                    Button("Start") { Task { await control.start() } }.disabled(control.status.running)
+                    Button("Stop") { Task { await control.stop() } }.disabled(!control.status.running)
+                    Button("Restart") { Task { await control.restart() } }.disabled(!control.status.running)
+                    Spacer(minLength: 0)
+                    Button("Manage…") { openManager() }
+                }
+                .controlSize(.small)
+            } else {
+                Button("Set up runner…") { openManager() }
+                    .controlSize(.small)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .task { await control.refresh() }
+    }
+
+    private func openManager() {
+        openWindow(id: OrbitApp.runnerWindowID)
         NSApp.activate(ignoringOtherApps: true)
     }
 }

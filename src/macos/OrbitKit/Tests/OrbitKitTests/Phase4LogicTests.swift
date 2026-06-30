@@ -63,6 +63,50 @@ final class Phase4LogicTests: XCTestCase {
         XCTAssertEqual(Launchctl.kickstartRestart(uid: 501), ["kickstart", "-k", "gui/501/com.orbit.runner"])
     }
 
+    func testRunnerStatusLine() {
+        XCTAssertEqual(LocalRunnerStatus.line(hasConfig: false, installed: false, status: .notLoaded),
+                       "Not set up on this Mac")
+        // Enrolled but no plist on disk → genuinely not installed.
+        XCTAssertEqual(LocalRunnerStatus.line(hasConfig: true, installed: false, status: .notLoaded),
+                       "Service not installed")
+        // Installed (plist exists) but not running → "Stopped", not "not installed".
+        XCTAssertEqual(LocalRunnerStatus.line(hasConfig: true, installed: true, status: .notLoaded), "Stopped")
+        XCTAssertEqual(LocalRunnerStatus.line(hasConfig: true, installed: false,
+                       status: ServiceStatus(loaded: true, pid: nil, lastExitCode: 0)), "Stopped")
+        XCTAssertEqual(LocalRunnerStatus.line(hasConfig: true, installed: true,
+                       status: ServiceStatus(loaded: true, pid: 832, lastExitCode: 0)), "Running · pid 832")
+    }
+
+    // MARK: bin path + launchd plist builder + PATH assembly
+
+    func testRunnerBinPath() {
+        let p = RunnerPaths.resolve(orbitHome: nil, userHome: "/Users/me")
+        XCTAssertEqual(p.binFile.path, "/Users/me/.orbit/bin/orbit")
+    }
+
+    func testLaunchdPlistContents() {
+        let plist = LaunchdPlist.make(label: "com.orbit.runner", programPath: "/Users/me/.orbit/bin/orbit",
+                                      orbitHome: "/Users/me/.orbit", home: "/Users/me",
+                                      path: "/usr/local/bin:/usr/bin:/bin", logPath: "/Users/me/.orbit/runner.log")
+        XCTAssertTrue(plist.contains("<key>Label</key><string>com.orbit.runner</string>"))
+        XCTAssertTrue(plist.contains("<string>/Users/me/.orbit/bin/orbit</string>"))
+        XCTAssertTrue(plist.contains("<string>run</string>"))
+        XCTAssertTrue(plist.contains("<key>ORBIT_HOME</key><string>/Users/me/.orbit</string>"))
+        XCTAssertTrue(plist.contains("<key>RunAtLoad</key><true/>"))
+        XCTAssertTrue(plist.contains("<key>KeepAlive</key><true/>"))
+        XCTAssertTrue(plist.contains("<key>StandardOutPath</key><string>/Users/me/.orbit/runner.log</string>"))
+    }
+
+    func testLoginPathAssembly() {
+        // Empty login PATH → sane default with claude/Homebrew dirs prepended.
+        let a = LoginPath.assemble(loginPath: nil, home: "/Users/me")
+        XCTAssertTrue(a.hasPrefix("/Users/me/.local/bin:/opt/homebrew/bin:/usr/local/bin:"))
+        XCTAssertTrue(a.contains("/usr/bin"))
+        // Dirs already on the login PATH aren't duplicated; the missing preferred ones are prepended.
+        let b = LoginPath.assemble(loginPath: "/opt/homebrew/bin:/usr/bin:/bin", home: "/Users/me")
+        XCTAssertEqual(b, "/Users/me/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin")
+    }
+
     // MARK: log tail
 
     func testLogTail() {

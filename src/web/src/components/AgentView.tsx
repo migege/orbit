@@ -31,7 +31,14 @@ import { useMatch, useNavigate } from 'react-router-dom';
 import { decodeId, encodeId } from '../lib/idCodec';
 import { useIsMobile } from '../lib/useMediaQuery';
 import { agentsQuery, sessionQuery, sessionsQuery } from '../lib/queries';
-import { DEFAULT_MODEL, MODEL_OPTIONS, supportsAuto } from '../lib/agentDefaults';
+import {
+  DEFAULT_MODEL,
+  DEFAULT_MODEL_BY_PROVIDER,
+  effortOptionsForProvider,
+  modelOptionsForProvider,
+  normalizeEffortForProvider,
+  supportsAuto,
+} from '../lib/agentDefaults';
 import { SessionOutputs } from './SessionOutputs';
 import { BackgroundShellsTray } from './BackgroundShellsTray';
 import {
@@ -125,15 +132,6 @@ const PERMISSION_TO_MODE: Record<string, string> = Object.fromEntries(
   Object.entries(MODE_TO_PERMISSION).map(([label, value]) => [value, label]),
 );
 const MODE_OPTIONS = Object.keys(MODE_TO_PERMISSION);
-// Claude effort level. '' = Default (omit --effort, model picks its own).
-const EFFORT_OPTIONS = [
-  { value: '', label: 'Default' },
-  { value: 'low', label: 'Low' },
-  { value: 'medium', label: 'Medium' },
-  { value: 'high', label: 'High' },
-  { value: 'xhigh', label: 'xHigh' },
-  { value: 'max', label: 'Max' },
-];
 // Last-picked reasoning effort, remembered across reloads so a new session starts
 // at the effort you last chose instead of resetting to Default. ('' = Default.)
 const EFFORT_KEY = 'orbit.effort';
@@ -537,6 +535,9 @@ export function AgentView({ runner }: { runner: Runner }) {
   // an instant paint and resumes the SSE just past the cached seq, instead of replaying
   // each session's full history from seq 0 on every visit.
   const transcriptCache = useRef<Map<string, RunEvent[]>>(new Map());
+  // Re-opens the transcript SSE after a `final` event paused it and the session was
+  // resumed in place (set by the SSE effect, called by the liveness watcher below).
+  const resumeStreamRef = useRef<(() => void) | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null); // the left session-list column, for arrow-key scrolling
   // The user's prompt for the turn currently in view, surfaced as a sticky bar when a long
@@ -793,9 +794,10 @@ export function AgentView({ runner }: { runner: Runner }) {
   // liveness, not the polled object, so the 4s refetch can't clobber a user's edit.
   useEffect(() => {
     if (!selected || live) return;
-    setModel(selected.model ?? DEFAULT_MODEL);
+    const provider = selected.provider ?? sessionDetailQ.data?.provider ?? 'claude';
+    setModel(selected.model ?? DEFAULT_MODEL_BY_PROVIDER[provider] ?? DEFAULT_MODEL);
     setMode(PERMISSION_TO_MODE[selected.permissionMode ?? 'dontAsk'] ?? 'Default');
-    setEffort(selected.effort ?? '');
+    setEffort(normalizeEffortForProvider(provider, selected.effort ?? ''));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected?.id, live]);
 
@@ -803,17 +805,25 @@ export function AgentView({ runner }: { runner: Runner }) {
   // picked agent's configured default (set on the Runner page). A selected
   // session instead seeds from its own stored config (effect above).
   useEffect(() => {
-    if (selectedId || !pickedAgent?.model) return;
-    setModel(pickedAgent.model);
-  }, [selectedId, pickedAgent?.id, pickedAgent?.model]);
+    if (selectedId || !pickedAgent) return;
+    setModel(
+      pickedAgent.model ??
+        DEFAULT_MODEL_BY_PROVIDER[pickedAgent.provider ?? 'claude'] ??
+        DEFAULT_MODEL,
+    );
+  }, [selectedId, pickedAgent?.id, pickedAgent?.model, pickedAgent?.provider]);
 
   // Effort has no agent-level default, so a fresh session restores the last-picked
   // effort from localStorage (see EFFORT_KEY) instead. Keeps the pill consistent with
   // Model/Mode when switching back to compose after viewing a resumed session.
   useEffect(() => {
     if (selectedId) return;
-    setEffort(localStorage.getItem(EFFORT_KEY) ?? '');
-  }, [selectedId]);
+    const provider = pickedAgent?.provider ?? 'claude';
+    const stored = localStorage.getItem(EFFORT_KEY) ?? '';
+    const normalized = normalizeEffortForProvider(provider, stored);
+    if (normalized !== stored) localStorage.setItem(EFFORT_KEY, normalized);
+    setEffort(normalized);
+  }, [selectedId, pickedAgent?.provider]);
 
   // Likewise seed the Mode pill from the picked agent's configured default. Without
   // this the pill stays at the hardcoded 'Default', so a new session always sends
@@ -893,6 +903,10 @@ export function AgentView({ runner }: { runner: Runner }) {
     let es: EventSource | null = null;
     let retry: ReturnType<typeof setTimeout> | undefined;
     let closed = false;
+    // Set when a `final` event arrives: the connection is dropped (don't hold an idle
+    // stream to a finished session) but NOT permanently — unlike `closed`, a paused
+    // stream can be re-opened in place when the session resumes (see resumeStreamRef).
+    let paused = false;
     let fails = 0;
     // Resume just past what's cached so only the gap is fetched, not the whole history.
     let lastSeq = cached.reduce((m, e) => (isSeq(e.seq) ? Math.max(m, e.seq) : m), 0);
@@ -919,8 +933,16 @@ export function AgentView({ runner }: { runner: Runner }) {
           lastSeq = Math.max(lastSeq, ev.seq);
         }
         if (ev.payload?.final) {
-          stop();
-          return; // session finalized — nothing more to stream
+          // Session finalized (turn-complete failure, idle-recycle to PARKED, or a user
+          // end). Drop the live connection so we don't hold an idle stream — but a
+          // PARKED/ended session is resumable IN PLACE (same selectedId, so this effect
+          // doesn't re-run), and a resumed turn's events would be published to a stream
+          // we'd have permanently closed, leaving the open transcript stale while the
+          // polled sidebar advances. So pause instead of closing for good; the liveness
+          // watcher re-opens it (replaying the missed seq) once the session is live again.
+          paused = true;
+          es?.close();
+          return;
         }
         // Streaming increment: append to the in-progress assistant bubble. Don't
         // dedup or store it — it's pure animation; the trailing `assistant` event
@@ -993,12 +1015,21 @@ export function AgentView({ runner }: { runner: Runner }) {
       };
       es.onerror = () => {
         es?.close();
-        if (closed) return;
+        if (closed || paused) return;
         // Auto-reconnect, resuming after lastSeq — survives long idle / redeploy
         // drops (the seq dedup set makes any replay overlap harmless).
         if (++fails > 12) return;
         retry = setTimeout(connect, Math.min(2000 * fails, 15000) + Math.random() * 500);
       };
+    };
+    // Bridge for the liveness watcher: re-open a stream paused by a `final` event once the
+    // session is live again. No-op unless paused (so it's safe to call on any status tick);
+    // reconnect resumes from lastSeq, so the server replays the turns missed while paused.
+    resumeStreamRef.current = () => {
+      if (closed || !paused) return;
+      paused = false;
+      fails = 0;
+      connect();
     };
     // Debounce the network work: scrubbing the list with the arrow keys shouldn't open
     // (and tear down) a connection — nor re-fetch approvals/queued turns — for each
@@ -1018,6 +1049,7 @@ export function AgentView({ runner }: { runner: Runner }) {
       connect();
     }, SWITCH_DEBOUNCE_MS);
     return () => {
+      resumeStreamRef.current = null;
       clearTimeout(start);
       stop();
     };
@@ -1029,6 +1061,15 @@ export function AgentView({ runner }: { runner: Runner }) {
     if (runStatus === 'AWAITING_INPUT') setIdle(true);
     else if (runStatus === 'RUNNING') setIdle(false);
   }, [runStatus]);
+
+  // A finalized session can be resumed in place (same selectedId, so the SSE effect above
+  // doesn't re-run and its stream was paused on `final`). When the polled status shows it
+  // live again, re-open the paused stream so the open transcript catches the resumed turn —
+  // otherwise only the sidebar (separately polled) would advance and the conversation would
+  // look stuck until a manual refresh.
+  useEffect(() => {
+    if (live) resumeStreamRef.current?.();
+  }, [live]);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -1053,12 +1094,12 @@ export function AgentView({ runner }: { runner: Runner }) {
     behavior: 'allow' | 'deny',
     answers?: Record<string, string[]>,
     message?: string,
-    rememberRule?: PermissionRule,
+    rememberRules?: PermissionRule[],
   ): Promise<void> => {
     if (!selectedId) return;
     setApprovals((prev) => prev.filter((x) => x.id !== approvalId));
     try {
-      await decideApproval(selectedId, approvalId, behavior, message, answers, rememberRule);
+      await decideApproval(selectedId, approvalId, behavior, message, answers, rememberRules);
     } catch {
       listApprovals(selectedId)
         .then(setApprovals)
@@ -1100,22 +1141,26 @@ export function AgentView({ runner }: { runner: Runner }) {
         // send keeps it and an edited Mode/Model/Effort is re-applied on resume.
         // A `!cmd` revives via a shell turn: claude --resumes (context restored) and the
         // runner runs the command, buffering its output for the next message.
+        const provider = selected.provider ?? sessionDetailQ.data?.provider ?? 'claude';
+        const wireEffort = normalizeEffortForProvider(provider, effort);
         const res = await resumeSession(
           selected.id,
           content,
-          { model, permissionMode: MODE_TO_PERMISSION[mode], effort: effort || undefined },
+          { model, permissionMode: MODE_TO_PERMISSION[mode], effort: wireEffort || undefined },
           attachmentIds,
           shell ? 'shell' : undefined,
         );
         return { id: selected.id, turnId: res.turnId };
       }
+      const provider = pickedAgent?.provider ?? 'claude';
+      const wireEffort = normalizeEffortForProvider(provider, effort);
       const created = await createInteractiveSession({
         prompt: content,
         assignedRunnerId: runner.id,
         agentId,
         model,
         permissionMode: MODE_TO_PERMISSION[mode],
-        effort: effort || undefined,
+        effort: wireEffort || undefined,
         attachmentIds,
         // A `!cmd` draft seeds the session's first turn as a shell command, not a message.
         shell,
@@ -1583,10 +1628,20 @@ export function AgentView({ runner }: { runner: Runner }) {
   // A LIVE session's pills show its stored choice (editable any time the runner is
   // online — see configEditable); otherwise they're editable and reflect local state.
   const shownModel: string = live ? (selected.model ?? DEFAULT_MODEL) : model;
+  const shownProvider: string = selected
+    ? (selected.provider ??
+        sessionDetailQ.data?.provider ??
+        sessionDetailQ.data?.agent?.provider ??
+        'claude')
+    : (pickedAgent?.provider ?? 'claude');
   const shownMode: string = live
     ? (PERMISSION_TO_MODE[selected.permissionMode ?? 'dontAsk'] ?? 'Default')
     : mode;
-  const shownEffort: string = live ? (selected.effort ?? '') : effort;
+  const shownEffort: string = normalizeEffortForProvider(
+    shownProvider,
+    live ? (selected.effort ?? '') : effort,
+  );
+  const shownEffortOptions = effortOptionsForProvider(shownProvider);
   // Auto is offered only on models that support it (see supportsAuto); the option
   // is greyed out otherwise so an unsupported model can't pick a mode claude rejects.
   const autoOk = supportsAuto(shownModel);
@@ -2381,7 +2436,7 @@ export function AgentView({ runner }: { runner: Runner }) {
                     if (drop) setMode('Default');
                   }
                 }}
-                options={MODEL_OPTIONS}
+                options={modelOptionsForProvider(shownProvider)}
                 disabled={!configEditable}
                 popupMatchSelectWidth={false}
               />
@@ -2395,11 +2450,12 @@ export function AgentView({ runner }: { runner: Runner }) {
                 suffixIcon={null}
                 value={shownEffort}
                 onChange={(v) => {
-                  localStorage.setItem(EFFORT_KEY, v);
-                  if (live) configMut.mutate({ effort: v });
-                  else setEffort(v);
+                  const normalized = normalizeEffortForProvider(shownProvider, v);
+                  localStorage.setItem(EFFORT_KEY, normalized);
+                  if (live) configMut.mutate({ effort: normalized });
+                  else setEffort(normalized);
                 }}
-                options={EFFORT_OPTIONS}
+                options={shownEffortOptions}
                 disabled={!configEditable}
                 popupMatchSelectWidth={false}
               />

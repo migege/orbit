@@ -73,6 +73,9 @@ final class AppModel {
     private(set) var admin: AdminModel?
     /// Warm cache of open consoles + their on-disk transcript store, scoped to this instance.
     private(set) var consoleRegistry: ConsoleRegistry?
+    /// The local runner this Mac may host. Shared between the menu-bar tray (status + quick
+    /// Start/Stop) and the runner-manager window (log + enroll). Created per instance.
+    private(set) var runnerControl: RunnerControl?
 
     private func configure(_ url: URL) {
         baseURL = url
@@ -83,6 +86,7 @@ final class AppModel {
         admin = AdminModel(baseURL: url, tokenStore: tokenStore)
         consoleRegistry = ConsoleRegistry(baseURL: url, tokenStore: tokenStore,
                                           store: ConsoleRegistry.defaultStore(for: url))
+        runnerControl = RunnerControl(baseURL: url, tokenStore: tokenStore)
     }
 
     // MARK: settings (preferences + password live on the user; no separate store needed)
@@ -166,6 +170,10 @@ final class AppModel {
     func startPolling() {
         guard pollTask == nil else { return }
         pollTask = Task { @MainActor [weak self] in
+            // A restored-token launch sets `signedIn` in `init` without going through `login()`, so
+            // `user` is still nil — prime it once so the sidebar account footer shows the real name
+            // instead of the "Account" placeholder.
+            if let self, self.user == nil { self.user = try? await self.api?.me() }
             while !Task.isCancelled {
                 await self?.loadSessions()
                 if let self { self.consoleRegistry?.flush(self.activeConsoleSessionID) }
@@ -219,6 +227,92 @@ final class AppModel {
     func agentID(for sessionID: String) -> String? {
         guard let s = sessions.first(where: { $0.id == sessionID }) else { return nil }
         return s.agent?.id ?? s.agentId
+    }
+
+    // MARK: keyboard commands (⌘N new session · ⌘1…⌘9 switch agent)
+
+    /// Agents in sidebar display order — the order ⌘1…⌘9 index into (and the sidebar renders).
+    /// Empty until the agent list loads.
+    var orderedAgents: [Agent] { AgentListLogic.ordered(agents?.items ?? []) }
+
+    /// agentID → 0-based position for the first nine agents, so the sidebar can show a faint "⌘N"
+    /// hint on each shortcut-addressable row. Agents past the ninth get none.
+    var agentShortcutIndex: [String: Int] {
+        var map: [String: Int] = [:]
+        for (i, a) in orderedAgents.prefix(9).enumerated() { map[a.id] = i }
+        return map
+    }
+
+    /// The agent ⌘N opens a new session for: the one selected in the Agents section, else the agent
+    /// behind the session open in Active, else the first agent. nil only when no agents exist — ⌘N
+    /// is disabled then.
+    var currentAgentID: String? {
+        let all = orderedAgents
+        guard !all.isEmpty else { return nil }
+        if selectedSection == .agents, let id = selectedAgentID, all.contains(where: { $0.id == id }) {
+            return id
+        }
+        if let sid = activeConsoleSessionID ?? selectedSessionID, let aid = agentID(for: sid),
+           all.contains(where: { $0.id == aid }) {
+            return aid
+        }
+        return all.first?.id
+    }
+
+    /// ⌘N: open the draft composer for `currentAgentID`, navigating into the Agents section.
+    /// Mirrors the "New session" button in `AgentPanes`.
+    func newSessionInCurrentAgent() {
+        guard let id = currentAgentID else { return }
+        selectedSection = .agents
+        selectedAgentID = id
+        selectedAgentSessionID = nil
+        composingAgentSession = true
+    }
+
+    /// ⌘1…⌘9: select the agent at `index` (0-based) in sidebar order, navigating into the Agents
+    /// section. Out of range (fewer agents than the digit pressed) is a no-op. Mirrors the sidebar's
+    /// agent-selection binding.
+    func selectAgent(at index: Int) {
+        let all = orderedAgents
+        guard all.indices.contains(index) else { return }
+        let id = all[index].id
+        selectedSection = .agents
+        if selectedAgentID != id {
+            selectedAgentID = id
+            selectedAgentSessionID = nil
+            composingAgentSession = false
+        }
+    }
+
+    /// The session whose console fills the detail pane right now — the ⌘D ("Complete Session")
+    /// target. In Active that's the mounted console; in Agents it's the selected agent session
+    /// (nil while drafting a new one). nil in every other section, which disables the command.
+    var currentSessionID: String? {
+        switch selectedSection {
+        case .active: return activeConsoleSessionID ?? selectedSessionID
+        case .agents: return composingAgentSession ? nil : selectedAgentSessionID
+        default:      return nil
+        }
+    }
+
+    /// ⌘D: complete (archive) the open session — the keyboard twin of the web's ✓ on a session row.
+    /// The server's archive ends a live session first (reason COMPLETED), so this works whether the
+    /// session is running or already idle. Clears the selection so the console pane drops the
+    /// archived session, then refreshes the Active list.
+    func completeCurrentSession() {
+        guard let api, let id = currentSessionID else { return }
+        Task { @MainActor in
+            do {
+                try await api.archiveSession(id)
+            } catch {
+                errorText = "Couldn't complete the session."
+                return
+            }
+            if selectedSessionID == id { selectedSessionID = nil }
+            if activeConsoleSessionID == id { activeConsoleSessionID = nil }
+            if selectedAgentSessionID == id { selectedAgentSessionID = nil }
+            await loadSessions()
+        }
     }
 
     // MARK: routing + notification intents

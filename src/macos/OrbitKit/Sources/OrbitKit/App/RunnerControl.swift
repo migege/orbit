@@ -19,6 +19,10 @@ public struct RunnerPaths: Equatable, Sendable {
 
     public var configFile: URL { home.appendingPathComponent("config.json") }
     public var logFile: URL { home.appendingPathComponent("runner.log") }
+    /// `<ORBIT_HOME>/bin/orbit` — where the app installs the runner binary it bundles, so the
+    /// launchd service runs a stable, user-writable copy. Keeping it out of the signed .app lets
+    /// the runner self-update this file without breaking the app's signature.
+    public var binFile: URL { home.appendingPathComponent("bin/orbit") }
 
     public static let launchdLabel = "com.orbit.runner"
 
@@ -99,6 +103,20 @@ public struct ServiceStatus: Equatable, Sendable {
     public static let notLoaded = ServiceStatus(loaded: false, pid: nil, lastExitCode: nil)
 }
 
+/// Compact, glanceable status text for the local runner. Shared by the menu-bar tray and the
+/// runner manager so both phrase the same launchd states identically.
+public enum LocalRunnerStatus {
+    /// `installed` is whether the LaunchAgent plist exists on disk — distinct from whether it's
+    /// currently loaded/running, so a stopped-but-installed service no longer reads as "not
+    /// installed" (which it did before the app could install the service itself).
+    public static func line(hasConfig: Bool, installed: Bool, status: ServiceStatus) -> String {
+        guard hasConfig else { return "Not set up on this Mac" }
+        if status.running { return "Running · pid \(status.pid ?? 0)" }
+        if installed || status.loaded { return "Stopped" }
+        return "Service not installed"
+    }
+}
+
 /// `launchctl` output parsing + argument-vector builders. The argv builders capture the exact
 /// commands `orbit register`/the app run, so they're verified without a launchd to run them.
 public enum Launchctl {
@@ -122,6 +140,57 @@ public enum Launchctl {
     public static func kickstartRestart(uid: Int) -> [String] { ["kickstart", "-k", "gui/\(uid)/\(label)"] }
     public static func list() -> [String] { ["list"] }
     public static func printService(uid: Int) -> [String] { ["print", "gui/\(uid)/\(label)"] }
+}
+
+/// Builds the runner's LaunchAgent plist. Mirrors `orbit register`'s `installLaunchd` (runner-go):
+/// runs `<orbit> run` with ORBIT_HOME/HOME/PATH baked in (launchd starts agents with a minimal
+/// PATH and no HOME, so the `claude` CLI the runner shells out to wouldn't otherwise be found),
+/// RunAtLoad + KeepAlive, logging to runner.log. Pure string → unit-tested.
+public enum LaunchdPlist {
+    public static func make(label: String, programPath: String, orbitHome: String,
+                            home: String, path: String, logPath: String) -> String {
+        """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+          <key>Label</key><string>\(label)</string>
+          <key>ProgramArguments</key>
+          <array>
+            <string>\(programPath)</string>
+            <string>run</string>
+          </array>
+          <key>EnvironmentVariables</key>
+          <dict>
+            <key>ORBIT_HOME</key><string>\(orbitHome)</string>
+            <key>HOME</key><string>\(home)</string>
+            <key>PATH</key><string>\(path)</string>
+          </dict>
+          <key>RunAtLoad</key><true/>
+          <key>KeepAlive</key><true/>
+          <key>StandardOutPath</key><string>\(logPath)</string>
+          <key>StandardErrorPath</key><string>\(logPath)</string>
+        </dict>
+        </plist>
+        """
+    }
+}
+
+/// Assembles the PATH baked into the launchd service. A Finder-launched app's PATH is the bare
+/// `/usr/bin:/bin:…`, which lacks where `claude`/Homebrew live, so we prepend the common install
+/// dirs (and prefer the user's login-shell PATH when we could read it) — same intent as the CLI's
+/// install-time PATH capture, but the GUI app has no login shell to inherit from.
+public enum LoginPath {
+    /// Dirs the official claude installer / Homebrew use that a GUI app's PATH usually misses.
+    /// `~/.local/bin` is resolved per-user via `home`.
+    public static func assemble(loginPath: String?, home: String) -> String {
+        var base = (loginPath ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if base.isEmpty { base = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin" }
+        let existing = Set(base.split(separator: ":").map(String.init))
+        let prefer = ["\(home)/.local/bin", "/opt/homebrew/bin", "/usr/local/bin"]
+        let missing = prefer.filter { !existing.contains($0) }
+        return (missing + [base]).joined(separator: ":")
+    }
 }
 
 // MARK: - device enrollment DTOs (one-app runner enroll: start → approve → poll → write config)

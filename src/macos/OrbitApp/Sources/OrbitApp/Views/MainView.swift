@@ -7,7 +7,6 @@ import OrbitKit
 /// placeholders filled in by later batches (C Tasks, D Agents, E the rest).
 struct MainView: View {
     @Environment(AppModel.self) private var model
-    @State private var showRunner = false
 
     var body: some View {
         @Bindable var model = model
@@ -21,31 +20,10 @@ struct MainView: View {
         } detail: {
             SectionDetail(section: model.selectedSection)
         }
-        .toolbar {
-            ToolbarItem {
-                Button { showRunner = true } label: {
-                    Label("Local runner", systemImage: "desktopcomputer")
-                }
-                .help("Manage the runner on this Mac")
-            }
-            ToolbarItem(placement: .primaryAction) {
-                Menu {
-                    if let email = model.user?.email { Text(email) }
-                    Button("Sign out", role: .destructive) { model.logout() }
-                } label: {
-                    Label(model.user?.name ?? model.user?.email ?? "Account", systemImage: "person.crop.circle")
-                }
-            }
-        }
         .task { model.startPolling() }
         // Drive the debounced console mount off the list selection (covers arrow-key navigation,
         // clicks, and a restored selection on appear).
         .onChange(of: model.selectedSessionID, initial: true) { _, _ in model.scheduleConsoleActivate() }
-        .sheet(isPresented: $showRunner) {
-            if let url = model.baseURL {
-                RunnerControlPane(baseURL: url, tokenStore: model.tokenStore)
-            }
-        }
     }
 }
 
@@ -97,10 +75,11 @@ struct SectionSidebar: View {
         // Touch the driving fields so Observation re-renders the rail (and re-reads `selection`)
         // when the section/agent changes from outside the sidebar, e.g. a deep-link route.
         _ = (model.selectedSection, model.selectedAgentID)
+        let shortcutIndex = model.agentShortcutIndex   // agentID → ⌘N slot, computed once per render
         return List(selection: selection) {
             ForEach(AppSection.visible(isAdmin: isAdmin)) { section in
                 if section == .agents {
-                    agentsDisclosure
+                    agentsDisclosure(shortcutIndex: shortcutIndex)
                 } else {
                     Label(section.title, systemImage: section.systemImage)
                         .badge(section == .active ? needsYou : 0)   // .badge(0) renders nothing
@@ -109,17 +88,25 @@ struct SectionSidebar: View {
             }
         }
         .navigationTitle("Orbit")
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) {
+                Divider()
+                AccountFooter()
+            }
+            .background(.bar)
+        }
         .task { await model.agents?.load() }
     }
 
-    private var agentsDisclosure: some View {
+    private func agentsDisclosure(shortcutIndex: [String: Int]) -> some View {
         DisclosureGroup(isExpanded: $agentsExpanded) {
             if let agents = model.agents, !agents.items.isEmpty {
                 ForEach(agents.groups) { group in
                     Text(agents.runnerLabel(group.runnerId))
                         .font(.caption).foregroundStyle(.secondary)
                     ForEach(group.agents) { a in
-                        AgentRowView(agent: a).tag(SidebarSelection.agent(a.id))
+                        AgentRowView(agent: a, shortcutIndex: shortcutIndex[a.id])
+                            .tag(SidebarSelection.agent(a.id))
                     }
                 }
             } else {
@@ -129,6 +116,67 @@ struct SectionSidebar: View {
         } label: {
             Label(AppSection.agents.title, systemImage: AppSection.agents.systemImage)
         }
+    }
+}
+
+/// Pinned to the bottom of the sidebar, mirroring the web's `tp-user` footer: a monogram avatar
+/// plus the signed-in user's name. Clicking opens the account menu (email + Sign out) that used to
+/// live in the window toolbar.
+struct AccountFooter: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let display = model.user?.name ?? model.user?.email
+        Menu {
+            // Menu items must be real controls — a bare `Text` gets dropped by AppKit, so the email
+            // rides along as a Section header above the one action.
+            if let email = model.user?.email {
+                Section(email) {
+                    Button("Sign out", role: .destructive) { model.logout() }
+                }
+            } else {
+                Button("Sign out", role: .destructive) { model.logout() }
+            }
+        } label: {
+            HStack(spacing: 10) {
+                AvatarMonogram(name: display)
+                Text(display ?? "Account")
+                    .fontWeight(.semibold)
+                    .lineLimit(1)
+                    .foregroundStyle(.primary)
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        // `.button` style + plain button + hidden indicator renders the custom label as-is (no
+        // chevron, no swallowed label) — unlike `.borderlessButton`, which dropped the whole row.
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+    }
+}
+
+/// Circular initials avatar — the first letter of the name/email, like the web's `Avatar`.
+struct AvatarMonogram: View {
+    let name: String?
+
+    private var initial: String {
+        let trimmed = (name ?? "").trimmingCharacters(in: .whitespaces)
+        return trimmed.isEmpty ? "?" : String(trimmed.first!).uppercased()
+    }
+
+    var body: some View {
+        Circle()
+            .fill(Color.accentColor)
+            .frame(width: 32, height: 32)
+            .overlay(
+                Text(initial)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.white)
+            )
     }
 }
 

@@ -28,9 +28,26 @@ final class RunnerControl {
         self.paths = RunnerEnvironment.paths(environment: ProcessInfo.processInfo.environment,
                                              userHome: NSHomeDirectory())
         self.uid = Int(getuid())
+        // Read the local config up front (a tiny file read) so `hasLocalRunner` is correct on the
+        // first render — the tray shows the runner's name immediately and the manager doesn't flash
+        // its enroll screen before the async `refresh()` lands.
+        self.config = RunnerEnvironment.readConfig(at: paths)
     }
 
     var hasLocalRunner: Bool { config != nil }
+
+    /// Whether the LaunchAgent plist is on disk. Distinct from `status.running`: an installed but
+    /// stopped service still counts as installed (so the UI shows Start, not "Install service").
+    var serviceInstalled: Bool { FileManager.default.fileExists(atPath: paths.plistFile.path) }
+
+    /// The `orbit` runner binary bundled inside the .app (Contents/Resources/orbit). Nil under
+    /// `swift run` (no bundle) — install only works from a real .app. Falls back to the explicit
+    /// Resources path in case `url(forResource:)` misses for a hand-assembled (non-Xcode) bundle.
+    private var bundledRunnerURL: URL? {
+        if let u = Bundle.main.url(forResource: "orbit", withExtension: nil) { return u }
+        let fallback = Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/orbit")
+        return FileManager.default.fileExists(atPath: fallback.path) ? fallback : nil
+    }
 
     /// Re-read config + log, query the service state, and (if enrolled) the server-side record.
     func refresh() async {
@@ -43,7 +60,14 @@ final class RunnerControl {
         }
     }
 
+    /// Start the runner. First run on this Mac: the service isn't installed yet, so install it
+    /// (copy the bundled binary + write the LaunchAgent) — which also starts it. There's no separate
+    /// "Install" step in the UI; Start just does the right thing.
     func start() async {
+        if !serviceInstalled {
+            await installService()
+            return
+        }
         _ = await Self.launchctl(Launchctl.bootstrap(uid: uid, plistPath: paths.plistFile.path))
         await refresh()
     }
@@ -58,9 +82,48 @@ final class RunnerControl {
         await refresh()
     }
 
+    /// Install + start the background runner service entirely from the app — no Terminal. Copies the
+    /// bundled `orbit` binary to a stable, user-writable `~/.orbit/bin/orbit` (so the runner can
+    /// self-update it without touching the signed .app), writes the LaunchAgent plist (the Swift
+    /// port of `orbit register`'s `installLaunchd`), then bootstraps it (RunAtLoad starts it).
+    func installService() async {
+        guard let src = bundledRunnerURL else {
+            message = "Runner binary missing from the app bundle — reinstall Orbit."
+            return
+        }
+        let fm = FileManager.default
+        do {
+            try fm.createDirectory(at: paths.binFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if fm.fileExists(atPath: paths.binFile.path) { try fm.removeItem(at: paths.binFile) }
+            try fm.copyItem(at: src, to: paths.binFile)
+            try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: paths.binFile.path)
+
+            let path = LoginPath.assemble(loginPath: await Self.loginShellPath(), home: NSHomeDirectory())
+            let plist = LaunchdPlist.make(label: RunnerPaths.launchdLabel, programPath: paths.binFile.path,
+                                          orbitHome: paths.home.path, home: NSHomeDirectory(),
+                                          path: path, logPath: paths.logFile.path)
+            try fm.createDirectory(at: paths.plistFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(plist.utf8).write(to: paths.plistFile)
+        } catch {
+            message = "Install failed — \(error.localizedDescription)"
+            return
+        }
+        // bootout any stale instance first so a reinstall replaces it cleanly; bootstrap loads +
+        // starts (RunAtLoad). bootout failing (nothing loaded) is expected and ignored.
+        _ = await Self.launchctl(Launchctl.bootout(uid: uid, plistPath: paths.plistFile.path))
+        let r = await Self.launchctl(Launchctl.bootstrap(uid: uid, plistPath: paths.plistFile.path))
+        await refresh()
+        if status.running {
+            message = "Runner service installed and started."
+        } else {
+            let detail = r.output.trimmingCharacters(in: .whitespacesAndNewlines)
+            message = detail.isEmpty ? "Runner service installed." : "Service installed; launchctl: \(detail)"
+        }
+    }
+
     /// One-app enrollment: start the device flow, self-approve (we're the signed-in user), poll
-    /// for the credential, and write config.json. The launchd *service* (binary + plist) is still
-    /// installed by `orbit register` / install.sh — this gets the credential and seeds config.
+    /// for the credential, write config.json, then install + start the bundled runner service —
+    /// the whole "set up a runner on this Mac" with no Terminal.
     func enroll(name: String) async {
         enrolling = true
         defer { enrolling = false; enrollUserCode = nil }
@@ -83,7 +146,7 @@ final class RunnerControl {
                                            labels: nil, maxConcurrent: 4, workDir: nil)
                     try writeConfig(cfg)
                     config = cfg
-                    message = "Enrolled. Install the runner service to start it (orbit register / install.sh)."
+                    await installService()   // copy the bundled runner, write + load the LaunchAgent
                     return
                 case .expired:
                     message = "Enrollment expired — try again."
@@ -101,6 +164,26 @@ final class RunnerControl {
     private func writeConfig(_ cfg: RunnerConfig) throws {
         try FileManager.default.createDirectory(at: paths.home, withIntermediateDirectories: true)
         try JSONEncoder().encode(cfg).write(to: paths.configFile)
+    }
+
+    /// The user's login-shell PATH (`$SHELL -lc 'printf %s "$PATH"'`), so the launchd service can
+    /// find `claude`/Homebrew tools the Finder-launched app's bare PATH lacks. Nil if it can't be
+    /// read; `LoginPath.assemble` then falls back to a sane default.
+    nonisolated private static func loginShellPath() async -> String? {
+        await Task.detached {
+            let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: shell)
+            process.arguments = ["-lc", "printf %s \"$PATH\""]
+            let pipe = Pipe()
+            process.standardOutput = pipe
+            process.standardError = Pipe()
+            do { try process.run() } catch { return nil }
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            let s = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return (s?.isEmpty ?? true) ? nil : s
+        }.value
     }
 
     /// Run `/bin/launchctl` off the main actor; returns (exit code, combined output).
