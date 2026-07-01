@@ -315,9 +315,10 @@ const sessionLine = (s: any, live: boolean): SessionLine | null => {
 };
 
 // State word for the session header — mirrors StatusIcon's branching (and its tooltip
-// wording) so the glyph and the header label always agree. The archived "Completed"
-// override is list-only, so it's omitted here.
+// wording) so the glyph and the header label always agree.
 function statusLabel(session: any): string {
+  if (session.deletedAt) return 'Deleted';
+  if (session.archivedAt && session.status !== 'FAILED') return 'Completed';
   const status: string = session.status;
   if (status === 'RUNNING')
     return (session.pendingApprovals ?? 0) > 0 ? 'Waiting for approval' : 'Running';
@@ -354,6 +355,12 @@ function statusLabel(session: any): string {
 function StatusIcon({ session, completed }: { session: any; completed?: boolean }) {
   const status: string = session.status;
   const fontSize = 16;
+  if (session.deletedAt)
+    return (
+      <Tooltip title="Deleted">
+        <MinusCircleOutlined style={{ color: 'var(--text-3)', fontSize }} />
+      </Tooltip>
+    );
   // In the Completed (archived) view the user has deliberately filed this session, so
   // archivedAt itself IS the "done by me" signal. Archiving a still-live session ends it,
   // and its status settles to CANCELLED async — so most filed sessions would otherwise
@@ -648,7 +655,10 @@ export function AgentView({ runner }: { runner: Runner }) {
       }),
     [sessionsQ.data],
   );
-  const selected = useMemo(() => sessions.find((s) => s.id === selectedId) ?? null, [sessions, selectedId]);
+  const selectedFromList = useMemo(
+    () => sessions.find((s) => s.id === selectedId) ?? null,
+    [sessions, selectedId],
+  );
   // Close the header-title editor whenever the open session changes — a stale draft must
   // never commit onto a different session.
   useEffect(() => setEditingTitle(false), [selectedId]);
@@ -668,10 +678,25 @@ export function AgentView({ runner }: { runner: Runner }) {
     refetchInterval: (q) =>
       q.state.data?.mergeStatus === 'pending' || q.state.data?.commitStatus === 'pending'
         ? 3000
-        : selected && !TERMINAL.includes(selected.status)
+        : selectedFromList && !TERMINAL.includes(selectedFromList.status)
           ? 5000
           : false,
   });
+  const detailForSelected = sessionDetailQ.data?.id === selectedId ? sessionDetailQ.data : null;
+  const selectedFromDetail = useMemo(() => {
+    const d = detailForSelected as any;
+    // A freshly-created session primes only id/runner/agent into this cache; keep the
+    // existing "Starting..." placeholder until the real detail/list row supplies title/status.
+    if (!d || typeof d.title !== 'string' || typeof d.status !== 'string') return null;
+    return {
+      ...d,
+      runningBgCount: Array.isArray(d.runningBgShells) ? d.runningBgShells.length : (d.runningBgCount ?? 0),
+      pendingApprovals: d.pendingApprovals ?? 0,
+    };
+  }, [detailForSelected]);
+  const selected = selectedFromList ?? selectedFromDetail;
+  const selectedMissing = !!selectedId && !selected && sessionDetailQ.isError;
+  const selectedDeleted = !!selected?.deletedAt;
   // A merge's outcome lands asynchronously (≤1 heartbeat after the click) — but the only place
   // it surfaces is the worktree status bar, and only if the user is still on this session with the
   // file panel expanded. Toast the landing (success or the failure reason) the moment it flips off
@@ -679,7 +704,7 @@ export function AgentView({ runner }: { runner: Runner }) {
   // already-failed session doesn't re-fire — only a real pending→result transition toasts.
   const prevMergeRef = useRef<{ id: string; status: string | null } | null>(null);
   useEffect(() => {
-    const d = sessionDetailQ.data;
+    const d = detailForSelected;
     if (!d) return;
     const prev = prevMergeRef.current;
     const was = prev && prev.id === d.id ? prev.status : null;
@@ -699,16 +724,16 @@ export function AgentView({ runner }: { runner: Runner }) {
         duration: 8,
       });
     }
-  }, [sessionDetailQ.data, message]);
-  const live = selected ? !TERMINAL.includes(selected.status) : false;
+  }, [detailForSelected, message]);
+  const live = selected && !selectedDeleted ? !TERMINAL.includes(selected.status) : false;
   // An ended session can be revived (--resume claude's context) only if it actually
   // ran and its runner is online — the transcript lives on that machine's disk.
-  const resumable = !!selected && !live && !!selected.startedAt && runner.online;
+  const resumable = !!selected && !selectedDeleted && !live && !!selected.startedAt && runner.online;
   // The session list (always visible in the left column) is scoped to one agent so
   // it reads as a conversation with that agent. On /agents/<id> that's the locked
   // agent; on a /sessions/<id> deep link the URL carries no agent, so fall back to
   // the selected session's own agent.
-  const scopeAgentId = lockedAgentId ?? selected?.agent?.id ?? sessionDetailQ.data?.agent?.id ?? null;
+  const scopeAgentId = lockedAgentId ?? selected?.agent?.id ?? detailForSelected?.agent?.id ?? null;
   // The tab the user actually sees: a system session forces the System tab even when
   // `view` is still 'active' (e.g. deep-linking one — the Segmented highlights it as
   // System). The list and arrow-nav must step through that tab's sessions, not `view`'s.
@@ -823,7 +848,7 @@ export function AgentView({ runner }: { runner: Runner }) {
   // liveness, not the polled object, so the 4s refetch can't clobber a user's edit.
   useEffect(() => {
     if (!selected || live) return;
-    const provider = selected.provider ?? sessionDetailQ.data?.provider ?? 'claude';
+    const provider = selected.provider ?? detailForSelected?.provider ?? 'claude';
     setModel(selected.model ?? DEFAULT_MODEL_BY_PROVIDER[provider] ?? DEFAULT_MODEL);
     setMode(PERMISSION_TO_MODE[selected.permissionMode ?? 'dontAsk'] ?? 'Default');
     setEffort(normalizeEffortForProvider(provider, selected.effort ?? ''));
@@ -1148,6 +1173,8 @@ export function AgentView({ runner }: { runner: Runner }) {
       vars: { content: string; images: ComposerImage[]; shell?: boolean },
     ): Promise<{ id: string; turnId?: string; queuedItem?: QueuedTurn; created?: boolean }> => {
       const { content, images: imgs, shell } = vars;
+      if (selectedDeleted) throw new Error('Restore this session before sending a message');
+      if (selectedMissing) throw new Error('Session not found');
       // Only fully-uploaded images carry an id to reference; onSend blocks while any is
       // still uploading, so this is the complete set.
       const attachmentIds = imgs.map((im) => im.id).filter((x): x is string => !!x);
@@ -1170,7 +1197,7 @@ export function AgentView({ runner }: { runner: Runner }) {
         // send keeps it and an edited Mode/Model/Effort is re-applied on resume.
         // A `!cmd` revives via a shell turn: claude --resumes (context restored) and the
         // runner runs the command, buffering its output for the next message.
-        const provider = selected.provider ?? sessionDetailQ.data?.provider ?? 'claude';
+        const provider = selected.provider ?? detailForSelected?.provider ?? 'claude';
         const wireEffort = normalizeEffortForProvider(provider, effort);
         const res = await resumeSession(
           selected.id,
@@ -1258,7 +1285,11 @@ export function AgentView({ runner }: { runner: Runner }) {
   // toast and the Archived/Trash views) clears both flags back to active.
   const restoreMut = useMutation({
     mutationFn: (id: string) => restoreSession(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['sessions'] }),
+    onSuccess: (_d, id) => {
+      setView('active');
+      qc.invalidateQueries({ queryKey: ['sessions'] });
+      qc.invalidateQueries({ queryKey: ['session', id] });
+    },
     onError: (e: Error) => message.error(e.message),
   });
   const showUndo = (id: string, label: string): void => {
@@ -1481,7 +1512,7 @@ export function AgentView({ runner }: { runner: Runner }) {
   // Attach images to a live/resumable session (scoped to its id) or while composing a new
   // one (uploaded unscoped, then scoped to the session the send creates). Either way the
   // runner must be online to fetch the bytes; otherwise the picker is disabled.
-  const canAttach = runner.online && (selected ? live || resumable : composing);
+  const canAttach = runner.online && !selectedDeleted && (selected ? live || resumable : composing);
   const imageUid = useRef(0);
   // Validate, then upload an attachment as a staged chip. Uploaded eagerly (not on send) so
   // the turn carries only the id and a slow upload doesn't block typing. When composing
@@ -1576,7 +1607,7 @@ export function AgentView({ runner }: { runner: Runner }) {
   };
   // While the selected session is still loading we can't tell if it's live yet;
   // block send to avoid accidentally creating a duplicate session.
-  const loadingSession = !!selectedId && !selected;
+  const loadingSession = !!selectedId && !selected && !selectedMissing;
   // A live session accepts a message in any non-terminal state: RUNNING/INTERRUPTED queue
   // it, AWAITING_INPUT runs it now, and PENDING (still waiting for a slot, no claude yet)
   // queues it until the runner claims the session. A non-live (ended) session revives or
@@ -1586,6 +1617,8 @@ export function AgentView({ runner }: { runner: Runner }) {
     !send.isPending &&
     !uploading &&
     runner.online &&
+    !selectedDeleted &&
+    !selectedMissing &&
     !loadingSession;
   // The single send button morphs into a Stop while a turn is generating AND the composer
   // is empty — interrupting that turn. With content typed it stays Send, so a follow-up can
@@ -1637,7 +1670,12 @@ export function AgentView({ runner }: { runner: Runner }) {
     if (slashToken === null) setSlashScope(null);
   }, [slashToken]);
   const showSlash =
-    slashToken !== null && slashToken !== slashDismissed && runner.online && slashMatches.length > 0;
+    slashToken !== null &&
+    slashToken !== slashDismissed &&
+    runner.online &&
+    !selectedDeleted &&
+    !selectedMissing &&
+    slashMatches.length > 0;
   const slashIdx = slashMatches.length ? Math.min(slashIndex, slashMatches.length - 1) : 0;
   const pickSlash = (name: string): void => {
     // Replace only the trailing `/token` ($1 preserves the start-or-whitespace before
@@ -1671,8 +1709,8 @@ export function AgentView({ runner }: { runner: Runner }) {
   const shownModel: string = live ? (selected.model ?? DEFAULT_MODEL) : model;
   const shownProvider: string = selected
     ? (selected.provider ??
-        sessionDetailQ.data?.provider ??
-        sessionDetailQ.data?.agent?.provider ??
+        detailForSelected?.provider ??
+        detailForSelected?.agent?.provider ??
         'claude')
     : (pickedAgent?.provider ?? 'claude');
   const shownMode: string = live
@@ -1691,7 +1729,7 @@ export function AgentView({ runner }: { runner: Runner }) {
   // server defers the re-spawn until the turn finishes, so it applies on the next turn —
   // same as a queued message. When not live they're freely editable (pre-session config).
   // Agent stays fixed once the session exists (it's never re-assigned on resume).
-  const configEditable = live ? runner.online : true;
+  const configEditable = selectedDeleted || selectedMissing ? false : live ? runner.online : true;
   // An existing session's agent is fixed (live or recycled/terminal); only a brand-new
   // compose draft reflects the local pick.
   const shownAgentId: string | undefined = selected ? (selected.agent?.id ?? undefined) : agentId;
@@ -1707,7 +1745,14 @@ export function AgentView({ runner }: { runner: Runner }) {
   // Per-control hints derived from the same state that drives enable/disable, so the help
   // can't drift from behaviour (this used to be one hard-coded paragraph on the whole row).
   // Empty string = no tooltip, which keeps idle controls free of hover noise.
-  const configHint = live && !runner.online ? 'Runner offline — cannot change this now' : '';
+  const composerDisabled = !runner.online || selectedDeleted || selectedMissing;
+  const configHint = selectedDeleted
+    ? 'Restore this session before changing settings'
+    : selectedMissing
+      ? 'Session not found'
+      : live && !runner.online
+        ? 'Runner offline — cannot change this now'
+        : '';
   // Switching session leaves whatever history recall was in progress; reset the cursor
   // so the next Up starts fresh from the (per-session) history.
   useEffect(() => {
@@ -1729,9 +1774,22 @@ export function AgentView({ runner }: { runner: Runner }) {
       ? headTime
         ? `${statusLabel(selected)} · ${headTime}`
         : statusLabel(selected)
+      : selectedMissing
+        ? 'Session not found'
       : selectedId
         ? 'Starting…'
         : '';
+  const composerPlaceholder = selectedDeleted
+    ? 'Restore this session to continue'
+    : selectedMissing
+      ? 'Session not found'
+      : !runner.online
+        ? 'Runner offline'
+        : replyTo
+          ? 'Reply to Claude’s question…'
+          : selectedId
+            ? 'Reply…'
+            : 'Send this agent a task…';
 
   return (
     <div className={`agent-split${selectedId || composingRoute ? ' show-conversation' : ''}`}>
@@ -1968,7 +2026,7 @@ export function AgentView({ runner }: { runner: Runner }) {
             ) : (
               <div
                 className="agent-name"
-                {...(selected && !composing
+                {...(selected && !selectedDeleted && !composing
                   ? {
                       onDoubleClick: () => {
                         setTitleDraft(selected.title);
@@ -1978,7 +2036,9 @@ export function AgentView({ runner }: { runner: Runner }) {
                     }
                   : {})}
               >
-                {composing ? 'New session' : (selected?.title ?? (selectedId ? 'Starting…' : headAgentName))}
+                {composing
+                  ? 'New session'
+                  : (selected?.title ?? (selectedMissing ? 'Session not found' : selectedId ? 'Starting…' : headAgentName))}
               </div>
             )}
             <div className="agent-sub">{headSub}</div>
@@ -1989,35 +2049,55 @@ export function AgentView({ runner }: { runner: Runner }) {
                 trigger={['click']}
                 placement="bottomRight"
                 menu={{
-                  items: [
-                    {
-                      key: 'share',
-                      icon: <ShareAltOutlined />,
-                      label: sessionDetailQ.data?.shareToken ? 'Share · link active' : 'Share…',
-                      onClick: () => setShareOpen(true),
-                    },
-                    {
-                      key: 'export',
-                      icon: <DownloadOutlined />,
-                      label: 'Export as HTML',
-                      disabled: events.length === 0,
-                      onClick: () => {
-                        // Lazy-loaded: react-dom/server + the inlined stylesheet only load
-                        // when someone actually exports, keeping them out of the app bundle.
-                        void import('../lib/sessionExport')
-                          .then((m) => m.exportSessionHtml(selected, events))
-                          .catch((e: Error) => message.error(`Export failed: ${e.message}`));
-                      },
-                    },
-                    { type: 'divider' },
-                    {
-                      key: 'delete',
-                      icon: <DeleteOutlined />,
-                      danger: true,
-                      label: 'Delete',
-                      onClick: () => deleteMut.mutate(selected.id),
-                    },
-                  ],
+                  items: selectedDeleted
+                    ? [
+                        {
+                          key: 'restore',
+                          icon: <UndoOutlined />,
+                          label: 'Restore',
+                          onClick: () => restoreMut.mutate(selected.id),
+                        },
+                        {
+                          key: 'export',
+                          icon: <DownloadOutlined />,
+                          label: 'Export as HTML',
+                          disabled: events.length === 0,
+                          onClick: () => {
+                            void import('../lib/sessionExport')
+                              .then((m) => m.exportSessionHtml(selected, events))
+                              .catch((e: Error) => message.error(`Export failed: ${e.message}`));
+                          },
+                        },
+                      ]
+                    : [
+                        {
+                          key: 'share',
+                          icon: <ShareAltOutlined />,
+                          label: detailForSelected?.shareToken ? 'Share · link active' : 'Share…',
+                          onClick: () => setShareOpen(true),
+                        },
+                        {
+                          key: 'export',
+                          icon: <DownloadOutlined />,
+                          label: 'Export as HTML',
+                          disabled: events.length === 0,
+                          onClick: () => {
+                            // Lazy-loaded: react-dom/server + the inlined stylesheet only load
+                            // when someone actually exports, keeping them out of the app bundle.
+                            void import('../lib/sessionExport')
+                              .then((m) => m.exportSessionHtml(selected, events))
+                              .catch((e: Error) => message.error(`Export failed: ${e.message}`));
+                          },
+                        },
+                        { type: 'divider' },
+                        {
+                          key: 'delete',
+                          icon: <DeleteOutlined />,
+                          danger: true,
+                          label: 'Delete',
+                          onClick: () => deleteMut.mutate(selected.id),
+                        },
+                      ],
                 }}
               >
                 <Button type="text" icon={<MoreOutlined />} title="More actions" />
@@ -2026,15 +2106,14 @@ export function AgentView({ runner }: { runner: Runner }) {
           )}
         </div>
 
-        {selected && !composing && (
+        {selected && !selectedDeleted && !composing && (
           <ShareModal
             open={shareOpen}
             onClose={() => setShareOpen(false)}
             sessionId={selected.id}
-            initialToken={sessionDetailQ.data?.shareToken ?? null}
+            initialToken={detailForSelected?.shareToken ?? null}
           />
         )}
-
 
         {stuck && (
           <button
@@ -2054,86 +2133,96 @@ export function AgentView({ runner }: { runner: Runner }) {
         )}
 
         <div className="agent-scroll-wrap">
-        {selectedId ? (
-          <div className="agent-sessions" ref={scrollRef}>
-            {selected && selected.status === 'PENDING' && events.length === 0 && (
-              <div className="chat-queued-state">
-                <div className="chat-queued-dots" aria-hidden="true">
-                  <span />
-                  <span />
-                  <span />
-                </div>
-                <div className="chat-queued-title">
-                  {queuedForSlot ? 'Waiting for a free slot' : 'Starting session…'}
-                </div>
-                <div className="chat-queued-desc">
-                  {queuedForSlot
-                    ? `Runner at capacity (${liveSlots}/${runner.maxConcurrent}). This session starts as soon as a slot frees up.`
-                    : 'Your message is queued — the agent will pick it up in a moment.'}
-                </div>
-              </div>
-            )}
-            <Transcript events={events} live={live} turnImages={turnImages} />
-            {streamingThink && <div className="chat-think-stream chat-streaming">💭 {streamingThink}</div>}
-            {streamingText && <StreamingMessage text={streamingText} />}
-            {approvals.map((a, i) => (
-              // Only the first (oldest) pending card owns the ⌘/Ctrl+Enter shortcut; once
-              // it's decided the next card becomes first, so the key walks the queue in order.
-              <ApprovalPanel
-                key={a.id}
-                approval={a}
-                onDecide={decide}
-                active={i === 0}
-                onChatAbout={startChatReply}
-              />
-            ))}
-            {queued.map((q) => (
-              <div className="chat-msg chat-user chat-queued" key={q.turnId}>
-                {turnImages[q.turnId]?.length ? (
-                  // Fresh local previews (object URLs) — instant, before a reload drops them.
-                  <div className="chat-images">
-                    {turnImages[q.turnId].map((im, i) => (
-                      <ChatImage key={i} src={im.url} />
-                    ))}
+          {selectedMissing ? (
+            <div className="agent-sessions" ref={scrollRef}>
+              <div className="chat-note">Session not found.</div>
+            </div>
+          ) : selectedId ? (
+            <div className="agent-sessions" ref={scrollRef}>
+              {selected && !selectedDeleted && selected.status === 'PENDING' && events.length === 0 && (
+                <div className="chat-queued-state">
+                  <div className="chat-queued-dots" aria-hidden="true">
+                    <span />
+                    <span />
+                    <span />
                   </div>
-                ) : q.attachments?.length ? (
-                  // After a reload the local previews are gone; fetch the refs the queued-turn
-                  // list carries from the server, so an image-only turn stays visible.
-                  <div className="chat-images">
-                    {q.attachments.map((a) => (
-                      <AttachmentImage key={a.id} id={a.id} />
-                    ))}
+                  <div className="chat-queued-title">
+                    {queuedForSlot ? 'Waiting for a free slot' : 'Starting session…'}
                   </div>
-                ) : null}
-                {q.content && <span className="chat-queued-text">{q.content}</span>}
-                <span className="chat-queued-meta">
-                  <span className="chat-queued-tag">Queued</span>
-                  <a onClick={() => cancelQueued(q.turnId)}>Cancel</a>
-                </span>
-              </div>
-            ))}
-            {selected &&
-              !TERMINAL.includes(selected.status) &&
-              selected.status !== 'PENDING' &&
-              events.length === 0 &&
-              !streamingText &&
-              !streamingThink && <div className="chat-note">Waiting for the agent…</div>}
-            {selected && TERMINAL.includes(selected.status) && (
-              <div className="chat-note">{endedBanner(selected, !!resumable, !!runner.online)}</div>
-            )}
-          </div>
-        ) : composing ? (
-          <div className="agent-sessions agent-draft" ref={scrollRef}>
-            <div className="chat-note">Send this agent a task to start a new session.</div>
-          </div>
-        ) : (
-          <div className="agent-sessions" />
-        )}
-        {selectedId && !atBottom && (
-          <button className="scroll-to-bottom" aria-label="Scroll to bottom" onClick={scrollToBottom}>
-            <ArrowDownOutlined />
-          </button>
-        )}
+                  <div className="chat-queued-desc">
+                    {queuedForSlot
+                      ? `Runner at capacity (${liveSlots}/${runner.maxConcurrent}). This session starts as soon as a slot frees up.`
+                      : 'Your message is queued — the agent will pick it up in a moment.'}
+                  </div>
+                </div>
+              )}
+              <Transcript events={events} live={live} turnImages={turnImages} />
+              {streamingThink && <div className="chat-think-stream chat-streaming">💭 {streamingThink}</div>}
+              {streamingText && <StreamingMessage text={streamingText} />}
+              {!selectedDeleted && approvals.map((a, i) => (
+                // Only the first (oldest) pending card owns the ⌘/Ctrl+Enter shortcut; once
+                // it's decided the next card becomes first, so the key walks the queue in order.
+                <ApprovalPanel
+                  key={a.id}
+                  approval={a}
+                  onDecide={decide}
+                  active={i === 0}
+                  onChatAbout={startChatReply}
+                />
+              ))}
+              {!selectedDeleted && queued.map((q) => (
+                <div className="chat-msg chat-user chat-queued" key={q.turnId}>
+                  {turnImages[q.turnId]?.length ? (
+                    // Fresh local previews (object URLs) — instant, before a reload drops them.
+                    <div className="chat-images">
+                      {turnImages[q.turnId].map((im, i) => (
+                        <ChatImage key={i} src={im.url} />
+                      ))}
+                    </div>
+                  ) : q.attachments?.length ? (
+                    // After a reload the local previews are gone; fetch the refs the queued-turn
+                    // list carries from the server, so an image-only turn stays visible.
+                    <div className="chat-images">
+                      {q.attachments.map((a) => (
+                        <AttachmentImage key={a.id} id={a.id} />
+                      ))}
+                    </div>
+                  ) : null}
+                  {q.content && <span className="chat-queued-text">{q.content}</span>}
+                  <span className="chat-queued-meta">
+                    <span className="chat-queued-tag">Queued</span>
+                    <a onClick={() => cancelQueued(q.turnId)}>Cancel</a>
+                  </span>
+                </div>
+              ))}
+              {selected &&
+                !selectedDeleted &&
+                !TERMINAL.includes(selected.status) &&
+                selected.status !== 'PENDING' &&
+                events.length === 0 &&
+                !streamingText &&
+                !streamingThink && <div className="chat-note">Waiting for the agent…</div>}
+              {selected && selectedDeleted && (
+                <div className="chat-note">
+                  Session deleted. <a onClick={() => restoreMut.mutate(selected.id)}>Restore</a> to continue.
+                </div>
+              )}
+              {selected && !selectedDeleted && TERMINAL.includes(selected.status) && (
+                <div className="chat-note">{endedBanner(selected, !!resumable, !!runner.online)}</div>
+              )}
+            </div>
+          ) : composing ? (
+            <div className="agent-sessions agent-draft" ref={scrollRef}>
+              <div className="chat-note">Send this agent a task to start a new session.</div>
+            </div>
+          ) : (
+            <div className="agent-sessions" />
+          )}
+          {selectedId && !atBottom && (
+            <button className="scroll-to-bottom" aria-label="Scroll to bottom" onClick={scrollToBottom}>
+              <ArrowDownOutlined />
+            </button>
+          )}
         </div>
 
       <div className="agent-composer">
@@ -2190,38 +2279,38 @@ export function AgentView({ runner }: { runner: Runner }) {
         )}
         {/* Background processes the agent launched (Bash run_in_background) — invisible
             otherwise. Derived from this session's events; hidden when there are none. */}
-        {selectedId && <BackgroundShellsTray events={events} live={live} />}
+        {selectedId && !selectedDeleted && <BackgroundShellsTray events={events} live={live} />}
         <SessionOutputs
           // Only the open session has a worktree to show. With nothing selected (new-session
           // draft, empty list) `keepPreviousData` still holds the previously-open session's
           // detail, which would render its stale branch/diff bar over a fresh draft — so gate
           // on selectedId rather than the placeholder-backed query data.
-          detail={selectedId ? sessionDetailQ.data : null}
+          detail={selectedId && !selectedDeleted && !selectedMissing ? detailForSelected : null}
           committed={!live}
           // A turn in flight (live but not awaiting input) leaves the branch in a transient
           // state — hold "Merge to main" until it finishes so we never merge half-done work.
           turnActive={live && !idle}
           enabling={enableIsoMut.isPending}
           onEnableIsolation={
-            sessionDetailQ.data?.agent?.id
-              ? () => askEnableIsolation(sessionDetailQ.data!.agent!.id)
+            detailForSelected?.agent?.id
+              ? () => askEnableIsolation(detailForSelected.agent!.id)
               : undefined
           }
           merging={mergeMut.isPending}
           onMergeToMain={
-            selectedId && sessionDetailQ.data?.branch
+            selectedId && detailForSelected?.branch
               ? (target?: string) => mergeMut.mutate({ id: selectedId, target })
               : undefined
           }
           resolving={resolveMut.isPending}
           onResolveInSession={
-            selectedId && sessionDetailQ.data?.branch
-              ? () => resolveMut.mutate({ id: selectedId, branch: sessionDetailQ.data!.branch! })
+            selectedId && detailForSelected?.branch
+              ? () => resolveMut.mutate({ id: selectedId, branch: detailForSelected.branch! })
               : undefined
           }
           committing={commitMut.isPending}
           onCommit={
-            selectedId && sessionDetailQ.data?.branch
+            selectedId && detailForSelected?.branch
               ? () => commitMut.mutate(selectedId)
               : undefined
           }
@@ -2294,7 +2383,7 @@ export function AgentView({ runner }: { runner: Runner }) {
           <Dropdown
             trigger={['click']}
             placement="topLeft"
-            disabled={!runner.online}
+            disabled={composerDisabled}
             menu={{
               items: [
                 {
@@ -2344,7 +2433,7 @@ export function AgentView({ runner }: { runner: Runner }) {
               className="composer-attach-btn"
               type="text"
               icon={<PlusOutlined />}
-              disabled={!runner.online}
+              disabled={composerDisabled}
               aria-label="Add attachment"
             />
           </Dropdown>
@@ -2356,17 +2445,9 @@ export function AgentView({ runner }: { runner: Runner }) {
             // remeasures the whole value on every keystroke) and the transcript. Pasting past
             // the cap truncates; very large content should go through Upload file instead.
             maxLength={MAX_PROMPT_CHARS}
-            placeholder={
-              !runner.online
-                ? 'Runner offline'
-                : replyTo
-                  ? 'Reply to Claude’s question…'
-                  : selectedId
-                    ? 'Reply…'
-                    : 'Send this agent a task…'
-            }
+            placeholder={composerPlaceholder}
             value={text}
-            disabled={!runner.online}
+            disabled={composerDisabled}
             // Typing exits history recall: the next Up starts fresh from this draft.
             onChange={(e) => {
               setText(e.target.value);

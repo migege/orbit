@@ -335,6 +335,15 @@ export interface SessionChangedFile {
  *  per-session git worktree result (null until the runner reports completion). */
 export interface SessionDetail {
   id: string;
+  status?: string;
+  title?: string;
+  createdAt?: string;
+  lastTurnAt?: string | null;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  error?: string | null;
+  endReason?: string | null;
+  source?: string | null;
   assignedRunnerId: string | null;
   provider?: string | null;
   // `defaultMergeTarget` is the branch this agent's sessions merge into by default,
@@ -374,6 +383,9 @@ export interface SessionDetail {
   // not shared. Set/cleared by enable/disableSessionShare; drives the Share dialog's state.
   shareToken?: string | null;
   sharedAt?: string | null;
+  archivedAt?: string | null;
+  deletedAt?: string | null;
+  runningBgShells?: string[] | null;
 }
 
 /** Fetch one session by id (accepts a base62 public id or a raw UUID). Used to
