@@ -52,8 +52,8 @@ type HeartbeatRequest struct {
 	// `/` autocomplete. Empty slices are omitted so quiet heartbeats stay small.
 	Commands []SlashCommandInfo `json:"commands,omitempty"`
 	Skills   []SlashCommandInfo `json:"skills,omitempty"`
-	// Claude subscription quota for the account this runner uses (the `/usage`
-	// popover numbers). Nil when unavailable — never blocks or fails the heartbeat.
+	// Provider quota for the accounts this runner uses (Claude `/usage` and/or Codex
+	// app-server rate limits). Nil when unavailable — never blocks or fails heartbeat.
 	PlanUsage *PlanUsage `json:"planUsage,omitempty"`
 	// Sessions carries each running session's live worktree diff so the web status bar
 	// appears mid-turn, not just at turn-complete. Empty when no isolated session runs.

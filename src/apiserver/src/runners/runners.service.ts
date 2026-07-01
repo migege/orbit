@@ -54,7 +54,7 @@ export class RunnersService {
         enrolledAt: true,
         availableCommands: true,
         availableSkills: true,
-        // Latest Claude plan-usage snapshot; passed straight through to the UI (it
+        // Latest provider plan-usage snapshot; passed straight through to the UI (it
         // rides `...r` below, unlike commands/skills which get renamed).
         planUsage: true,
       },

@@ -78,16 +78,24 @@ func runLoop(cfg *RunnerConfig) {
 	var assetMu sync.Mutex
 	hbCommands, hbSkills := scanSlashAssets(assetRoots())
 
-	// Claude subscription quota for this machine's login, refreshed in the background
-	// so the heartbeat attaches the latest snapshot without ever blocking on the
-	// (undocumented) usage endpoint. Only polled while the runner has active sessions
-	// (quota moves only while claude runs); a nil snapshot reports nothing.
-	usageProbe := newPlanUsageProbe()
-	go usageProbe.run(loopCtx, func() int {
+	// Provider quota for this machine's logins, refreshed in the background so the
+	// heartbeat attaches the latest snapshot without ever blocking on external calls.
+	// Each probe only runs while its provider has active sessions.
+	activeProviderCount := func(provider string) int {
 		mu.Lock()
 		defer mu.Unlock()
-		return len(active)
-	})
+		n := 0
+		for _, s := range active {
+			if runtimeProvider(s.job) == provider {
+				n++
+			}
+		}
+		return n
+	}
+	claudeUsageProbe := newClaudePlanUsageProbe()
+	go claudeUsageProbe.run(loopCtx, func() int { return activeProviderCount(providerClaude) })
+	codexUsageProbe := newCodexPlanUsageProbe()
+	go codexUsageProbe.run(loopCtx, func() int { return activeProviderCount(providerCodex) })
 
 	// Heartbeat every 30s; honor server-requested cancellations.
 	hbStop := make(chan struct{})
@@ -152,7 +160,7 @@ func runLoop(cfg *RunnerConfig) {
 				resp, err := t.heartbeat(HeartbeatRequest{
 					Status: "ONLINE", IdleCapacity: idle, Version: version,
 					Commands: cmds, Skills: skills,
-					PlanUsage: usageProbe.snapshot(),
+					PlanUsage: combinePlanUsage(claudeUsageProbe.snapshot(), codexUsageProbe.snapshot()),
 					Sessions:  liveSessions,
 				})
 				if err != nil {

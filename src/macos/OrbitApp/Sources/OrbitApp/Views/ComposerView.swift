@@ -402,7 +402,7 @@ private extension NSImage {
 /// Compact plan-usage pill for the composer footer (mirrors web's PlanUsageIndicator): a mini
 /// 5-hour bar + percent; tapping opens a popover with every subscription window, like `/usage`.
 private struct PlanUsageIndicator: View {
-    let usage: PlanUsage
+    let usage: PlanUsageSnapshot
     @State private var showDetail = false
 
     var body: some View {

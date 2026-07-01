@@ -274,7 +274,7 @@ export class RunnerApiController {
         // Cast: a typed interface[] isn't structurally an InputJsonValue (no index sig).
         availableCommands: (dto?.commands ?? undefined) as Prisma.InputJsonValue | undefined,
         availableSkills: (dto?.skills ?? undefined) as Prisma.InputJsonValue | undefined,
-        // Latest Claude plan-usage snapshot; older/api-key runners omit it (leave as-is).
+        // Latest provider plan-usage snapshot; older runners omit it (leave as-is).
         planUsage: (dto?.planUsage ?? undefined) as Prisma.InputJsonValue | undefined,
       },
     });

@@ -34,6 +34,7 @@ final class ConsoleModel {
     /// runs no stream, and `send()` calls `createSession` for this agent instead of POSTing a turn
     /// (see `createDraftSession`). A live console leaves this nil.
     private let draftAgent: Agent?
+    private var provider = "claude"
     var isDraft: Bool { draftAgent != nil }
     /// Draft only: fired with the freshly created session so the caller can open its live console.
     var onSessionCreated: ((Session) -> Void)?
@@ -57,10 +58,10 @@ final class ConsoleModel {
     /// Set while replying to a pending question via "Chat about this" (see send()).
     private(set) var replyContext: QuestionReply?
 
-    // Owning agent's name + the runner's Claude-subscription quota, shown in the composer
-    // footer (web parity); loaded once when the console opens (see loadContext).
+    // Owning agent's name + the runner's provider quota, shown in the composer footer;
+    // loaded once when the console opens.
     private(set) var agentName: String?
-    private(set) var planUsage: PlanUsage?
+    private(set) var planUsage: PlanUsageSnapshot?
 
     // `/` command & skill autocomplete (the `+` menu opens it scoped). `slashItems` is the
     // runner-reported set already narrowed to host-level + this session's agent (see loadSlashItems).
@@ -115,6 +116,7 @@ final class ConsoleModel {
         self.stream = MockEventStream([])
         #endif
         self.agentName = agent.name
+        self.provider = agent.provider ?? "claude"
         let m = agent.model ?? AgentDefaults.defaultModelID
         self.modelID = AgentDefaults.models.contains { $0.id == m } ? m : AgentDefaults.defaultModelID
         self.permissionMode = PermissionMode(rawValue: agent.permissionMode ?? "dontAsk") ?? .dontAsk
@@ -223,6 +225,7 @@ final class ConsoleModel {
         guard let s = try? await api.session(sessionID) else { return }
         serverStatus = s.status
         agentName = s.agent?.name
+        provider = s.provider ?? s.agent?.provider ?? "claude"
         if ComposerLogic.isLive(status: s.status) {
             if let m = s.model { modelID = m }
             if let pm = s.permissionMode, let mode = PermissionMode(rawValue: pm) { permissionMode = mode }
@@ -233,7 +236,9 @@ final class ConsoleModel {
         // the web reads it the same way), so fetch the list and pick this session's runner.
         if let rid = s.assignedRunnerId,
            let r = (try? await api.runners())?.first(where: { $0.id == rid }) {
-            planUsage = r.planUsage
+            planUsage = r.planUsage?.snapshot(for: provider)
+        } else {
+            planUsage = nil
         }
     }
 
@@ -399,12 +404,14 @@ final class ConsoleModel {
     }
 
     /// Draft footer/slash seed (no stream): load the `/` command + skill set for the agent and,
-    /// best-effort, the agent's runner plan usage — mirrors the live `run()`'s context load.
+    /// best-effort, the agent's runner plan usage — mirrors the live `run()`.
     func prepareDraft() async {
         await loadSlashItems()
         if let rid = draftAgent?.runnerId,
            let r = (try? await api.runners())?.first(where: { $0.id == rid }) {
-            planUsage = r.planUsage
+            planUsage = r.planUsage?.snapshot(for: provider)
+        } else {
+            planUsage = nil
         }
     }
 

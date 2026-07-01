@@ -123,19 +123,27 @@ export interface SlashCommandInfo {
   agentId?: string;
 }
 
-/** One rate-limit window of Claude's subscription quota — e.g. the rolling 5-hour
- *  session limit or a 7-day window. Mirrors the runner's PlanUsageWindow. */
+/** One rate-limit window from a provider quota snapshot. Claude reports named
+ *  5-hour / weekly windows; Codex reports primary / secondary windows. */
 export interface PlanUsageWindow {
   /** Percent of the window consumed, 0..100. */
   utilization: number;
   /** ISO-8601 timestamp when the window resets, if the endpoint reported one. */
   resetsAt?: string;
+  /** Provider-supplied/display label for dynamic windows, when known. */
+  label?: string;
+  /** Rolling window duration in minutes, when known. */
+  windowDurationMins?: number;
 }
 
-/** Claude subscription quota for the account a runner is logged into — the same
- *  numbers Claude Code's `/usage` popover shows, polled from the OAuth usage
- *  endpoint. Any window may be absent (the plan doesn't have it, or it was null). */
-export interface PlanUsage {
+export interface PlanUsageCredits {
+  hasCredits: boolean;
+  unlimited: boolean;
+  balance?: string;
+}
+
+export interface PlanUsageSnapshot {
+  provider?: AgentProvider;
   /** Rolling 5-hour session limit. */
   fiveHour?: PlanUsageWindow;
   /** 7-day all-models limit. */
@@ -144,8 +152,25 @@ export interface PlanUsage {
   sevenDayOpus?: PlanUsageWindow;
   /** 7-day Sonnet-scoped limit. */
   sevenDaySonnet?: PlanUsageWindow;
+  /** Codex primary rolling limit. */
+  primary?: PlanUsageWindow;
+  /** Codex secondary rolling limit. */
+  secondary?: PlanUsageWindow;
+  limitId?: string;
+  limitName?: string;
+  planType?: string;
+  rateLimitReachedType?: string;
+  credits?: PlanUsageCredits;
   /** ISO-8601 when the runner fetched this. */
-  fetchedAt: string;
+  fetchedAt?: string;
+}
+
+/** Provider quota for the account a runner is logged into. Old runners report a
+ *  flat Claude snapshot; newer runners may nest per-provider snapshots under
+ *  `claude` / `codex` so one runner can surface both. */
+export interface PlanUsage extends PlanUsageSnapshot {
+  claude?: PlanUsageSnapshot;
+  codex?: PlanUsageSnapshot;
 }
 
 export interface RunnerHeartbeatRequest {
@@ -157,9 +182,8 @@ export interface RunnerHeartbeatRequest {
   commands?: SlashCommandInfo[];
   /** Skills the runner found under ~/.claude + its workDirs. */
   skills?: SlashCommandInfo[];
-  /** Claude subscription quota for the account this runner uses, polled from the
-   *  OAuth usage endpoint. Absent when the runner authenticates with an API key
-   *  (no OAuth creds) or is too old to report it. */
+  /** Provider quota for the account(s) this runner uses. Absent when unavailable
+   *  or when the runner is too old to report it. */
   planUsage?: PlanUsage;
   /** Live worktree state for each session this runner is currently running, so the
    *  composer's status bar appears mid-turn — not just after a turn completes. Absent

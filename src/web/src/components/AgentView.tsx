@@ -77,7 +77,7 @@ import { AttachmentImage, ChatImage, StreamingMessage, Transcript, type TurnImag
 import { ApprovalPanel } from './ApprovalPanel';
 import { ShareModal } from './ShareModal';
 import type { Runner } from './TasksSidePanel';
-import type { PlanUsage } from '@orbit/shared';
+import type { PlanUsage, PlanUsageSnapshot, PlanUsageWindow } from '@orbit/shared';
 import { MAX_PROMPT_CHARS } from '@orbit/shared';
 
 interface RunEvent {
@@ -148,25 +148,68 @@ const MODE_OPTIONS = Object.keys(MODE_TO_PERMISSION);
 // at the effort you last chose instead of resetting to Default. ('' = Default.)
 const EFFORT_KEY = 'orbit.effort';
 
-// Claude subscription windows surfaced in the composer's plan-usage popover, ordered
-// like Claude Code's `/usage`. Windows the plan lacks come back absent and are skipped.
-const PLAN_USAGE_ROWS: { key: 'fiveHour' | 'sevenDay' | 'sevenDayOpus' | 'sevenDaySonnet'; label: string }[] = [
+// Subscription windows surfaced in the composer's plan-usage popover. Claude has
+// named windows; Codex reports primary/secondary windows through its app-server.
+const CLAUDE_PLAN_USAGE_ROWS: { key: 'fiveHour' | 'sevenDay' | 'sevenDayOpus' | 'sevenDaySonnet'; label: string }[] = [
   { key: 'fiveHour', label: '5-hour limit' },
   { key: 'sevenDay', label: 'Weekly · all models' },
   { key: 'sevenDayOpus', label: 'Weekly · Opus' },
   { key: 'sevenDaySonnet', label: 'Weekly · Sonnet' },
 ];
+const CODEX_PLAN_USAGE_ROWS: { key: 'primary' | 'secondary'; label: string }[] = [
+  { key: 'primary', label: 'Primary limit' },
+  { key: 'secondary', label: 'Secondary limit' },
+];
 const fmtReset = (d?: string): string =>
   d ? new Date(d).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
 
-// Compact plan-usage indicator for the composer footer (right of the effort pill),
-// mirroring Claude Code's `/usage`: the pill shows the binding 5-hour window; hover
-// reveals every window's gauge + reset. Quota is account-wide for this runner's login.
-function PlanUsageIndicator({ usage }: { usage: PlanUsage }) {
-  const rows = PLAN_USAGE_ROWS.flatMap(({ key, label }) => {
-    const w = usage[key];
-    return w && typeof w.utilization === 'number' ? [{ key, label, w }] : [];
+type PlanUsageRow = { key: string; label: string; w: PlanUsageWindow };
+
+function usageWindow(usage: PlanUsageSnapshot, key: string): PlanUsageWindow | undefined {
+  switch (key) {
+    case 'fiveHour':
+      return usage.fiveHour;
+    case 'sevenDay':
+      return usage.sevenDay;
+    case 'sevenDayOpus':
+      return usage.sevenDayOpus;
+    case 'sevenDaySonnet':
+      return usage.sevenDaySonnet;
+    case 'primary':
+      return usage.primary;
+    case 'secondary':
+      return usage.secondary;
+    default:
+      return undefined;
+  }
+}
+
+function usageSnapshotForProvider(usage: PlanUsage | null | undefined, provider: string): PlanUsageSnapshot | null {
+  if (!usage) return null;
+  if (provider === 'codex') {
+    if (usage.codex) return usage.codex;
+    return usage.provider === 'codex' || usage.primary || usage.secondary ? usage : null;
+  }
+  if (provider === 'claude') {
+    if (usage.claude) return usage.claude;
+    return !usage.provider || usage.provider === 'claude' || usage.fiveHour || usage.sevenDay ? usage : null;
+  }
+  return null;
+}
+
+function usageRows(usage: PlanUsageSnapshot): PlanUsageRow[] {
+  const codex = usage.provider === 'codex' || usage.primary || usage.secondary;
+  const defs = codex ? CODEX_PLAN_USAGE_ROWS : CLAUDE_PLAN_USAGE_ROWS;
+  return defs.flatMap(({ key, label }) => {
+    const w = usageWindow(usage, key);
+    return w && typeof w.utilization === 'number' ? [{ key, label: w.label || label, w }] : [];
   });
+}
+
+// Compact plan-usage indicator for the composer footer (right of the effort pill).
+// The pill shows the binding/primary window; hover reveals every reported window.
+function PlanUsageIndicator({ usage }: { usage: PlanUsageSnapshot }) {
+  const rows = usageRows(usage);
   if (rows.length === 0) return null;
   const primaryPct = Math.round(rows[0].w.utilization); // fiveHour when present, else first available
   const pop = (
@@ -1713,6 +1756,7 @@ export function AgentView({ runner }: { runner: Runner }) {
         detailForSelected?.agent?.provider ??
         'claude')
     : (pickedAgent?.provider ?? 'claude');
+  const shownPlanUsage = usageSnapshotForProvider(runner.planUsage, shownProvider);
   const shownMode: string = live
     ? (PERMISSION_TO_MODE[selected.permissionMode ?? 'dontAsk'] ?? 'Default')
     : mode;
@@ -2663,7 +2707,7 @@ export function AgentView({ runner }: { runner: Runner }) {
               />
             </span>
           </Tooltip>
-          {runner.planUsage && <PlanUsageIndicator usage={runner.planUsage} />}
+          {shownPlanUsage && <PlanUsageIndicator usage={shownPlanUsage} />}
         </div>
       </div>
       </div>

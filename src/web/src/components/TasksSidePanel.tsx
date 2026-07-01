@@ -74,7 +74,7 @@ export interface Runner {
   // Slash commands / skills the runner reported, for the composer's `/` autocomplete.
   commands?: SlashCommandInfo[];
   skills?: SlashCommandInfo[];
-  // Claude subscription quota for the account this runner uses (the `/usage` numbers).
+  // Provider quota for the account(s) this runner uses.
   planUsage?: PlanUsage | null;
 }
 

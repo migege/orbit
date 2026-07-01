@@ -140,11 +140,12 @@ struct RunnerDetailContent: View {
             }
 
             if let pu = runner.planUsage {
-                Section("Claude quota") {
-                    quotaRow("5-hour", pu.fiveHour)
-                    quotaRow("7-day · all", pu.sevenDay)
-                    quotaRow("7-day · Opus", pu.sevenDayOpus)
-                    quotaRow("7-day · Sonnet", pu.sevenDaySonnet)
+                ForEach(pu.snapshots, id: \.0) { entry in
+                    Section(entry.0) {
+                        ForEach(entry.1.rows) { row in
+                            quotaRow(row.label, row.window)
+                        }
+                    }
                 }
             }
 

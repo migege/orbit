@@ -23,7 +23,7 @@ import {
 } from 'antd';
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import type { PlanUsage } from '@orbit/shared';
+import type { PlanUsage, PlanUsageSnapshot, PlanUsageWindow } from '@orbit/shared';
 import { api } from '../api';
 import { decodeId, encodeId } from '../lib/idCodec';
 import { meQuery } from '../lib/queries';
@@ -62,51 +62,115 @@ const fmtTime = (d?: string | null): string =>
     : '—';
 
 type PlanUsageKey = 'fiveHour' | 'sevenDay' | 'sevenDayOpus' | 'sevenDaySonnet';
-// The subscription windows we surface, ordered like Claude Code's `/usage` popover.
-// Windows the plan doesn't have come back absent and are simply skipped.
-const PLAN_USAGE_ROWS: { key: PlanUsageKey; label: string }[] = [
+// The subscription windows we surface. Windows the plan doesn't have are skipped.
+const CLAUDE_PLAN_USAGE_ROWS: { key: PlanUsageKey; label: string }[] = [
   { key: 'fiveHour', label: '5-hour limit' },
   { key: 'sevenDay', label: 'Weekly · all models' },
   { key: 'sevenDayOpus', label: 'Weekly · Opus' },
   { key: 'sevenDaySonnet', label: 'Weekly · Sonnet' },
 ];
+const CODEX_PLAN_USAGE_ROWS: { key: 'primary' | 'secondary'; label: string }[] = [
+  { key: 'primary', label: 'Primary limit' },
+  { key: 'secondary', label: 'Secondary limit' },
+];
 
-// Per-runner Claude plan usage — the same 5-hour / weekly gauges the `/usage` popover
-// shows, for the account this runner's claude is logged into.
-function PlanUsageSection({ usage }: { usage: PlanUsage }) {
-  const rows = PLAN_USAGE_ROWS.flatMap(({ key, label }) => {
-    const w = usage[key];
-    return w && typeof w.utilization === 'number' ? [{ key, label, w }] : [];
+type UsageRow = { key: string; label: string; w: PlanUsageWindow };
+
+function usageWindow(usage: PlanUsageSnapshot, key: string): PlanUsageWindow | undefined {
+  switch (key) {
+    case 'fiveHour':
+      return usage.fiveHour;
+    case 'sevenDay':
+      return usage.sevenDay;
+    case 'sevenDayOpus':
+      return usage.sevenDayOpus;
+    case 'sevenDaySonnet':
+      return usage.sevenDaySonnet;
+    case 'primary':
+      return usage.primary;
+    case 'secondary':
+      return usage.secondary;
+    default:
+      return undefined;
+  }
+}
+
+function rowsForUsageSnapshot(usage: PlanUsageSnapshot): UsageRow[] {
+  const codex = usage.provider === 'codex' || usage.primary || usage.secondary;
+  const defs = codex ? CODEX_PLAN_USAGE_ROWS : CLAUDE_PLAN_USAGE_ROWS;
+  return defs.flatMap(({ key, label }) => {
+    const w = usageWindow(usage, key);
+    return w && typeof w.utilization === 'number' ? [{ key, label: w.label || label, w }] : [];
   });
-  if (rows.length === 0) return null;
+}
+
+function snapshotsForPlanUsage(usage: PlanUsage): { key: string; title: string; note: string; usage: PlanUsageSnapshot }[] {
+  if (usage.claude || usage.codex) {
+    return [
+      usage.claude && {
+        key: 'claude',
+        title: 'Claude usage',
+        note: 'Account-wide Claude subscription quota for this runner login',
+        usage: usage.claude,
+      },
+      usage.codex && {
+        key: 'codex',
+        title: 'Codex usage',
+        note: 'Account-wide Codex rate limits for this runner login',
+        usage: usage.codex,
+      },
+    ].filter(Boolean) as { key: string; title: string; note: string; usage: PlanUsageSnapshot }[];
+  }
+  const codex = usage.provider === 'codex' || usage.primary || usage.secondary;
+  return [
+    {
+      key: codex ? 'codex' : 'claude',
+      title: codex ? 'Codex usage' : 'Claude usage',
+      note: codex
+        ? 'Account-wide Codex rate limits for this runner login'
+        : 'Account-wide Claude subscription quota for this runner login',
+      usage,
+    },
+  ];
+}
+
+// Per-runner provider plan usage for the account(s) this runner is logged into.
+function PlanUsageSection({ usage }: { usage: PlanUsage }) {
+  const sections = snapshotsForPlanUsage(usage)
+    .map((s) => ({ ...s, rows: rowsForUsageSnapshot(s.usage) }))
+    .filter((s) => s.rows.length > 0);
+  if (sections.length === 0) return null;
   return (
-    <section className="rd-section">
-      <div className="rd-section-title">Plan usage</div>
-      <div className="rd-usage">
-        {rows.map(({ key, label, w }) => {
-          const pct = Math.round(w.utilization);
-          return (
-            <div className="rd-usage-row" key={key}>
-              <div className="rd-usage-head">
-                <span className="rd-usage-label">{label}</span>
-                <span className="rd-usage-pct">{pct}%</span>
-              </div>
-              <div className={`runner-util rd-usage-bar ${pct >= 90 ? 'full' : ''}`}>
-                <span
-                  className="runner-util-fill"
-                  style={{ width: `${Math.min(100, Math.max(0, pct))}%` }}
-                />
-              </div>
-              {w.resetsAt && <div className="rd-usage-reset">Resets {fmtTime(w.resetsAt)}</div>}
-            </div>
-          );
-        })}
-      </div>
-      <div className="rd-usage-note">
-        Account-wide Claude subscription quota for the login this runner uses · updated{' '}
-        {fmtTime(usage.fetchedAt)}
-      </div>
-    </section>
+    <>
+      {sections.map(({ key: sectionKey, title, note, usage: u, rows }) => (
+        <section className="rd-section" key={sectionKey}>
+          <div className="rd-section-title">{title}</div>
+          <div className="rd-usage">
+            {rows.map(({ key, label, w }) => {
+              const pct = Math.round(w.utilization);
+              return (
+                <div className="rd-usage-row" key={key}>
+                  <div className="rd-usage-head">
+                    <span className="rd-usage-label">{label}</span>
+                    <span className="rd-usage-pct">{pct}%</span>
+                  </div>
+                  <div className={`runner-util rd-usage-bar ${pct >= 90 ? 'full' : ''}`}>
+                    <span
+                      className="runner-util-fill"
+                      style={{ width: `${Math.min(100, Math.max(0, pct))}%` }}
+                    />
+                  </div>
+                  {w.resetsAt && <div className="rd-usage-reset">Resets {fmtTime(w.resetsAt)}</div>}
+                </div>
+              );
+            })}
+          </div>
+          <div className="rd-usage-note">
+            {note} · updated {fmtTime(u.fetchedAt)}
+          </div>
+        </section>
+      ))}
+    </>
   );
 }
 

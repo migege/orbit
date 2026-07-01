@@ -35,6 +35,7 @@ public struct SetupStatus: Codable, Sendable {
 public struct Agent: Codable, Equatable, Sendable, Identifiable {
     public let id: String
     public let name: String
+    public let provider: String?
     public let model: String?
     public let permissionMode: String?
     public let workDir: String?
@@ -66,7 +67,7 @@ public struct Runner: Codable, Equatable, Sendable, Identifiable {
     // Reported on the GET /runners payload (renamed from availableSkills/availableCommands).
     public let skills: [SlashCommandInfo]?
     public let commands: [SlashCommandInfo]?
-    // List-view extras: live slot usage, last heartbeat, and Claude subscription quota.
+    // List-view extras: live slot usage, last heartbeat, and provider quota.
     public let activeSessions: Int?
     public let lastHeartbeatAt: String?
     public let planUsage: PlanUsage?
@@ -79,6 +80,7 @@ public struct Session: Codable, Equatable, Sendable, Identifiable {
     public let status: RunStatus
     public let agentId: String?
     public let assignedRunnerId: String?
+    public let provider: String?
     public let pendingApprovals: Int?
     public let branch: String?
     public let updatedAt: String?
@@ -101,7 +103,8 @@ public struct Session: Codable, Equatable, Sendable, Identifiable {
     public let agent: SessionAgentRef?
 
     public init(id: String, title: String?, status: RunStatus, agentId: String?,
-                assignedRunnerId: String?, pendingApprovals: Int?, branch: String?,
+                assignedRunnerId: String?, provider: String? = nil,
+                pendingApprovals: Int?, branch: String?,
                 updatedAt: String?, model: String? = nil, permissionMode: String? = nil,
                 effort: String? = nil, source: String? = nil, lastAssistantText: String? = nil,
                 lastToolUse: String? = nil, runningBgCount: Int? = nil, agent: SessionAgentRef? = nil) {
@@ -110,6 +113,7 @@ public struct Session: Codable, Equatable, Sendable, Identifiable {
         self.status = status
         self.agentId = agentId
         self.assignedRunnerId = assignedRunnerId
+        self.provider = provider
         self.pendingApprovals = pendingApprovals
         self.branch = branch
         self.updatedAt = updatedAt
@@ -128,6 +132,7 @@ public struct Session: Codable, Equatable, Sendable, Identifiable {
 public struct SessionAgentRef: Codable, Equatable, Sendable, Identifiable {
     public let id: String
     public let name: String?
+    public let provider: String?
     public let model: String?
 }
 

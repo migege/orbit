@@ -56,20 +56,110 @@ public struct OkResponse: Codable, Equatable, Sendable {
     public let ok: Bool?
 }
 
-/// One rate-limit window of Claude's subscription quota (mirrors shared `PlanUsageWindow`).
+/// One provider rate-limit window (mirrors shared `PlanUsageWindow`).
 public struct PlanUsageWindow: Codable, Equatable, Sendable {
     public let utilization: Double   // 0…100
     public let resetsAt: String?
+    public let label: String?
+    public let windowDurationMins: Int?
+
+    public init(utilization: Double, resetsAt: String? = nil,
+                label: String? = nil, windowDurationMins: Int? = nil) {
+        self.utilization = utilization
+        self.resetsAt = resetsAt
+        self.label = label
+        self.windowDurationMins = windowDurationMins
+    }
 }
 
-/// Claude subscription quota for a runner's account — same numbers as Claude Code's `/usage`.
-/// Any window may be absent (plan lacks it, or the runner uses an API key / is too old).
-public struct PlanUsage: Codable, Equatable, Sendable {
+public struct PlanUsageCredits: Codable, Equatable, Sendable {
+    public let hasCredits: Bool
+    public let unlimited: Bool
+    public let balance: String?
+}
+
+/// One provider's usage snapshot. Claude fills fiveHour/sevenDay; Codex fills primary/secondary.
+public struct PlanUsageSnapshot: Codable, Equatable, Sendable {
+    public let provider: String?
     public let fiveHour: PlanUsageWindow?
     public let sevenDay: PlanUsageWindow?
     public let sevenDayOpus: PlanUsageWindow?
     public let sevenDaySonnet: PlanUsageWindow?
+    public let primary: PlanUsageWindow?
+    public let secondary: PlanUsageWindow?
+    public let limitId: String?
+    public let limitName: String?
+    public let planType: String?
+    public let rateLimitReachedType: String?
+    public let credits: PlanUsageCredits?
     public let fetchedAt: String?
+
+    public init(provider: String? = nil, fiveHour: PlanUsageWindow? = nil,
+                sevenDay: PlanUsageWindow? = nil, sevenDayOpus: PlanUsageWindow? = nil,
+                sevenDaySonnet: PlanUsageWindow? = nil, primary: PlanUsageWindow? = nil,
+                secondary: PlanUsageWindow? = nil, limitId: String? = nil,
+                limitName: String? = nil, planType: String? = nil,
+                rateLimitReachedType: String? = nil, credits: PlanUsageCredits? = nil,
+                fetchedAt: String? = nil) {
+        self.provider = provider
+        self.fiveHour = fiveHour
+        self.sevenDay = sevenDay
+        self.sevenDayOpus = sevenDayOpus
+        self.sevenDaySonnet = sevenDaySonnet
+        self.primary = primary
+        self.secondary = secondary
+        self.limitId = limitId
+        self.limitName = limitName
+        self.planType = planType
+        self.rateLimitReachedType = rateLimitReachedType
+        self.credits = credits
+        self.fetchedAt = fetchedAt
+    }
+}
+
+/// Provider quota for a runner's account. Old runners report a flat Claude snapshot;
+/// newer runners may nest provider snapshots under `claude` and `codex`.
+public struct PlanUsage: Codable, Equatable, Sendable {
+    public let provider: String?
+    public let fiveHour: PlanUsageWindow?
+    public let sevenDay: PlanUsageWindow?
+    public let sevenDayOpus: PlanUsageWindow?
+    public let sevenDaySonnet: PlanUsageWindow?
+    public let primary: PlanUsageWindow?
+    public let secondary: PlanUsageWindow?
+    public let limitId: String?
+    public let limitName: String?
+    public let planType: String?
+    public let rateLimitReachedType: String?
+    public let credits: PlanUsageCredits?
+    public let claude: PlanUsageSnapshot?
+    public let codex: PlanUsageSnapshot?
+    public let fetchedAt: String?
+
+    public init(provider: String? = nil, fiveHour: PlanUsageWindow? = nil,
+                sevenDay: PlanUsageWindow? = nil, sevenDayOpus: PlanUsageWindow? = nil,
+                sevenDaySonnet: PlanUsageWindow? = nil, primary: PlanUsageWindow? = nil,
+                secondary: PlanUsageWindow? = nil, limitId: String? = nil,
+                limitName: String? = nil, planType: String? = nil,
+                rateLimitReachedType: String? = nil, credits: PlanUsageCredits? = nil,
+                claude: PlanUsageSnapshot? = nil, codex: PlanUsageSnapshot? = nil,
+                fetchedAt: String? = nil) {
+        self.provider = provider
+        self.fiveHour = fiveHour
+        self.sevenDay = sevenDay
+        self.sevenDayOpus = sevenDayOpus
+        self.sevenDaySonnet = sevenDaySonnet
+        self.primary = primary
+        self.secondary = secondary
+        self.limitId = limitId
+        self.limitName = limitName
+        self.planType = planType
+        self.rateLimitReachedType = rateLimitReachedType
+        self.credits = credits
+        self.claude = claude
+        self.codex = codex
+        self.fetchedAt = fetchedAt
+    }
 }
 
 /// One labelled window for the composer's plan-usage popover (mirrors web's PLAN_USAGE_ROWS).
@@ -82,13 +172,21 @@ public struct PlanUsageRow: Equatable, Sendable, Identifiable {
     public var percent: Int { Int(window.utilization.rounded()) }
 }
 
-public extension PlanUsage {
-    /// Present windows in Claude `/usage` order — the binding 5-hour window first, then weekly.
+public extension PlanUsageSnapshot {
+    /// Present windows in provider order: Claude 5-hour first, Codex primary first.
     var rows: [PlanUsageRow] {
-        [("fiveHour", "5-hour limit", fiveHour),
-         ("sevenDay", "Weekly · all models", sevenDay),
-         ("sevenDayOpus", "Weekly · Opus", sevenDayOpus),
-         ("sevenDaySonnet", "Weekly · Sonnet", sevenDaySonnet)]
+        let codex = provider == "codex" || primary != nil || secondary != nil
+        let raw: [(String, String, PlanUsageWindow?)]
+        if codex {
+            raw = [("primary", primary?.label ?? "Primary limit", primary),
+                   ("secondary", secondary?.label ?? "Secondary limit", secondary)]
+        } else {
+            raw = [("fiveHour", "5-hour limit", fiveHour),
+                   ("sevenDay", "Weekly · all models", sevenDay),
+                   ("sevenDayOpus", "Weekly · Opus", sevenDayOpus),
+                   ("sevenDaySonnet", "Weekly · Sonnet", sevenDaySonnet)]
+        }
+        return raw
             .compactMap { key, label, window in
                 window.map { PlanUsageRow(key: key, label: label, window: $0) }
             }
@@ -97,4 +195,40 @@ public extension PlanUsage {
     /// The binding window's percent (5-hour when present, else the first available), or nil
     /// when the runner reports no windows.
     var primaryPercent: Int? { rows.first?.percent }
+}
+
+public extension PlanUsage {
+    var flatSnapshot: PlanUsageSnapshot {
+        PlanUsageSnapshot(provider: provider, fiveHour: fiveHour, sevenDay: sevenDay,
+                          sevenDayOpus: sevenDayOpus, sevenDaySonnet: sevenDaySonnet,
+                          primary: primary, secondary: secondary, limitId: limitId,
+                          limitName: limitName, planType: planType,
+                          rateLimitReachedType: rateLimitReachedType, credits: credits,
+                          fetchedAt: fetchedAt)
+    }
+
+    func snapshot(for provider: String) -> PlanUsageSnapshot? {
+        if provider == "codex" {
+            if let codex { return codex }
+            let flat = flatSnapshot
+            return flat.provider == "codex" || flat.primary != nil || flat.secondary != nil ? flat : nil
+        }
+        if let claude { return claude }
+        let flat = flatSnapshot
+        return flat.provider == nil || flat.provider == "claude" || flat.fiveHour != nil || flat.sevenDay != nil ? flat : nil
+    }
+
+    var snapshots: [(String, PlanUsageSnapshot)] {
+        if claude != nil || codex != nil {
+            return [("Claude quota", claude), ("Codex quota", codex)].compactMap { entry in
+                entry.1.map { (entry.0, $0) }
+            }
+        }
+        let flat = flatSnapshot
+        let title = flat.provider == "codex" || flat.primary != nil || flat.secondary != nil ? "Codex quota" : "Claude quota"
+        return [(title, flat)]
+    }
+
+    var rows: [PlanUsageRow] { flatSnapshot.rows }
+    var primaryPercent: Int? { flatSnapshot.primaryPercent }
 }

@@ -14,11 +14,10 @@ import (
 	"time"
 )
 
-// The runner surfaces the Claude subscription's live quota — the same numbers
-// Claude Code's `/usage` popover shows — so the UI can display per-runner plan
-// usage. Source is the OAuth usage endpoint the CLI itself calls; it's undocumented,
-// so every step here is best-effort: any failure degrades to "no usage reported"
-// and never disturbs the heartbeat.
+// The runner surfaces local coding-runtime quota so the UI can display per-runner
+// plan usage. Claude uses the OAuth usage endpoint Claude Code itself calls; Codex
+// uses the app-server account/rateLimits/read protocol method. Both are best-effort:
+// failures degrade to "no usage reported" and never disturb the heartbeat.
 
 const (
 	planUsageURL = "https://api.anthropic.com/api/oauth/usage"
@@ -35,32 +34,67 @@ const (
 	planUsageBeta = "oauth-2025-04-20"
 )
 
-// PlanUsageWindow is one rate-limit window (the rolling 5-hour session limit or a
-// 7-day window). Mirrors @orbit/shared PlanUsageWindow.
+// PlanUsageWindow is one rate-limit window. Claude reports named windows (rolling
+// 5-hour / weekly); Codex reports primary/secondary windows with durations.
+// Mirrors @orbit/shared PlanUsageWindow.
 type PlanUsageWindow struct {
-	Utilization float64 `json:"utilization"`        // 0..100 percent consumed
-	ResetsAt    string  `json:"resetsAt,omitempty"` // ISO-8601 reset time, if known
+	Utilization        float64 `json:"utilization"`                  // 0..100 percent consumed
+	ResetsAt           string  `json:"resetsAt,omitempty"`           // ISO-8601 reset time, if known
+	Label              string  `json:"label,omitempty"`              // UI label for dynamic Codex windows
+	WindowDurationMins int64   `json:"windowDurationMins,omitempty"` // Codex-reported rolling window size
 }
 
-// PlanUsage is the account-wide Claude subscription quota for whichever login this
-// runner's claude uses. Mirrors @orbit/shared PlanUsage.
+type CreditsSnapshot struct {
+	HasCredits bool   `json:"hasCredits"`
+	Unlimited  bool   `json:"unlimited"`
+	Balance    string `json:"balance,omitempty"`
+}
+
+// PlanUsage is a provider usage snapshot. For compatibility, a single-provider
+// heartbeat can still be flat; when the runner has multiple providers active, Claude
+// and Codex snapshots are nested under claude/codex.
 type PlanUsage struct {
+	Provider string `json:"provider,omitempty"`
+
+	// Claude windows.
 	FiveHour       *PlanUsageWindow `json:"fiveHour,omitempty"`
 	SevenDay       *PlanUsageWindow `json:"sevenDay,omitempty"`
 	SevenDayOpus   *PlanUsageWindow `json:"sevenDayOpus,omitempty"`
 	SevenDaySonnet *PlanUsageWindow `json:"sevenDaySonnet,omitempty"`
-	FetchedAt      string           `json:"fetchedAt"`
+
+	// Codex windows, from app-server account/rateLimits/read.
+	Primary              *PlanUsageWindow `json:"primary,omitempty"`
+	Secondary            *PlanUsageWindow `json:"secondary,omitempty"`
+	LimitID              string           `json:"limitId,omitempty"`
+	LimitName            string           `json:"limitName,omitempty"`
+	PlanType             string           `json:"planType,omitempty"`
+	RateLimitReachedType string           `json:"rateLimitReachedType,omitempty"`
+	Credits              *CreditsSnapshot `json:"credits,omitempty"`
+
+	// Nested snapshots when more than one provider is available.
+	Claude *PlanUsage `json:"claude,omitempty"`
+	Codex  *PlanUsage `json:"codex,omitempty"`
+
+	FetchedAt string `json:"fetchedAt,omitempty"`
 }
+
+type planUsageFetchFunc func(context.Context, *http.Client) (*PlanUsage, error)
 
 // planUsageProbe keeps the most recent usage snapshot fresh in the background so the
 // heartbeat reads it instantly (lock-free) and is never delayed by the external call.
 type planUsageProbe struct {
 	client *http.Client
+	name   string
+	fetch  planUsageFetchFunc
 	val    atomic.Value // *PlanUsage; unset until the first successful fetch
 }
 
-func newPlanUsageProbe() *planUsageProbe {
-	return &planUsageProbe{client: &http.Client{}}
+func newClaudePlanUsageProbe() *planUsageProbe {
+	return &planUsageProbe{client: &http.Client{}, name: "claude plan-usage", fetch: fetchClaudePlanUsage}
+}
+
+func newCodexPlanUsageProbe() *planUsageProbe {
+	return &planUsageProbe{client: &http.Client{}, name: "codex plan-usage", fetch: fetchCodexPlanUsage}
 }
 
 // snapshot returns the latest usage, or nil if none has been fetched / it's
@@ -82,16 +116,16 @@ func (p *planUsageProbe) run(ctx context.Context, activeCount func() int) {
 	var lastFetch time.Time
 	refresh := func() {
 		lastFetch = time.Now()
-		u, err := fetchPlanUsage(ctx, p.client)
+		u, err := p.fetch(ctx, p.client)
 		if err != nil {
 			if msg := err.Error(); msg != lastErr {
-				logln("plan-usage unavailable:", msg)
+				logln(p.name+" unavailable:", msg)
 				lastErr = msg
 			}
 			return
 		}
 		if lastErr != "" {
-			logln("plan-usage recovered")
+			logln(p.name + " recovered")
 			lastErr = ""
 		}
 		p.val.Store(u)
@@ -175,7 +209,7 @@ func keychainCredentials() ([]byte, error) {
 	return out, nil
 }
 
-func fetchPlanUsage(ctx context.Context, client *http.Client) (*PlanUsage, error) {
+func fetchClaudePlanUsage(ctx context.Context, client *http.Client) (*PlanUsage, error) {
 	// Read the token fresh every cycle: Claude Code rotates it in place, so a cached
 	// token would go stale. A 401 here just means we'll pick up the refreshed one next.
 	token, err := claudeOAuthToken()
@@ -232,10 +266,216 @@ func parsePlanUsage(body []byte) (*PlanUsage, error) {
 		return nil, err
 	}
 	return &PlanUsage{
+		Provider:       providerClaude,
 		FiveHour:       norm(raw.FiveHour),
 		SevenDay:       norm(raw.SevenDay),
 		SevenDayOpus:   norm(raw.SevenDayOpus),
 		SevenDaySonnet: norm(raw.SevenDaySonnet),
 		FetchedAt:      time.Now().UTC().Format(time.RFC3339),
 	}, nil
+}
+
+func fetchCodexPlanUsage(ctx context.Context, _ *http.Client) (*PlanUsage, error) {
+	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	app, err := startCodexUsageAppServer(cctx)
+	if err != nil {
+		return nil, err
+	}
+	defer app.close()
+	if err := app.initialize(cctx); err != nil {
+		return nil, err
+	}
+	result, err := app.request(cctx, "account/rateLimits/read", nil)
+	if err != nil {
+		return nil, err
+	}
+	return parseCodexPlanUsage(result)
+}
+
+func startCodexUsageAppServer(ctx context.Context) (*codexAppServer, error) {
+	procCtx, cancel := context.WithCancel(ctx)
+	stateDir := filepath.Join(os.TempDir(), "orbit-codex-usage-state")
+	_ = os.MkdirAll(stateDir, 0o700)
+	args := []string{"app-server", "--stdio", "-c", fmt.Sprintf("sqlite_home=%q", stateDir)}
+	cmd := exec.CommandContext(procCtx, "codex", args...)
+	if cwd, err := os.Getwd(); err == nil {
+		cmd.Dir = cwd
+	}
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	app := &codexAppServer{
+		cmd:           cmd,
+		cancel:        cancel,
+		stdin:         stdin,
+		pending:       map[string]chan codexRPCMessage{},
+		notifications: make(chan codexRPCMessage, 16),
+		done:          make(chan struct{}),
+	}
+	if err := cmd.Start(); err != nil {
+		cancel()
+		return nil, err
+	}
+	go app.readLoop(stdout)
+	go func() {
+		_, _ = io.Copy(io.Discard, stderr)
+	}()
+	return app, nil
+}
+
+func parseCodexPlanUsage(result map[string]interface{}) (*PlanUsage, error) {
+	limits := mapValue(result["rateLimitsByLimitId"])
+	var snap map[string]interface{}
+	if limits != nil {
+		snap = mapValue(limits["codex"])
+	}
+	if snap == nil {
+		snap = mapValue(result["rateLimits"])
+	}
+	if snap == nil {
+		return nil, fmt.Errorf("rateLimits response missing codex snapshot")
+	}
+	u := &PlanUsage{
+		Provider:             providerCodex,
+		LimitID:              firstString(snap, "limitId", "limit_id"),
+		LimitName:            firstString(snap, "limitName", "limit_name"),
+		PlanType:             firstString(snap, "planType", "plan_type"),
+		RateLimitReachedType: firstString(snap, "rateLimitReachedType", "rate_limit_reached_type"),
+		Primary:              codexRateLimitWindow("Primary", mapValue(snap["primary"])),
+		Secondary:            codexRateLimitWindow("Secondary", mapValue(snap["secondary"])),
+		Credits:              codexCreditsSnapshot(mapValue(snap["credits"])),
+		FetchedAt:            time.Now().UTC().Format(time.RFC3339),
+	}
+	return u, nil
+}
+
+func codexRateLimitWindow(role string, raw map[string]interface{}) *PlanUsageWindow {
+	if raw == nil {
+		return nil
+	}
+	used, ok := numberValue(firstPresent(raw, "usedPercent", "used_percent"))
+	if !ok {
+		return nil
+	}
+	mins, _ := int64Value(firstPresent(raw, "windowDurationMins", "window_duration_mins"))
+	reset, _ := int64Value(firstPresent(raw, "resetsAt", "resets_at"))
+	w := &PlanUsageWindow{
+		Utilization:        used,
+		Label:              codexWindowLabel(role, mins),
+		WindowDurationMins: mins,
+	}
+	if reset > 0 {
+		w.ResetsAt = time.Unix(reset, 0).UTC().Format(time.RFC3339)
+	}
+	return w
+}
+
+func codexWindowLabel(role string, mins int64) string {
+	switch mins {
+	case 300:
+		return "5-hour limit"
+	case 1440:
+		return "Daily limit"
+	case 10080:
+		return "Weekly limit"
+	}
+	if mins > 0 && mins%60 == 0 {
+		hours := mins / 60
+		if hours == 1 {
+			return role + " · 1-hour limit"
+		}
+		return fmt.Sprintf("%s · %d-hour limit", role, hours)
+	}
+	if mins > 0 {
+		return fmt.Sprintf("%s · %d-min limit", role, mins)
+	}
+	return role + " limit"
+}
+
+func codexCreditsSnapshot(raw map[string]interface{}) *CreditsSnapshot {
+	if raw == nil {
+		return nil
+	}
+	has, okHas := boolValue(raw["hasCredits"])
+	unlimited, okUnlimited := boolValue(raw["unlimited"])
+	if !okHas && !okUnlimited {
+		return nil
+	}
+	return &CreditsSnapshot{
+		HasCredits: has,
+		Unlimited:  unlimited,
+		Balance:    firstString(raw, "balance"),
+	}
+}
+
+func combinePlanUsage(claude, codex *PlanUsage) *PlanUsage {
+	if claude == nil {
+		return codex
+	}
+	if codex == nil {
+		return claude
+	}
+	fetchedAt := claude.FetchedAt
+	if codex.FetchedAt > fetchedAt {
+		fetchedAt = codex.FetchedAt
+	}
+	return &PlanUsage{Claude: claude, Codex: codex, FetchedAt: fetchedAt}
+}
+
+func numberValue(v interface{}) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case float32:
+		return float64(n), true
+	case int:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	case json.Number:
+		f, err := n.Float64()
+		return f, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func int64Value(v interface{}) (int64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return int64(n), true
+	case float32:
+		return int64(n), true
+	case int:
+		return int64(n), true
+	case int64:
+		return n, true
+	case json.Number:
+		i, err := n.Int64()
+		if err == nil {
+			return i, true
+		}
+		f, ferr := n.Float64()
+		return int64(f), ferr == nil
+	default:
+		return 0, false
+	}
+}
+
+func boolValue(v interface{}) (bool, bool) {
+	b, ok := v.(bool)
+	return b, ok
 }
