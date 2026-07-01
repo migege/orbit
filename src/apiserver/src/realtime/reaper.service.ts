@@ -1,12 +1,23 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { RunStatus, TaskStatus } from '@prisma/client';
-import { AgentProvider, RunEventType, SessionEndReason, isApiErrorText } from '@orbit/shared';
+import {
+  AgentProvider,
+  RunEventType,
+  SessionEndReason,
+  TRASH_RETENTION_DAYS,
+  isApiErrorText,
+} from '@orbit/shared';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { postRunFailureComment, reclaimStalledTask } from '../tasks/reclaim-stalled-task';
 import { RealtimeService } from './realtime.service';
 
 const REAP_INTERVAL_MS = 30_000;
+// How often to permanently purge sessions that have sat in Trash past the retention
+// window. Coarse (hourly) — the deletion isn't time-critical and the query usually
+// removes nothing.
+const PURGE_INTERVAL_MS = 60 * 60_000;
+const TRASH_RETENTION_MS = TRASH_RETENTION_DAYS * 24 * 60 * 60_000;
 const OFFLINE_AFTER_MS = 90_000; // runner missed ~3 heartbeats
 const IDLE_AFTER_MS = 30 * 60_000; // gracefully end a session idle this long
 // A cancel/end a live (online) runner hasn't honored within this window means the
@@ -41,6 +52,7 @@ const PENDING_ORPHAN_AFTER_MS = 30 * 60_000;
 export class ReaperService implements OnModuleInit, OnModuleDestroy {
   private readonly log = new Logger('Reaper');
   private timer?: ReturnType<typeof setInterval>;
+  private purgeTimer?: ReturnType<typeof setInterval>;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -52,10 +64,29 @@ export class ReaperService implements OnModuleInit, OnModuleDestroy {
       this.sweep().catch((e) => this.log.error('sweep failed: ' + (e as Error).message));
     }, REAP_INTERVAL_MS);
     this.timer.unref(); // don't keep the process alive just for the reaper
+    this.purgeTimer = setInterval(() => {
+      this.purgeTrash().catch((e) => this.log.error('trash purge failed: ' + (e as Error).message));
+    }, PURGE_INTERVAL_MS);
+    this.purgeTimer.unref();
   }
 
   onModuleDestroy(): void {
     if (this.timer) clearInterval(this.timer);
+    if (this.purgeTimer) clearInterval(this.purgeTimer);
+  }
+
+  /**
+   * Permanently delete sessions that have sat in Trash (deletedAt) past the retention
+   * window. The DB-level ON DELETE CASCADE drops each session's events, turns, tool calls,
+   * usage, approvals, diff and session-scoped attachments along with it. This is the only
+   * path that actually removes session data — soft-delete just hides it.
+   */
+  private async purgeTrash(): Promise<void> {
+    const cutoff = new Date(Date.now() - TRASH_RETENTION_MS);
+    const res = await this.prisma.session.deleteMany({ where: { deletedAt: { lt: cutoff } } });
+    if (res.count > 0) {
+      this.log.log(`purged ${res.count} trashed session(s) past ${TRASH_RETENTION_DAYS}-day retention`);
+    }
   }
 
   private async sweep(): Promise<void> {

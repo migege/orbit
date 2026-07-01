@@ -65,6 +65,7 @@ import {
   listQueuedTurns,
   mergeSessionToMain,
   type PermissionRule,
+  purgeSession,
   renameSession,
   restoreSession,
   resumeSession,
@@ -78,7 +79,7 @@ import { ApprovalPanel } from './ApprovalPanel';
 import { ShareModal } from './ShareModal';
 import type { Runner } from './TasksSidePanel';
 import type { PlanUsage, PlanUsageSnapshot, PlanUsageWindow } from '@orbit/shared';
-import { MAX_PROMPT_CHARS } from '@orbit/shared';
+import { MAX_PROMPT_CHARS, TRASH_RETENTION_DAYS } from '@orbit/shared';
 
 interface RunEvent {
   seq: number;
@@ -1424,6 +1425,29 @@ export function AgentView({ runner }: { runner: Runner }) {
     },
     onError: (e: Error) => message.error(e.message),
   });
+  // Permanent delete (from Trash): unlike deleteMut there's no undo — the row and all its
+  // data are gone — so it's always gated behind confirmPurge's modal.
+  const purgeMut = useMutation({
+    mutationFn: (id: string) => purgeSession(id),
+    onSuccess: (_d, id) => {
+      leaveIfOpen(id);
+      dropFromLists(id);
+      qc.invalidateQueries({ queryKey: ['sessions'] });
+      message.success('Permanently deleted');
+    },
+    onError: (e: Error) => message.error(e.message),
+  });
+  const confirmPurge = (id: string): void => {
+    modal.confirm({
+      title: 'Delete permanently?',
+      content:
+        'This session and its full transcript will be permanently deleted. This cannot be undone.',
+      okText: 'Delete permanently',
+      okButtonProps: { danger: true },
+      cancelText: 'Cancel',
+      onOk: () => purgeMut.mutate(id),
+    });
+  };
   // Double-click the header title to rename. Optimistically patch the title into every
   // cached session list (the header reads `selected.title` off that list, not the detail
   // query) so the new name shows instantly; reconcile or roll back on settle.
@@ -1910,6 +1934,7 @@ export function AgentView({ runner }: { runner: Runner }) {
             { label: 'Active', value: 'active' },
             { label: 'Completed', value: 'archived' },
             { label: 'System', value: 'system' },
+            { label: 'Trash', value: 'deleted' },
           ]}
         />
         <div className="agent-sessions session-col-list" ref={listRef}>
@@ -1945,12 +1970,24 @@ export function AgentView({ runner }: { runner: Runner }) {
                 deleteMut.mutate(s.id);
               },
             };
+            const purgeItem = {
+              key: 'purge',
+              icon: <DeleteOutlined />,
+              label: 'Delete permanently',
+              danger: true,
+              onClick: ({ domEvent }: { domEvent: { stopPropagation: () => void } }) => {
+                domEvent.stopPropagation();
+                confirmPurge(s.id);
+              },
+            };
             const menuItems: MenuProps['items'] =
               view === 'archived'
                 ? [restoreItem, { type: 'divider' }, deleteItem]
                 : view === 'system'
                   ? [deleteItem]
-                  : [restoreItem];
+                  : view === 'deleted'
+                    ? [restoreItem, { type: 'divider' }, purgeItem]
+                    : [restoreItem];
             // Active, System and Completed (archived) rows open their transcript; only
             // Trash (deleted) rows stay closed.
             const openable = view !== 'deleted';
@@ -2131,6 +2168,14 @@ export function AgentView({ runner }: { runner: Runner }) {
                           label: 'Restore',
                           onClick: () => restoreMut.mutate(selected.id),
                         },
+                        { type: 'divider' },
+                        {
+                          key: 'purge',
+                          icon: <DeleteOutlined />,
+                          danger: true,
+                          label: 'Delete permanently',
+                          onClick: () => confirmPurge(selected.id),
+                        },
                       ]
                     : [
                         {
@@ -2252,11 +2297,37 @@ export function AgentView({ runner }: { runner: Runner }) {
                 events.length === 0 &&
                 !streamingText &&
                 !streamingThink && <div className="chat-note">Waiting for the agent…</div>}
-              {selected && selectedDeleted && (
-                <div className="chat-note">
-                  Session deleted. <a onClick={() => restoreMut.mutate(selected.id)}>Restore</a> to continue.
-                </div>
-              )}
+              {selected &&
+                selectedDeleted &&
+                (() => {
+                  // Days until the reaper permanently purges this trashed session. Reframes
+                  // the retained transcript as an honest, time-boxed Trash rather than a
+                  // "delete that didn't delete", and offers a real permanent delete.
+                  const left = selected.deletedAt
+                    ? Math.max(
+                        0,
+                        Math.ceil(
+                          (new Date(selected.deletedAt).getTime() +
+                            TRASH_RETENTION_DAYS * 86_400_000 -
+                            Date.now()) /
+                            86_400_000,
+                        ),
+                      )
+                    : null;
+                  const when =
+                    left === null
+                      ? ''
+                      : left <= 0
+                        ? ' · deletes soon'
+                        : ` · auto-deletes in ${left} day${left === 1 ? '' : 's'}`;
+                  return (
+                    <div className="chat-note">
+                      In Trash{when}. <a onClick={() => restoreMut.mutate(selected.id)}>Restore</a>
+                      {' · '}
+                      <a onClick={() => confirmPurge(selected.id)}>Delete permanently</a>
+                    </div>
+                  );
+                })()}
               {selected && !selectedDeleted && TERMINAL.includes(selected.status) && (
                 <div className="chat-note">{endedBanner(selected, !!resumable, !!runner.online)}</div>
               )}

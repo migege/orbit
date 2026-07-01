@@ -1171,4 +1171,25 @@ export class SessionsService {
     });
     return { ok: true };
   }
+
+  /**
+   * Permanently delete a trashed session and everything hanging off it — events, turns,
+   * tool calls, usage, approvals, diff, and session-scoped attachments all cascade away at
+   * the DB level (ON DELETE CASCADE). Irreversible. Guarded to sessions already in Trash
+   * (deletedAt set), so an active/archived session can never be hard-deleted in one step —
+   * the user must soft-delete first (matching an "empty trash" flow). Tasks the session
+   * created are detached (Task.creatorSessionId → null), not deleted.
+   */
+  async purge(ownerId: string, id: string) {
+    const session = await this.prisma.session.findFirst({
+      where: { id, ownerId },
+      select: { id: true, deletedAt: true },
+    });
+    if (!session) throw new NotFoundException('session not found');
+    if (!session.deletedAt) {
+      throw new BadRequestException('session must be in Trash before it can be permanently deleted');
+    }
+    await this.prisma.session.delete({ where: { id: session.id } });
+    return { ok: true };
+  }
 }

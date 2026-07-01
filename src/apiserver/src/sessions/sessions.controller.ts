@@ -184,6 +184,12 @@ export class SessionsController {
     return this.sessions.remove(user.userId, id);
   }
 
+  // Hard-delete: permanently remove a trashed session and all its data (irreversible).
+  @Delete(':id/purge')
+  purge(@CurrentUser() user: AuthUser, @Param('id', Base62UuidPipe) id: string) {
+    return this.sessions.purge(user.userId, id);
+  }
+
   /** Tool-permission approvals for this session (optionally filtered by status). */
   @Get(':id/approvals')
   approvals(

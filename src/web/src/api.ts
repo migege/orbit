@@ -262,7 +262,8 @@ export const commitSession = (sessionId: string) =>
 
 // Soft visibility actions for ended sessions. Archive hides a session into the
 // Archived view; delete moves it to the trash. Both keep all data; restore (which
-// clears both) brings it back to the active list. There is no hard delete.
+// clears both) brings it back to the active list. Purge is the only hard delete: it
+// permanently removes a trashed session and all its data, irreversibly.
 export const archiveSession = (sessionId: string) =>
   api(`/sessions/${sessionId}/archive`, { method: 'POST' });
 
@@ -271,6 +272,10 @@ export const deleteSession = (sessionId: string) =>
 
 export const restoreSession = (sessionId: string) =>
   api(`/sessions/${sessionId}/restore`, { method: 'POST' });
+
+/** Permanently delete a trashed session and all its data (irreversible; no restore). */
+export const purgeSession = (sessionId: string) =>
+  api(`/sessions/${sessionId}/purge`, { method: 'DELETE' });
 
 // ── Public read-only sharing ──
 // Enable sharing mints (or returns) an unguessable token; the public link is `/s/<token>`.
