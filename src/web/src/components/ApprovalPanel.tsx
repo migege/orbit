@@ -227,8 +227,8 @@ function QuestionForm({
     onDecide(approval.id, 'allow', answers);
   };
 
-  // ⌘/Ctrl + Enter submits once every question has a pick.
-  useApproveHotkey(active && complete, submit);
+  // Enter submits once every question has a pick (matches the plain approval card).
+  useApproveHotkey(active && complete, submit, { requireMod: false });
 
   return (
     <div className="approval-card">
@@ -267,7 +267,7 @@ function QuestionForm({
                   value={custom[q] ?? ''}
                   onChange={(e) => onCustom(q, e.target.value, multi)}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && complete) {
+                    if (e.key === 'Enter' && complete) {
                       e.preventDefault();
                       submit();
                     }
@@ -282,7 +282,7 @@ function QuestionForm({
       <div className="approval-actions">
         <button className="approval-btn approve" disabled={!complete} onClick={submit}>
           Submit
-          {active && complete && <span className="approval-btn-kbd">{SHORTCUT_HINT}</span>}
+          {active && complete && <span className="approval-btn-kbd">{ENTER_HINT}</span>}
         </button>
         <button className="approval-btn chat" onClick={() => onChatAbout?.(approval.id, chatLabel)}>
           💬 Chat about this
