@@ -20,7 +20,14 @@ import { Base62UuidPipe } from '../common/base62-uuid.pipe';
 import { AuthUser, CurrentUser } from '../common/current-user.decorator';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
-import { CreateSessionDto, MergeToMainDto, SessionConfigDto, SessionResumeDto, SessionTurnDto } from './dto';
+import {
+  CreateSessionDto,
+  MergeToMainDto,
+  SessionConfigDto,
+  SessionRenameDto,
+  SessionResumeDto,
+  SessionTurnDto,
+} from './dto';
 import { SessionsService } from './sessions.service';
 
 @UseGuards(JwtAuthGuard)
@@ -109,6 +116,17 @@ export class SessionsController {
     @Body() dto: SessionConfigDto,
   ) {
     return this.sessions.updateConfig(user.userId, id, dto);
+  }
+
+  /** Rename a session's display title. Works on any session (live or ended) and never
+   *  touches the runner — purely a metadata update. */
+  @Patch(':id')
+  rename(
+    @CurrentUser() user: AuthUser,
+    @Param('id', Base62UuidPipe) id: string,
+    @Body() dto: SessionRenameDto,
+  ) {
+    return this.sessions.rename(user.userId, id, dto.title);
   }
 
   @Post(':id/interrupt')
