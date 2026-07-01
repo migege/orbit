@@ -1917,7 +1917,12 @@ export function AgentView({ runner }: { runner: Runner }) {
                 autoFocus
                 value={titleDraft}
                 onChange={(e) => setTitleDraft(e.target.value)}
-                onFocus={(e) => e.currentTarget.select()}
+                onFocus={(e) => {
+                  // Select all (double-click-to-rename = type replaces), but anchor the
+                  // caret at the START so a long title shows its head, not its tail.
+                  const el = e.currentTarget;
+                  el.setSelectionRange(0, el.value.length, 'backward');
+                }}
                 onKeyDown={(e) => {
                   if (e.nativeEvent.isComposing) return; // let the IME (e.g. pinyin) keep Enter
                   if (e.key === 'Enter') {
@@ -1959,7 +1964,6 @@ export function AgentView({ runner }: { runner: Runner }) {
           </div>
           {selected && !composing && (
             <>
-              <div className="agent-header-spacer" />
               <Dropdown
                 trigger={['click']}
                 placement="bottomRight"

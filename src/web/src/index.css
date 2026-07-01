@@ -1685,6 +1685,7 @@ body {
   background: var(--success-solid);
 }
 .agent-header-main {
+  flex: 1;
   min-width: 0;
 }
 .agent-name {
@@ -1698,7 +1699,10 @@ body {
 /* Inline rename editor that replaces .agent-name on double-click — matches the title's
    type so the swap is seamless, with a brand underline to signal edit mode. */
 .agent-name-input {
+  display: block;
+  box-sizing: border-box;
   width: 100%;
+  font-family: inherit;
   font-size: 18px;
   font-weight: 600;
   color: var(--text-1);
@@ -2268,9 +2272,6 @@ body {
 .wt-enable:disabled {
   opacity: 0.55;
   cursor: default;
-}
-.agent-header-spacer {
-  flex: 1;
 }
 .agent-header-count {
   font-size: 13px;
