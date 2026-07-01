@@ -12,7 +12,6 @@ import {
   ConsoleSqlOutlined,
   DeleteOutlined,
   DisconnectOutlined,
-  DownloadOutlined,
   ExpandAltOutlined,
   EyeOutlined,
   LoadingOutlined,
@@ -2132,17 +2131,6 @@ export function AgentView({ runner }: { runner: Runner }) {
                           label: 'Restore',
                           onClick: () => restoreMut.mutate(selected.id),
                         },
-                        {
-                          key: 'export',
-                          icon: <DownloadOutlined />,
-                          label: 'Export as HTML',
-                          disabled: events.length === 0,
-                          onClick: () => {
-                            void import('../lib/sessionExport')
-                              .then((m) => m.exportSessionHtml(selected, events))
-                              .catch((e: Error) => message.error(`Export failed: ${e.message}`));
-                          },
-                        },
                       ]
                     : [
                         {
@@ -2150,19 +2138,6 @@ export function AgentView({ runner }: { runner: Runner }) {
                           icon: <ShareAltOutlined />,
                           label: detailForSelected?.shareToken ? 'Share · link active' : 'Share…',
                           onClick: () => setShareOpen(true),
-                        },
-                        {
-                          key: 'export',
-                          icon: <DownloadOutlined />,
-                          label: 'Export as HTML',
-                          disabled: events.length === 0,
-                          onClick: () => {
-                            // Lazy-loaded: react-dom/server + the inlined stylesheet only load
-                            // when someone actually exports, keeping them out of the app bundle.
-                            void import('../lib/sessionExport')
-                              .then((m) => m.exportSessionHtml(selected, events))
-                              .catch((e: Error) => message.error(`Export failed: ${e.message}`));
-                          },
                         },
                         { type: 'divider' },
                         {

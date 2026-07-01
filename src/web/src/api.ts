@@ -321,6 +321,23 @@ export const fetchSharedAttachmentObjectUrl = async (token: string, id: string):
   return URL.createObjectURL(await res.blob());
 };
 
+/** Base64 data URL for an inline image in a shared transcript, via the public attachment
+ *  route (no bearer). The shared-page HTML download embeds the bytes inline so the saved
+ *  file works offline. Mirrors fetchAttachmentDataUrl, but for a logged-out viewer. */
+export const fetchSharedAttachmentDataUrl = async (token: string, id: string): Promise<string> => {
+  const res = await fetch(
+    `/api/shared/${encodeURIComponent(token)}/attachments/${encodeURIComponent(id)}`,
+  );
+  if (!res.ok) throw new Error(`attachment ${id}: ${res.status}`);
+  const blob = await res.blob();
+  return await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error ?? new Error('read failed'));
+    reader.readAsDataURL(blob);
+  });
+};
+
 /** One file a worktree-isolated session changed (git diff baseSha..branch); additions/
  *  deletions are -1 for binary files. Mirrors @orbit/shared ChangedFile. */
 export interface SessionChangedFile {

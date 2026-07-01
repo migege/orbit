@@ -4871,9 +4871,33 @@ body {
 }
 .share-titlebar {
   min-width: 0;
+  flex: 1;
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+.share-download {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-sunken);
+  color: var(--text-1);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, border-color 0.15s;
+}
+.share-download:hover:not(:disabled) {
+  background: var(--bg-hover-strong);
+}
+.share-download:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 .share-title {
   font-size: 14px;

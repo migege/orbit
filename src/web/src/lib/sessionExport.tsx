@@ -43,12 +43,17 @@ function imageAttachmentIds(events: RunEvent[]): string[] {
 }
 
 // Fetch every referenced image once, as a base64 data URL. Failures are dropped (that image
-// falls back to an empty placeholder) rather than aborting the whole export.
-async function resolveImages(events: RunEvent[]): Promise<Map<string, string>> {
+// falls back to an empty placeholder) rather than aborting the whole export. `fetchImage`
+// lets the caller choose the endpoint — the bearer-guarded owner route or the public share
+// route — so the same builder serves both the app and the logged-out shared page.
+async function resolveImages(
+  events: RunEvent[],
+  fetchImage: (id: string) => Promise<string>,
+): Promise<Map<string, string>> {
   const map = new Map<string, string>();
   await Promise.allSettled(
     imageAttachmentIds(events).map(async (id) => {
-      map.set(id, await fetchAttachmentDataUrl(id));
+      map.set(id, await fetchImage(id));
     }),
   );
   return map;
@@ -140,9 +145,15 @@ ${meta ? `<div class="orbit-export-meta">${escapeHtml(meta)}</div>` : ''}
 </html>`;
 }
 
-/** Render the session to HTML and trigger a browser download of the self-contained file. */
-export async function exportSessionHtml(session: ExportSession, events: RunEvent[]): Promise<void> {
-  const images = await resolveImages(events);
+/** Render the session to HTML and trigger a browser download of the self-contained file.
+ *  `fetchImage` defaults to the owner (bearer) attachment route; the public shared page
+ *  passes a token-scoped fetcher so a logged-out viewer can still embed the images. */
+export async function exportSessionHtml(
+  session: ExportSession,
+  events: RunEvent[],
+  fetchImage: (id: string) => Promise<string> = fetchAttachmentDataUrl,
+): Promise<void> {
+  const images = await resolveImages(events, fetchImage);
   const theme = document.documentElement.getAttribute('data-theme') ?? '';
   const html = buildSessionHtml(session, events, images, theme);
 
