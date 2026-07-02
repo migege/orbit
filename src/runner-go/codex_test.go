@@ -1,7 +1,10 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -149,7 +152,7 @@ func captureCodexItem(item map[string]interface{}, completed bool) []emittedEven
 	}
 	var result codexTurnResult
 	var last strings.Builder
-	handleCodexItem(map[string]interface{}{"item": item}, emit, &result, &last, completed)
+	handleCodexItem(map[string]interface{}{"item": item}, emit, &result, &last, completed, nil)
 	return got
 }
 
@@ -170,7 +173,7 @@ func TestHandleCodexItemAppServerAgentMessage(t *testing.T) {
 				}
 			}
 			item := map[string]interface{}{"type": itemType, "id": "msg_1", "text": "hello world"}
-			handleCodexItem(map[string]interface{}{"item": item}, emit, &result, &last, true)
+			handleCodexItem(map[string]interface{}{"item": item}, emit, &result, &last, true, nil)
 			if len(got) != 1 || got[0] != "hello world" {
 				t.Fatalf("assistant events = %v, want [\"hello world\"]", got)
 			}
@@ -178,6 +181,28 @@ func TestHandleCodexItemAppServerAgentMessage(t *testing.T) {
 				t.Fatalf("result.Result = %q, want %q", result.Result, "hello world")
 			}
 		})
+	}
+}
+
+func TestHandleCodexItemProcessesCompletedAssistantText(t *testing.T) {
+	var got []string
+	var result codexTurnResult
+	var last strings.Builder
+	emit := func(eventType string, payload map[string]interface{}) {
+		if eventType == evAssistant {
+			got = append(got, payload["text"].(string))
+		}
+	}
+	item := map[string]interface{}{"type": "agentMessage", "id": "msg_1", "text": "see ![x](/tmp/x.png)"}
+	handleCodexItem(map[string]interface{}{"item": item}, emit, &result, &last, true, func(text string) string {
+		return strings.ReplaceAll(text, "/tmp/x.png", "orbit-attachment:att-1")
+	})
+	want := "see ![x](orbit-attachment:att-1)"
+	if len(got) != 1 || got[0] != want {
+		t.Fatalf("assistant events = %v, want [%q]", got, want)
+	}
+	if result.Result != want {
+		t.Fatalf("result.Result = %q, want %q", result.Result, want)
 	}
 }
 
@@ -245,7 +270,7 @@ func TestCodexAppServerReasoningFlushesOnceOnComplete(t *testing.T) {
 	}
 	notify := func(method string, params interface{}) {
 		raw, _ := json.Marshal(params)
-		handleCodexAppNotification(codexRPCMessage{Method: method, Params: raw}, emit, &mu, &active, func(codexTurnResult) {}, nil)
+		handleCodexAppNotification(codexRPCMessage{Method: method, Params: raw}, emit, &mu, &active, func(codexTurnResult) {}, nil, nil)
 	}
 
 	notify("item/reasoning/summaryTextDelta", map[string]interface{}{"delta": "Think"})
@@ -271,6 +296,54 @@ func TestCodexAppServerReasoningFlushesOnceOnComplete(t *testing.T) {
 	}
 	if active.thinkText.Len() != 0 {
 		t.Fatalf("thinkText not reset after flush: %q", active.thinkText.String())
+	}
+}
+
+func TestRewriteLocalMarkdownImagesUploadsAllowedImage(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mockup.png")
+	if err := os.WriteFile(path, []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var uploadedPath, uploadedMime string
+	got := rewriteLocalMarkdownImagesWithUploader(
+		context.Background(),
+		"preview ![mock]("+path+" \"full\")",
+		[]string{dir},
+		func(ctx context.Context, path, mimeType string) (string, error) {
+			uploadedPath = path
+			uploadedMime = mimeType
+			return "att-1", nil
+		},
+	)
+	if uploadedPath != path {
+		t.Fatalf("uploaded path = %q, want %q", uploadedPath, path)
+	}
+	if uploadedMime != "image/png" {
+		t.Fatalf("uploaded mime = %q, want image/png", uploadedMime)
+	}
+	if got != `preview ![mock](orbit-attachment:att-1 "full")` {
+		t.Fatalf("rewritten = %q", got)
+	}
+}
+
+func TestRewriteLocalMarkdownImagesSkipsOutsideRoot(t *testing.T) {
+	dir := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "mockup.png")
+	if err := os.WriteFile(outside, []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	text := "preview ![mock](" + outside + ")"
+	got := rewriteLocalMarkdownImagesWithUploader(context.Background(), text, []string{dir}, func(ctx context.Context, path, mimeType string) (string, error) {
+		called = true
+		return "att-1", nil
+	})
+	if called {
+		t.Fatalf("uploader called for outside-root image")
+	}
+	if got != text {
+		t.Fatalf("rewritten = %q, want unchanged", got)
 	}
 }
 

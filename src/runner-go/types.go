@@ -235,6 +235,10 @@ type TurnAttachment struct {
 	FileName string `json:"fileName,omitempty"`
 }
 
+type AttachmentCreateResponse struct {
+	ID string `json:"id"`
+}
+
 // RunInboxResponse is the next user turn to feed the live claude process.
 // TurnID == "" means nothing is available (mirrors the empty-runId claim convention).
 type RunInboxResponse struct {

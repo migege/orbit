@@ -26,17 +26,25 @@ export interface ExportSession {
   agent?: { name?: string | null } | null;
 }
 
-// Image attachment ids referenced by the user turns (non-image files aren't embedded).
+const ORBIT_ATTACHMENT_RE = /!\[[^\]]*]\(\s*<?orbit-attachment:([0-9a-zA-Z-]+)>?(?:\s+(?:"[^"]*"|'[^']*'))?\s*\)/g;
+
+// Image attachment ids referenced by user turns and assistant markdown.
 function imageAttachmentIds(events: RunEvent[]): string[] {
   const ids = new Set<string>();
   for (const ev of events) {
-    if (ev.type !== 'user') continue;
     const p = ev.payload ?? {};
-    const raw: unknown[] = Array.isArray(p.attachments) ? p.attachments : Array.isArray(p.images) ? p.images : [];
-    for (const a of raw) {
-      const att = a as { id?: unknown; mime?: unknown };
-      const isImage = typeof att?.mime !== 'string' || att.mime.startsWith('image/');
-      if (typeof att?.id === 'string' && isImage) ids.add(att.id);
+    if (ev.type === 'user') {
+      const raw: unknown[] = Array.isArray(p.attachments) ? p.attachments : Array.isArray(p.images) ? p.images : [];
+      for (const a of raw) {
+        const att = a as { id?: unknown; mime?: unknown };
+        const isImage = typeof att?.mime !== 'string' || att.mime.startsWith('image/');
+        if (typeof att?.id === 'string' && isImage) ids.add(att.id);
+      }
+    }
+    if (ev.type === 'assistant' && typeof p.text === 'string') {
+      for (const match of p.text.matchAll(ORBIT_ATTACHMENT_RE)) {
+        if (match[1]) ids.add(match[1]);
+      }
     }
   }
   return [...ids];

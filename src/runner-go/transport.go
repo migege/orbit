@@ -6,7 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -199,6 +204,67 @@ func (t *Transport) fetchAttachment(ctx context.Context, sessionID, attID string
 		return nil, fmt.Errorf("GET attachment %s -> %d %s", attID, resp.StatusCode, string(data))
 	}
 	return data, nil
+}
+
+func (t *Transport) uploadSessionAttachment(ctx context.Context, sessionID, path, mimeType string) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	header := textproto.MIMEHeader{}
+	header.Set("Content-Disposition", fmt.Sprintf(`form-data; name="file"; filename="%s"`, escapeMultipartFilename(filepath.Base(path))))
+	if mimeType != "" {
+		header.Set("Content-Type", mimeType)
+	}
+	part, err := writer.CreatePart(header)
+	if err != nil {
+		return "", err
+	}
+	if _, err := io.Copy(part, file); err != nil {
+		return "", err
+	}
+	if err := writer.Close(); err != nil {
+		return "", err
+	}
+
+	cctx, cancel := context.WithTimeout(ctx, 35*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(cctx, "POST", t.baseURL+"/api/runner/sessions/"+sessionID+"/attachments", &body)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("content-type", writer.FormDataContentType())
+	if t.token != "" {
+		req.Header.Set("authorization", "Bearer "+t.token)
+	}
+	resp, err := t.client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("POST attachment %s -> %d %s", filepath.Base(path), resp.StatusCode, string(data))
+	}
+	var out AttachmentCreateResponse
+	if err := json.Unmarshal(data, &out); err != nil {
+		return "", err
+	}
+	if out.ID == "" {
+		return "", fmt.Errorf("POST attachment %s returned empty id", filepath.Base(path))
+	}
+	return out.ID, nil
+}
+
+func escapeMultipartFilename(name string) string {
+	return strings.NewReplacer("\\", "\\\\", `"`, "\\\"").Replace(name)
 }
 
 // createApproval registers a pending tool-permission request (from the orbit MCP

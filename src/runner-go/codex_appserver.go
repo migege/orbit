@@ -200,6 +200,8 @@ func runCodexAppServerSessionProcess(ctx context.Context, shutdownCtx context.Co
 			case msg := <-app.notifications:
 				handleCodexAppNotification(msg, emit, &activeMu, &active, finalizeActive, func(codexTurnID string) {
 					recordCodexTurnID("", codexTurnID)
+				}, func(text string) string {
+					return rewriteLocalMarkdownImages(ctx, t, job.SessionID, text, []string{execDir, upDir})
 				})
 			}
 		}
@@ -759,7 +761,7 @@ func (a *codexAppServer) close() {
 	a.closeDone()
 }
 
-func handleCodexAppNotification(msg codexRPCMessage, emit emitFn, activeMu *sync.Mutex, active **codexAppActiveTurn, finalize func(codexTurnResult), onTurnStarted func(string)) {
+func handleCodexAppNotification(msg codexRPCMessage, emit emitFn, activeMu *sync.Mutex, active **codexAppActiveTurn, finalize func(codexTurnResult), onTurnStarted func(string), processAssistant assistantTextProcessor) {
 	params := rawObject(msg.Params)
 	switch msg.Method {
 	case "thread/started":
@@ -803,7 +805,7 @@ func handleCodexAppNotification(msg codexRPCMessage, emit emitFn, activeMu *sync
 	case "item/started":
 		activeMu.Lock()
 		if *active != nil {
-			handleCodexItem(map[string]interface{}{"item": firstPresent(params, "item")}, emit, &(*active).result, &(*active).fullText, false)
+			handleCodexItem(map[string]interface{}{"item": firstPresent(params, "item")}, emit, &(*active).result, &(*active).fullText, false, processAssistant)
 		}
 		activeMu.Unlock()
 	case "item/completed":
@@ -822,7 +824,7 @@ func handleCodexAppNotification(msg codexRPCMessage, emit emitFn, activeMu *sync
 					emit(evThinking, map[string]interface{}{"text": text})
 				}
 			} else {
-				handleCodexItem(map[string]interface{}{"item": item}, emit, &(*active).result, &(*active).fullText, true)
+				handleCodexItem(map[string]interface{}{"item": item}, emit, &(*active).result, &(*active).fullText, true, processAssistant)
 			}
 		}
 		activeMu.Unlock()

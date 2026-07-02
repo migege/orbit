@@ -360,6 +360,8 @@ func normalizeCodexReasoningEffort(effort string) string {
 	}
 }
 
+type assistantTextProcessor func(string) string
+
 func handleCodexEvent(msg map[string]interface{}, emit emitFn, result *codexTurnResult, lastAssistant *strings.Builder) {
 	eventType, _ := msg["type"].(string)
 	switch eventType {
@@ -380,9 +382,9 @@ func handleCodexEvent(msg map[string]interface{}, emit emitFn, result *codexTurn
 			emit(evError, map[string]interface{}{"message": result.Error})
 		}
 	case "item.started":
-		handleCodexItem(msg, emit, result, lastAssistant, false)
+		handleCodexItem(msg, emit, result, lastAssistant, false, nil)
 	case "item.completed":
-		handleCodexItem(msg, emit, result, lastAssistant, true)
+		handleCodexItem(msg, emit, result, lastAssistant, true, nil)
 	default:
 		if strings.Contains(eventType, "delta") {
 			if text := codexText(msg); text != "" {
@@ -392,7 +394,7 @@ func handleCodexEvent(msg map[string]interface{}, emit emitFn, result *codexTurn
 	}
 }
 
-func handleCodexItem(msg map[string]interface{}, emit emitFn, result *codexTurnResult, lastAssistant *strings.Builder, completed bool) {
+func handleCodexItem(msg map[string]interface{}, emit emitFn, result *codexTurnResult, lastAssistant *strings.Builder, completed bool, processAssistant assistantTextProcessor) {
 	item := mapValue(msg["item"])
 	if item == nil {
 		item = msg
@@ -407,6 +409,9 @@ func handleCodexItem(msg map[string]interface{}, emit emitFn, result *codexTurnR
 	switch {
 	case lower == "agent_message" || lower == "agentmessage" || lower == "message":
 		if text := codexText(item); text != "" {
+			if completed && processAssistant != nil {
+				text = processAssistant(text)
+			}
 			emit(evAssistant, map[string]interface{}{"text": text})
 			if lastAssistant.Len() > 0 {
 				lastAssistant.WriteString("\n")

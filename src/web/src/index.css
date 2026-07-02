@@ -3247,6 +3247,46 @@ body {
   border-radius: 8px;
   background: rgba(0, 0, 0, 0.06);
 }
+.md .ant-image {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  margin: 10px 0;
+  border-radius: 8px;
+  overflow: hidden;
+  cursor: zoom-in;
+}
+.md-image {
+  display: block;
+  max-width: min(100%, 760px);
+  max-height: 70vh;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-raised);
+  object-fit: contain;
+}
+.md-image-loading {
+  width: min(100%, 520px);
+  height: 260px;
+  background: rgba(0, 0, 0, 0.06);
+}
+.md-image-unavailable {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 5px 9px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-raised);
+  color: var(--text-2);
+  font-size: 12px;
+}
+.md-image-unavailable code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 /* A non-image attachment the user sent: a downloadable chip (paperclip + filename) that
    fetches the blob on click. */
 .chat-files {

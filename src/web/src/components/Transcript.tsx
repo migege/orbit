@@ -407,6 +407,20 @@ function relTime(iso: string): string {
 // bearer-guarded (an <img src> can't carry the token), so fetch the blob and show its
 // object URL, revoking it on unmount. Stays blank until loaded (and on error).
 export function AttachmentImage({ id }: { id: string }) {
+  return <ResolvedAttachmentImage id={id} className="chat-image" alt="Image sent by user" loadingClassName="chat-image chat-image-loading" />;
+}
+
+function ResolvedAttachmentImage({
+  id,
+  className,
+  alt,
+  loadingClassName,
+}: {
+  id: string;
+  className: string;
+  alt: string;
+  loadingClassName: string;
+}) {
   const resolve = useContext(AttachmentResolverContext);
   const exp = useContext(ExportCtx);
   const [url, setUrl] = useState<string | null>(null);
@@ -431,10 +445,10 @@ export function AttachmentImage({ id }: { id: string }) {
   }, [id, resolve, exp]);
   if (exp) {
     const data = exp.images.get(id);
-    return data ? <ChatImage src={data} /> : <span className="chat-image chat-image-loading" />;
+    return data ? <ChatImage src={data} className={className} alt={alt} /> : <span className={loadingClassName} />;
   }
-  if (!url) return <span className="chat-image chat-image-loading" />;
-  return <ChatImage src={url} />;
+  if (!url) return <span className={loadingClassName} />;
+  return <ChatImage src={url} className={className} alt={alt} />;
 }
 
 // A non-image file the user sent: a chip that downloads the blob on click (the download
@@ -485,16 +499,24 @@ export function AttachmentFile({ id, name }: { id: string; name?: string }) {
 // The displayed src is already the full-resolution image (just CSS-constrained to 220px),
 // so the lightbox shows it at native size with no extra fetch. The hover mask is the
 // click affordance — without it a bare <img> gives no hint it's interactive.
-export function ChatImage({ src }: { src: string }) {
+export function ChatImage({
+  src,
+  className = 'chat-image',
+  alt = 'Image sent by user',
+}: {
+  src: string;
+  className?: string;
+  alt?: string;
+}) {
   const exp = useContext(ExportCtx);
   // Static export: AntD's Image lightbox is JS-driven and inert in a saved file — render a
   // plain <img> (the src is already the full-resolution data URL).
-  if (exp) return <img className="chat-image" src={src} alt="" />;
+  if (exp) return <img className={className} src={src} alt={alt} />;
   return (
     <Image
-      className="chat-image"
+      className={className}
       src={src}
-      alt="Image sent by user"
+      alt={alt}
       preview={{
         mask: (
           <span className="chat-image-mask">
@@ -542,13 +564,59 @@ function CodeBlock({ children }: any) {
   );
 }
 
+const ORBIT_ATTACHMENT_PREFIX = 'orbit-attachment:';
+
+function attachmentIdFromSrc(src: unknown): string | null {
+  if (typeof src !== 'string') return null;
+  const trimmed = src.trim();
+  if (!trimmed.startsWith(ORBIT_ATTACHMENT_PREFIX)) return null;
+  const id = trimmed.slice(ORBIT_ATTACHMENT_PREFIX.length).trim();
+  return id || null;
+}
+
+function isLocalImageSrc(src: string): boolean {
+  return /^\/(?:root|home|tmp|Users)\/(?:[^?#]+)\.(?:png|jpe?g|gif|webp|svg)$/i.test(src);
+}
+
+function fileLabel(src: string): string {
+  try {
+    const clean = decodeURIComponent(src);
+    return clean.split(/[\\/]/).filter(Boolean).pop() || 'image';
+  } catch {
+    return src.split(/[\\/]/).filter(Boolean).pop() || 'image';
+  }
+}
+
+function MarkdownImage({ node: _node, src, alt, className: _className, ...rest }: any) {
+  const id = attachmentIdFromSrc(src);
+  if (id) {
+    return (
+      <ResolvedAttachmentImage
+        id={id}
+        className="md-image"
+        alt={typeof alt === 'string' ? alt : 'Image'}
+        loadingClassName="md-image md-image-loading"
+      />
+    );
+  }
+  if (typeof src === 'string' && isLocalImageSrc(src)) {
+    return (
+      <span className="md-image-unavailable" title={src}>
+        <PaperClipOutlined />
+        <code>{fileLabel(src)}</code>
+      </span>
+    );
+  }
+  return <img {...rest} className="md-image" src={src} alt={alt ?? ''} />;
+}
+
 export const MD = memo(function MD({ children, highlight = true }: { children: string; highlight?: boolean }) {
   return (
     <div className="md">
       <Markdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={highlight ? [rehypeHighlight] : []}
-        components={{ pre: CodeBlock }}
+        components={{ pre: CodeBlock, img: MarkdownImage }}
       >
         {children}
       </Markdown>

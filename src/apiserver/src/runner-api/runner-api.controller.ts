@@ -9,9 +9,12 @@ import {
   Param,
   Post,
   StreamableFile,
+  UploadedFile as UploadedFileParam,
   UnauthorizedException,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { Prisma, RunStatus, TaskStatus } from '@prisma/client';
 import {
   AgentProvider,
@@ -46,6 +49,7 @@ import {
 } from '@orbit/shared';
 import { Base62UuidPipe } from '../common/base62-uuid.pipe';
 import { generateToken, generateUserCode, sha256 } from '../common/crypto.util';
+import { assertValidUpload, MAX_UPLOAD_BYTES, UploadedFile } from '../attachments/attachments.media';
 import { PrismaService } from '../prisma/prisma.service';
 import { QueueService } from '../queue/queue.service';
 import { RealtimeService } from '../realtime/realtime.service';
@@ -432,6 +436,36 @@ export class RunnerApiController {
     if (!att) throw new NotFoundException('attachment not found');
     const data = Buffer.from(att.data);
     return new StreamableFile(data, { type: att.mimeType, disposition: 'inline', length: data.length });
+  }
+
+  /**
+   * Persist a runner-produced artifact (currently assistant markdown images) as a normal
+   * session attachment. The browser cannot read `/root/...` paths from the runner, so the
+   * runner uploads bytes here and rewrites the transcript markdown to `orbit-attachment:<id>`.
+   */
+  @UseGuards(RunnerAuthGuard)
+  @Post('sessions/:id/attachments')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_UPLOAD_BYTES } }))
+  async uploadAttachment(
+    @CurrentRunner() runner: { id: string },
+    @Param('id') sessionId: string,
+    @UploadedFileParam() file: UploadedFile | undefined,
+  ): Promise<{ id: string }> {
+    const session = await this.assertSessionOwnership(sessionId, runner.id);
+    assertValidUpload(file);
+    const f = file as UploadedFile;
+    const row = await this.prisma.attachment.create({
+      data: {
+        ownerId: session.ownerId,
+        sessionId,
+        mimeType: f.mimetype,
+        sizeBytes: f.size,
+        fileName: f.originalname || null,
+        data: f.buffer,
+      },
+      select: { id: true },
+    });
+    return { id: row.id };
   }
 
   /**
