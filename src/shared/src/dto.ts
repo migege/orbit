@@ -105,6 +105,7 @@ export interface RunnerMeResponse {
 export interface RunnerAgentSummary {
   id: string;
   name: string;
+  provider?: AgentProvider;
   agentKey?: string;
   workDir?: string;
 }

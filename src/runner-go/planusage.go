@@ -21,9 +21,14 @@ import (
 
 const (
 	planUsageURL = "https://api.anthropic.com/api/oauth/usage"
-	// While the runner has ≥1 active session, refresh at most this often. Quota only
-	// moves while claude is running, so a fully idle runner isn't polled at all.
-	planUsageInterval = 2 * time.Minute
+	// While the runner has ≥1 active session, refresh at most this often.
+	planUsageActiveInterval = 2 * time.Minute
+	// Idle runners still need occasional refreshes: rolling windows can reset while
+	// no session is active, and the UI would otherwise keep showing a stale percent.
+	planUsageIdleInterval = 10 * time.Minute
+	// After a provider-reported reset timestamp passes, refresh shortly after it so
+	// the next heartbeat clears the old utilization without waiting for the idle poll.
+	planUsageResetRefreshDelay = 15 * time.Second
 	// Local (no-network) cadence for checking busy/idle edges and refresh-due. Cheap:
 	// it just reads an in-process counter.
 	planUsageCheckInterval = 15 * time.Second
@@ -104,16 +109,21 @@ func (p *planUsageProbe) snapshot() *PlanUsage {
 	return v
 }
 
-// run polls the usage endpoint only while the runner is busy: it refreshes on the
-// idle→busy edge (so the gauge is fresh when work starts), every planUsageInterval
-// while sessions run, and once more on the busy→idle edge (to capture the just-
-// finished turn's usage). A fully idle runner makes no request — quota only moves
-// while claude runs. activeCount reports how many sessions are currently running.
-// Failures are soft (see fetchPlanUsage): the last good value is kept and a repeated
-// error is logged only once.
-func (p *planUsageProbe) run(ctx context.Context, activeCount func() int) {
+// run keeps the usage snapshot fresh without blocking heartbeats: it refreshes on
+// the idle→busy edge (fresh when work starts), periodically while sessions run, once
+// more on the busy→idle edge (capture just-finished usage), and at a slower idle
+// cadence when this runner has an agent for the provider. activeCount reports how
+// many sessions are currently running for that provider; idleEnabled reports whether
+// it is worth polling the provider while no sessions are active. Failures are soft:
+// the last good value is kept and a repeated error is logged only once.
+func (p *planUsageProbe) run(ctx context.Context, activeCount func() int, idleEnabled func() bool) {
+	p.runWithIntervals(ctx, activeCount, idleEnabled, planUsageCheckInterval, planUsageActiveInterval, planUsageIdleInterval)
+}
+
+func (p *planUsageProbe) runWithIntervals(ctx context.Context, activeCount func() int, idleEnabled func() bool, checkInterval, activeInterval, idleInterval time.Duration) {
 	var lastErr string
 	var lastFetch time.Time
+	var lastUsage *PlanUsage
 	refresh := func() {
 		lastFetch = time.Now()
 		u, err := p.fetch(ctx, p.client)
@@ -128,10 +138,11 @@ func (p *planUsageProbe) run(ctx context.Context, activeCount func() int) {
 			logln(p.name + " recovered")
 			lastErr = ""
 		}
+		lastUsage = u
 		p.val.Store(u)
 	}
-	wasActive := false
-	ticker := time.NewTicker(planUsageCheckInterval)
+	wasActive := activeCount() > 0
+	ticker := time.NewTicker(checkInterval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -139,14 +150,68 @@ func (p *planUsageProbe) run(ctx context.Context, activeCount func() int) {
 			return
 		case <-ticker.C:
 			active := activeCount() > 0
-			// Refresh on a busy/idle transition (fresh on start, final capture on
-			// finish), or when a busy runner is due for its periodic poll.
-			if active != wasActive || (active && time.Since(lastFetch) >= planUsageInterval) {
+			due := activeInterval
+			if !active {
+				due = idleInterval
+			}
+			// Refresh on busy/idle transitions, when a busy runner is due for its
+			// periodic poll, or when an idle-but-configured provider needs a slow
+			// refresh so rolling reset windows do not go stale.
+			dueNow := planUsageRefreshDue(lastFetch, lastUsage, time.Now(), due)
+			if active != wasActive ||
+				(active && dueNow) ||
+				(!active && idleEnabled() && dueNow) {
 				refresh()
 			}
 			wasActive = active
 		}
 	}
+}
+
+func planUsageRefreshDue(lastFetch time.Time, lastUsage *PlanUsage, now time.Time, interval time.Duration) bool {
+	if lastFetch.IsZero() {
+		return true
+	}
+	dueAt := lastFetch.Add(interval)
+	if resetAt, ok := nextPlanUsageResetAfter(lastUsage, lastFetch); ok {
+		resetDueAt := resetAt.Add(planUsageResetRefreshDelay)
+		if resetDueAt.Before(dueAt) {
+			dueAt = resetDueAt
+		}
+	}
+	return !now.Before(dueAt)
+}
+
+func nextPlanUsageResetAfter(usage *PlanUsage, after time.Time) (time.Time, bool) {
+	var best time.Time
+	add := func(w *PlanUsageWindow) {
+		if w == nil || w.ResetsAt == "" {
+			return
+		}
+		t, err := time.Parse(time.RFC3339, w.ResetsAt)
+		if err != nil || !t.After(after) {
+			return
+		}
+		if best.IsZero() || t.Before(best) {
+			best = t
+		}
+	}
+	var visit func(*PlanUsage)
+	visit = func(u *PlanUsage) {
+		if u == nil {
+			return
+		}
+		add(u.FiveHour)
+		add(u.SevenDay)
+		add(u.SevenDayOpus)
+		add(u.SevenDaySonnet)
+		add(u.Primary)
+		add(u.Secondary)
+		visit(u.Claude)
+		visit(u.Codex)
+	}
+	visit(usage)
+	return best, !best.IsZero()
 }
 
 // claudeCredentialsPath resolves where Claude Code stores OAuth creds, honoring

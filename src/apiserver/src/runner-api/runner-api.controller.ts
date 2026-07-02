@@ -229,7 +229,7 @@ export class RunnerApiController {
       !!runner.lastHeartbeatAt && Date.now() - runner.lastHeartbeatAt.getTime() < OFFLINE_AFTER_MS;
     const agents = await this.prisma.agent.findMany({
       where: { runnerId: runner.id },
-      select: { id: true, name: true, agentKey: true, workDir: true },
+      select: { id: true, name: true, provider: true, agentKey: true, workDir: true },
       orderBy: { name: 'asc' },
     });
     return {
@@ -244,6 +244,7 @@ export class RunnerApiController {
       agents: agents.map((a) => ({
         id: a.id,
         name: a.name,
+        provider: a.provider,
         agentKey: a.agentKey ?? undefined,
         workDir: a.workDir ?? undefined,
       })),

@@ -1,6 +1,12 @@
 package main
 
-import "testing"
+import (
+	"context"
+	"net/http"
+	"sync/atomic"
+	"testing"
+	"time"
+)
 
 func TestParseCodexPlanUsage(t *testing.T) {
 	got, err := parseCodexPlanUsage(map[string]interface{}{
@@ -52,5 +58,121 @@ func TestCombinePlanUsageNestsMultipleProviders(t *testing.T) {
 	}
 	if got.FetchedAt != codex.FetchedAt {
 		t.Fatalf("FetchedAt = %q, want %q", got.FetchedAt, codex.FetchedAt)
+	}
+}
+
+func TestPlanUsageProbeRefreshesWhileIdleWhenEnabled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var calls atomic.Int64
+	p := &planUsageProbe{
+		name: "test plan-usage",
+		fetch: func(context.Context, *http.Client) (*PlanUsage, error) {
+			calls.Add(1)
+			return &PlanUsage{Provider: providerCodex}, nil
+		},
+	}
+	go p.runWithIntervals(
+		ctx,
+		func() int { return 0 },
+		func() bool { return true },
+		5*time.Millisecond,
+		time.Hour,
+		20*time.Millisecond,
+	)
+	waitForPlanUsageCalls(t, &calls, 2)
+}
+
+func TestPlanUsageProbeSkipsIdleRefreshWhenDisabled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var calls atomic.Int64
+	p := &planUsageProbe{
+		name: "test plan-usage",
+		fetch: func(context.Context, *http.Client) (*PlanUsage, error) {
+			calls.Add(1)
+			return &PlanUsage{Provider: providerCodex}, nil
+		},
+	}
+	go p.runWithIntervals(
+		ctx,
+		func() int { return 0 },
+		func() bool { return false },
+		5*time.Millisecond,
+		20*time.Millisecond,
+		20*time.Millisecond,
+	)
+	time.Sleep(50 * time.Millisecond)
+	if got := calls.Load(); got != 0 {
+		t.Fatalf("fetch calls = %d, want 0", got)
+	}
+}
+
+func TestPlanUsageProbeRefreshesOnBusyIdleTransition(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var active atomic.Int64
+	active.Store(1)
+	var calls atomic.Int64
+	p := &planUsageProbe{
+		name: "test plan-usage",
+		fetch: func(context.Context, *http.Client) (*PlanUsage, error) {
+			calls.Add(1)
+			return &PlanUsage{Provider: providerCodex}, nil
+		},
+	}
+	go p.runWithIntervals(
+		ctx,
+		func() int { return int(active.Load()) },
+		func() bool { return false },
+		5*time.Millisecond,
+		time.Hour,
+		time.Hour,
+	)
+	waitForPlanUsageCalls(t, &calls, 1)
+	active.Store(0)
+	waitForPlanUsageCalls(t, &calls, 2)
+}
+
+func TestPlanUsageRefreshDueUsesResetBeforeInterval(t *testing.T) {
+	now := time.Date(2026, 7, 2, 14, 0, 0, 0, time.UTC)
+	lastFetch := now.Add(-time.Minute)
+	resetAt := now.Add(-time.Second)
+	usage := &PlanUsage{
+		Provider: providerCodex,
+		Primary:  &PlanUsageWindow{Utilization: 12, ResetsAt: resetAt.Format(time.RFC3339)},
+	}
+	if !planUsageRefreshDue(lastFetch, usage, now.Add(planUsageResetRefreshDelay), time.Hour) {
+		t.Fatalf("expected reset timestamp to make refresh due before idle interval")
+	}
+}
+
+func TestPlanUsageRefreshDueIgnoresAlreadyAttemptedReset(t *testing.T) {
+	now := time.Date(2026, 7, 2, 14, 0, 0, 0, time.UTC)
+	lastFetch := now
+	resetAt := now.Add(-time.Minute)
+	usage := &PlanUsage{
+		Provider: providerCodex,
+		Primary:  &PlanUsageWindow{Utilization: 12, ResetsAt: resetAt.Format(time.RFC3339)},
+	}
+	if planUsageRefreshDue(lastFetch, usage, now.Add(time.Minute), time.Hour) {
+		t.Fatalf("reset before last fetch should not force immediate retry")
+	}
+}
+
+func waitForPlanUsageCalls(t *testing.T, calls *atomic.Int64, want int64) {
+	t.Helper()
+	deadline := time.After(500 * time.Millisecond)
+	tick := time.NewTicker(5 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if calls.Load() >= want {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("fetch calls = %d, want at least %d", calls.Load(), want)
+		case <-tick.C:
+		}
 	}
 }

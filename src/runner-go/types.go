@@ -168,6 +168,7 @@ type MeResponse struct {
 type RunnerAgent struct {
 	ID       string `json:"id"`
 	Name     string `json:"name"`
+	Provider string `json:"provider,omitempty"`
 	AgentKey string `json:"agentKey,omitempty"`
 	WorkDir  string `json:"workDir,omitempty"`
 }

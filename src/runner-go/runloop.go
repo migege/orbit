@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -66,21 +67,49 @@ func runLoop(cfg *RunnerConfig) {
 	// value rides each heartbeat. Roots = the runner's default dir (host-level) plus
 	// each agent's workDir, tagged with the agent's id so the composer can scope the
 	// `/` menu to the session's agent (host-level assets show for every agent).
+	var runnerAgentsMu sync.Mutex
+	var runnerAgents []RunnerAgent
+	refreshRunnerAgents := func() {
+		me, err := t.me()
+		if err != nil {
+			return
+		}
+		runnerAgentsMu.Lock()
+		runnerAgents = append([]RunnerAgent(nil), me.Agents...)
+		runnerAgentsMu.Unlock()
+	}
+	agentSnapshot := func() []RunnerAgent {
+		runnerAgentsMu.Lock()
+		defer runnerAgentsMu.Unlock()
+		return append([]RunnerAgent(nil), runnerAgents...)
+	}
+	providerConfigured := func(provider string) bool {
+		for _, a := range agentSnapshot() {
+			p := strings.ToLower(strings.TrimSpace(a.Provider))
+			if p == "" {
+				p = providerClaude
+			}
+			if p == provider {
+				return true
+			}
+		}
+		return false
+	}
 	assetRoots := func() []assetRoot {
 		roots := []assetRoot{{base: cfg.WorkDir}}
-		if me, err := t.me(); err == nil {
-			for _, a := range me.Agents {
-				roots = append(roots, assetRoot{base: a.WorkDir, agentID: a.ID})
-			}
+		for _, a := range agentSnapshot() {
+			roots = append(roots, assetRoot{base: a.WorkDir, agentID: a.ID})
 		}
 		return roots
 	}
 	var assetMu sync.Mutex
+	refreshRunnerAgents()
 	hbCommands, hbSkills := scanSlashAssets(assetRoots())
 
 	// Provider quota for this machine's logins, refreshed in the background so the
 	// heartbeat attaches the latest snapshot without ever blocking on external calls.
-	// Each probe only runs while its provider has active sessions.
+	// Each probe refreshes quickly while active and slowly while an agent for that
+	// provider exists, so idle reset windows do not leave stale UI gauges behind.
 	activeProviderCount := func(provider string) int {
 		mu.Lock()
 		defer mu.Unlock()
@@ -93,9 +122,13 @@ func runLoop(cfg *RunnerConfig) {
 		return n
 	}
 	claudeUsageProbe := newClaudePlanUsageProbe()
-	go claudeUsageProbe.run(loopCtx, func() int { return activeProviderCount(providerClaude) })
+	claudeActive := func() int { return activeProviderCount(providerClaude) }
+	claudeIdle := func() bool { return providerConfigured(providerClaude) }
+	go claudeUsageProbe.run(loopCtx, claudeActive, claudeIdle)
 	codexUsageProbe := newCodexPlanUsageProbe()
-	go codexUsageProbe.run(loopCtx, func() int { return activeProviderCount(providerCodex) })
+	codexActive := func() int { return activeProviderCount(providerCodex) }
+	codexIdle := func() bool { return providerConfigured(providerCodex) }
+	go codexUsageProbe.run(loopCtx, codexActive, codexIdle)
 
 	// Heartbeat every 30s; honor server-requested cancellations.
 	hbStop := make(chan struct{})
@@ -116,6 +149,7 @@ func runLoop(cfg *RunnerConfig) {
 			case <-ticker.C:
 				cycles++
 				if cycles%10 == 0 { // re-scan assets every ~5 min
+					refreshRunnerAgents()
 					c, s := scanSlashAssets(assetRoots())
 					assetMu.Lock()
 					hbCommands, hbSkills = c, s
