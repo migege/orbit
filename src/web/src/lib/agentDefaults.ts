@@ -6,8 +6,9 @@ export const PROVIDER_OPTIONS = [
 // Model options shared across the app. `value` is the local runtime's model id;
 // `label` is the friendly display name shown in every picker.
 export const CLAUDE_MODEL_OPTIONS = [
+  { value: 'claude-fable-5', label: 'Fable 5' },
   { value: 'claude-opus-4-8', label: 'Opus 4.8' },
-  { value: 'claude-sonnet-4-6', label: 'Sonnet 4.6' },
+  { value: 'claude-sonnet-5', label: 'Sonnet 5' },
   { value: 'claude-haiku-4-5', label: 'Haiku 4.5' },
 ];
 
@@ -70,7 +71,7 @@ export const MODE_OPTIONS = [
 ];
 
 // Auto mode needs a recent model; claude rejects --permission-mode auto on Haiku.
-export const AUTO_CAPABLE_MODELS = new Set(['claude-sonnet-4-6', 'claude-opus-4-8']);
+export const AUTO_CAPABLE_MODELS = new Set(['claude-fable-5', 'claude-opus-4-8', 'claude-sonnet-5']);
 export const supportsAuto = (m: string): boolean => AUTO_CAPABLE_MODELS.has(m);
 
 // App defaults used when the user has set no preference of their own.
