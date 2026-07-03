@@ -277,6 +277,13 @@ export const restoreSession = (sessionId: string) =>
 export const purgeSession = (sessionId: string) =>
   api(`/sessions/${sessionId}/purge`, { method: 'DELETE' });
 
+// Pin/unpin a session to the top of the session list (personal ordering; ordering only).
+export const pinSession = (sessionId: string) =>
+  api(`/sessions/${sessionId}/pin`, { method: 'POST' });
+
+export const unpinSession = (sessionId: string) =>
+  api(`/sessions/${sessionId}/pin`, { method: 'DELETE' });
+
 // ── Public read-only sharing ──
 // Enable sharing mints (or returns) an unguessable token; the public link is `/s/<token>`.
 // Disable revokes it (the old link 404s). The current token also rides on SessionDetail.shareToken.

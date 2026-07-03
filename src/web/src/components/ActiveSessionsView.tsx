@@ -1,4 +1,4 @@
-import { LoadingOutlined } from '@ant-design/icons';
+import { LoadingOutlined, PushpinFilled } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
 import { Spin } from 'antd';
 import { useNavigate } from 'react-router-dom';
@@ -99,6 +99,7 @@ export function ActiveSessionsView() {
           <StatusBadge session={s} />
         </div>
         <div className="task-title-cell">
+          {s.pinnedAt ? <PushpinFilled className="session-pin-flag" title="Pinned" /> : null}
           <span className="task-title">{s.title || '(untitled session)'}</span>
           {s.pendingApprovals > 0 ? (
             <span className="session-approval-badge">{s.pendingApprovals} pending</span>
@@ -123,11 +124,15 @@ export function ActiveSessionsView() {
       ) : (
         <div className="orbit-sessionlist">
           {GROUPS.map((g) => {
-            // Oldest activity first within a group: the longest-waiting / longest-running
-            // session floats to the top, where it most needs attention.
+            // Pinned sessions come first; then oldest activity first within a group, so the
+            // longest-waiting / longest-running session floats to the top where it most needs
+            // attention.
             const rows = active
               .filter((s: any) => groupOf(s) === g.key)
-              .sort((a: any, b: any) => timeOf(a).localeCompare(timeOf(b)));
+              .sort((a: any, b: any) => {
+                if (!!a.pinnedAt !== !!b.pinnedAt) return a.pinnedAt ? -1 : 1;
+                return timeOf(a).localeCompare(timeOf(b));
+              });
             if (rows.length === 0) return null;
             return (
               <div className="session-group" key={g.key}>

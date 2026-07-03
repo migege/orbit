@@ -21,6 +21,8 @@ import {
   PauseCircleOutlined,
   PictureOutlined,
   PlusOutlined,
+  PushpinFilled,
+  PushpinOutlined,
   ShareAltOutlined,
   ThunderboltOutlined,
   UndoOutlined,
@@ -64,12 +66,14 @@ import {
   listQueuedTurns,
   mergeSessionToMain,
   type PermissionRule,
+  pinSession,
   purgeSession,
   renameSession,
   restoreSession,
   resumeSession,
   sendTurn,
   sessionEventsUrl,
+  unpinSession,
   updateSessionConfig,
   uploadAttachment,
 } from '../api';
@@ -692,6 +696,8 @@ export function AgentView({ runner }: { runner: Runner }) {
   const sessions = useMemo(
     () =>
       (sessionsQ.data ?? []).slice().sort((a, b) => {
+        // Pinned sessions float to the top; among themselves they keep time order.
+        if (!!a.pinnedAt !== !!b.pinnedAt) return a.pinnedAt ? -1 : 1;
         const ta = a.lastTurnAt ?? a.createdAt;
         const tb = b.lastTurnAt ?? b.createdAt;
         return ta < tb ? 1 : -1;
@@ -1459,6 +1465,22 @@ export function AgentView({ runner }: { runner: Runner }) {
     onError: (e: Error) => message.error(e.message),
     onSettled: () => qc.invalidateQueries({ queryKey: ['sessions'] }),
   });
+  // Pin/unpin a session to the top of the list. Optimistically flip pinnedAt in every cached
+  // list (mirrors renameMut) so the row jumps immediately; reconcile on settle.
+  const pinMut = useMutation({
+    mutationFn: ({ id, pin }: { id: string; pin: boolean }) =>
+      pin ? pinSession(id) : unpinSession(id),
+    onMutate: ({ id, pin }) =>
+      qc.setQueriesData<any[]>({ queryKey: ['sessions'] }, (old) =>
+        Array.isArray(old)
+          ? old.map((s) =>
+              s.id === id ? { ...s, pinnedAt: pin ? new Date().toISOString() : null } : s,
+            )
+          : old,
+      ),
+    onError: (e: Error) => message.error(e.message),
+    onSettled: () => qc.invalidateQueries({ queryKey: ['sessions'] }),
+  });
   // Enable worktree isolation for a non-git agent: flip autoInitGit so the runner `git
   // init`s the workDir on the next run (the shared-nogit nudge clears once a run isolates).
   const enableIsoMut = useMutation({
@@ -2013,6 +2035,9 @@ export function AgentView({ runner }: { runner: Runner }) {
                 </span>
                 <div className="session-main">
                   <div className="session-title-row">
+                    {s.pinnedAt ? (
+                      <PushpinFilled className="session-pin-flag" title="Pinned" />
+                    ) : null}
                     <div className="session-title">{s.title}</div>
                     {(s.mergeStatus === 'error' || s.mergeStatus === 'conflict') && (
                       <Tooltip
@@ -2035,17 +2060,30 @@ export function AgentView({ runner }: { runner: Runner }) {
                 <div className="session-right">
                   <div className="session-actions" onClick={(e) => e.stopPropagation()}>
                     {view === 'active' ? (
-                      <Tooltip title={ended ? 'Complete' : 'Complete & end session'} placement="top">
-                        <span
-                          className="session-kebab session-complete"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            archiveMut.mutate(s.id);
-                          }}
-                        >
-                          <CheckOutlined />
-                        </span>
-                      </Tooltip>
+                      <>
+                        <Tooltip title={s.pinnedAt ? 'Unpin' : 'Pin to top'} placement="top">
+                          <span
+                            className="session-kebab session-pin-toggle"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              pinMut.mutate({ id: s.id, pin: !s.pinnedAt });
+                            }}
+                          >
+                            {s.pinnedAt ? <PushpinFilled /> : <PushpinOutlined />}
+                          </span>
+                        </Tooltip>
+                        <Tooltip title={ended ? 'Complete' : 'Complete & end session'} placement="top">
+                          <span
+                            className="session-kebab session-complete"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              archiveMut.mutate(s.id);
+                            }}
+                          >
+                            <CheckOutlined />
+                          </span>
+                        </Tooltip>
+                      </>
                     ) : (
                       <Dropdown
                         trigger={['click']}

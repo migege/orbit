@@ -2497,6 +2497,23 @@ body {
   background: transparent;
   color: var(--text-2);
 }
+/* Pin toggle: same light chip as the other row actions (revealed on hover). */
+.session-kebab.session-pin-toggle {
+  background: transparent;
+  color: var(--text-3);
+}
+.session-kebab.session-pin-toggle:hover {
+  background: var(--bg-hover-strong);
+  color: var(--text-1);
+}
+/* Persistent marker in the title row/cell so a pinned session is recognisable without
+   hovering (the toggle itself lives in the hover-revealed actions). */
+.session-pin-flag {
+  flex: none;
+  margin-right: 4px;
+  font-size: 11px;
+  color: var(--text-4);
+}
 .session-status {
   font-size: 12.5px;
 }

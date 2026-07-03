@@ -341,6 +341,10 @@ model Session {
   // are reversible — restore clears them. There is no hard delete.
   archivedAt        DateTime? @map("archived_at")
   deletedAt         DateTime? @map("deleted_at")
+  // Pin to the top of the session list: when set, the session sorts above unpinned ones
+  // (a per-owner personal ordering). null = not pinned. Toggled via POST/DELETE /sessions/:id/pin.
+  // Ordering only — never affects visibility or the runner.
+  pinnedAt          DateTime? @map("pinned_at")
   // ── Public read-only share link ─────────────────────────────────────────────
   // shareToken is an unguessable token embedded in a public URL (/s/<token>); anyone
   // with the link can view this session's transcript read-only, no login. null = not

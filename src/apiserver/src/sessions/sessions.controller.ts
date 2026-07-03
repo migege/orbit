@@ -178,6 +178,18 @@ export class SessionsController {
     return this.sessions.restore(user.userId, id);
   }
 
+  /** Pin this session to the top of the list (personal ordering). */
+  @Post(':id/pin')
+  pin(@CurrentUser() user: AuthUser, @Param('id', Base62UuidPipe) id: string) {
+    return this.sessions.pin(user.userId, id);
+  }
+
+  /** Remove this session's pin. */
+  @Delete(':id/pin')
+  unpin(@CurrentUser() user: AuthUser, @Param('id', Base62UuidPipe) id: string) {
+    return this.sessions.unpin(user.userId, id);
+  }
+
   // Soft-delete: moves the session to the trash (deletedAt), retaining all data.
   @Delete(':id')
   remove(@CurrentUser() user: AuthUser, @Param('id', Base62UuidPipe) id: string) {

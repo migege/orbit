@@ -225,6 +225,7 @@ export class SessionsService {
       lastAssistantText: string | null;
       lastToolUse: string | null;
       mergeStatus: string | null;
+      pinnedAt: Date | null;
       runningBgCount: number;
       agentId: string | null;
       agentName: string | null;
@@ -250,6 +251,7 @@ export class SessionsService {
         left(s.last_assistant_text, ${SessionsService.PREVIEW_LEN}::int) AS "lastAssistantText",
         s.last_tool_use   AS "lastToolUse",
         s.merge_status    AS "mergeStatus",
+        s.pinned_at       AS "pinnedAt",
         cardinality(s.running_bg_shells)::int AS "runningBgCount",
         a.id    AS "agentId",
         a.name  AS "agentName",
@@ -265,7 +267,7 @@ export class SessionsService {
       WHERE s.owner_id = ${ownerId}::uuid
         ${runnerFilter}
         AND (${visibility})
-      ORDER BY s.last_turn_at DESC NULLS LAST, s.created_at DESC
+      ORDER BY (s.pinned_at IS NOT NULL) DESC, s.last_turn_at DESC NULLS LAST, s.created_at DESC
     `);
     // Re-nest agent/assignedRunner to keep the same response shape as the typed query.
     const sessions = rows.map((r) => ({
@@ -287,6 +289,7 @@ export class SessionsService {
       lastAssistantText: r.lastAssistantText,
       lastToolUse: r.lastToolUse,
       mergeStatus: r.mergeStatus,
+      pinnedAt: r.pinnedAt,
       runningBgCount: r.runningBgCount,
       agent: r.agentId ? { id: r.agentId, name: r.agentName, model: r.agentModel } : null,
       assignedRunner: r.runnerId ? { id: r.runnerId, name: r.runnerName } : null,
@@ -1169,6 +1172,20 @@ export class SessionsService {
       where: { id },
       data: { archivedAt: null, deletedAt: null },
     });
+    return { ok: true };
+  }
+
+  /** Pin a session to the top of the list (personal ordering; never touches the runner). */
+  async pin(ownerId: string, id: string) {
+    await this.get(ownerId, id); // ownership check (404s otherwise)
+    await this.prisma.session.update({ where: { id }, data: { pinnedAt: new Date() } });
+    return { ok: true };
+  }
+
+  /** Remove a session's pin, dropping it back into time order. */
+  async unpin(ownerId: string, id: string) {
+    await this.get(ownerId, id); // ownership check (404s otherwise)
+    await this.prisma.session.update({ where: { id }, data: { pinnedAt: null } });
     return { ok: true };
   }
 
