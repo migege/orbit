@@ -100,9 +100,56 @@ struct TranscriptView: View {
                         .transition(.opacity.combined(with: .move(edge: .bottom)))
                 }
             }
+            // Sticky "↑ Your question" header (web's `.chat-sticky-question`): while scrolled up off
+            // the tail, pin the last question to the top so it stays in view during a long reply, and
+            // tap it to jump back. In-flow inset (not an overlay) so it pushes content down like web
+            // — a `scrollTo(anchor: .top)` then lands the target just *below* the header, not hidden
+            // under it. Gated on `atBottom` only: no per-row geometry, so it can't re-break the List
+            // virtualization the way `scrollTargetLayout()` did (see the transcript-freeze history).
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if !atBottom, let q = lastQuestion {
+                    stickyQuestion(q, proxy: proxy)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
+            }
             .animation(.easeOut(duration: 0.15), value: atBottom)
         }
         .safeAreaInset(edge: .top, spacing: 0) { statusBar }
+    }
+
+    // The most recent non-queued user turn — the target of the sticky "Your question" header. Mirrors
+    // web's selector (`.chat-user:not(.chat-queued)`): a still-queued turn hasn't been asked yet, so
+    // it's not something to jump "back" to. Scans from the tail, so it settles after a step or two.
+    private var lastQuestion: UserBubble? {
+        for item in console.state.items.reversed() {
+            if case .user(let b) = item, !b.queued { return b }
+        }
+        return nil
+    }
+
+    // Sticky header that names the last question and scrolls back to it — web's `.chat-sticky-question`
+    // (muted "↑ Your question" label + a single ellipsized line of the text). `anchor: .top` lands the
+    // bubble just under this header (it's a safe-area inset, so the scroll region starts below it).
+    private func stickyQuestion(_ bubble: UserBubble, proxy: ScrollViewProxy) -> some View {
+        Button {
+            withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(bubble.id, anchor: .top) }
+        } label: {
+            HStack(spacing: 8) {
+                Text("↑ Your question")
+                    .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize()
+                Text(bubble.text)
+                    .font(.system(size: 13)).foregroundStyle(.primary)
+                    .lineLimit(1).truncationMode(.tail)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 7)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.bar)
+            .overlay(alignment: .bottom) { Divider() }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Jump to your last question")
     }
 
     // Circular "scroll to latest" control (web parity). One user-initiated scroll — not the per-frame
