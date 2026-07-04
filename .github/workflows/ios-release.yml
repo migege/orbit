@@ -12,9 +12,9 @@
 # (ios-v0.1.0 → 0.1.0); the build number is the commit count (monotonic, as TestFlight requires).
 #
 # One-time setup (see src/ios/README.md → Release):
-#   • Create the app in App Store Connect with bundle id `com.orbit.ios`.
+#   • Create the app in App Store Connect with bundle id `io.orbitd.app`.
 #   • Generate an App Store Connect API key (Users and Access → Integrations → App Store Connect
-#     API) with the "App Manager" role.
+#     API) with the "Admin" role (App Manager can't create the distribution certificate).
 # Required repo secrets (Settings → Secrets and variables → Actions):
 #   ASC_KEY_ID          the API key's Key ID
 #   ASC_ISSUER_ID       the Issuer ID shown above the key list
