@@ -1,36 +1,43 @@
-# Release workflow for the native macOS client: produces a distributable, **signed +
-# notarized + stapled** DMG (Orbit-v<version>-arm64.dmg) that opens on any Mac with no warning.
+# Release workflow for both Orbit clients — one `vX.Y.Z` tag ships both from a single push:
+#   • dmg        → macOS: signed + notarized + stapled DMG, a GitHub Release, and the Sparkle appcast.
+#   • testflight → iOS:   signed .ipa archived and uploaded to TestFlight.
 #
-# This is the release counterpart to macos-client.yml (which only build/tests). It does on a
-# throwaway runner exactly what scripts/build-dmg.sh does locally: rebuild the cert + notary
-# credentials into a temporary keychain, then run the script with Developer ID signing.
+# Trigger: pushing a `v*` tag runs BOTH jobs. `workflow_dispatch` also builds, with a `platform`
+# choice (both / macos / ios) so a single client can be rebuilt without a tag (a dispatch with no tag
+# uses each build's default version). The build/test CI gate lives in client.yml.
 #
-# Trigger: workflow_dispatch (build only) or pushing a v* tag. A tag push additionally creates a
-# GitHub Release with the DMG + .zip and publishes the Sparkle appcast to GitHub Pages — the stable
-# channel for vX.Y.Z, the beta channel for prerelease tags like vX.Y.Z-beta.1.
+# The tag drives the version. macOS uses it verbatim (vX.Y.Z → stable channel; vX.Y.Z-beta.N →
+# Sparkle beta channel). iOS strips any -beta.N to a numeric marketing version
+# (CFBundleShortVersionString must be numeric); its build number is the commit count.
 #
 # Required repo secrets (Settings → Secrets and variables → Actions):
-#   DEVID_CERT_P12_BASE64  base64 of the Developer ID Application cert+key exported as .p12
-#   DEVID_CERT_PASSWORD    password set when exporting that .p12
-#   KEYCHAIN_PASSWORD      any random string — password for the runner's temporary keychain
-#   APPLE_ID               Apple ID email used for notarization
-#   APPLE_TEAM_ID          Developer Team ID (e.g. S27N9A88JC)
-#   APPLE_APP_PASSWORD     app-specific password from appleid.apple.com
-#   SPARKLE_ED_PRIVATE_KEY EdDSA private key used to sign the Sparkle appcast
-name: macOS release (signed DMG)
+#   macOS: DEVID_CERT_P12_BASE64, DEVID_CERT_PASSWORD, KEYCHAIN_PASSWORD, APPLE_ID, APPLE_TEAM_ID,
+#          APPLE_APP_PASSWORD, SPARKLE_ED_PRIVATE_KEY
+#   iOS:   ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_P8_BASE64, APPLE_TEAM_ID
+#   (iOS one-time setup — App Store Connect app + API key — is in src/ios/README.md → Release.)
+name: Release (macOS DMG + iOS TestFlight)
 
 on:
   workflow_dispatch:
+    inputs:
+      platform:
+        description: Which client(s) to build
+        type: choice
+        default: both
+        options: [both, macos, ios]
   push:
     tags: ["v*"]
 
 concurrency:
-  group: macos-release-${{ github.ref }}
+  group: release-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  # ---- macOS: signed + notarized DMG ----------------------------------------------------------
   dmg:
-    name: Build signed + notarized DMG
+    name: macOS · signed + notarized DMG
+    # A tag push builds both; a manual run honours the platform choice.
+    if: github.event_name != 'workflow_dispatch' || inputs.platform != 'ios'
     runs-on: macos-15
     permissions:
       contents: write          # create the GitHub Release + push the gh-pages appcast
@@ -101,7 +108,7 @@ jobs:
           path: src/macos/build/Orbit-v*
           if-no-files-found: error
 
-      # ---- Release publishing (tag pushes only) --------------------------------------------------
+      # ---- Release publishing (tag pushes only) ------------------------------------------------
       - name: Create GitHub Release
         if: github.ref_type == 'tag'
         env:
@@ -142,3 +149,79 @@ jobs:
           github_token: ${{ github.token }}
           publish_dir: ${{ runner.temp }}/updates/out
           keep_files: true
+
+  # ---- iOS: TestFlight --------------------------------------------------------------------------
+  testflight:
+    name: iOS · TestFlight
+    if: github.event_name != 'workflow_dispatch' || inputs.platform != 'macos'
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # full history → commit-count build number is monotonic
+      - name: Select latest Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Toolchain
+        run: xcodebuild -version && xcodegen --version
+
+      - name: Write App Store Connect API key
+        env:
+          ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
+          ASC_KEY_ID:        ${{ secrets.ASC_KEY_ID }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/private_keys"
+          echo "$ASC_KEY_P8_BASE64" | base64 --decode > "$RUNNER_TEMP/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+
+      - name: Generate Xcode project
+        working-directory: src/ios
+        run: xcodegen generate
+
+      - name: Archive
+        working-directory: src/ios
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          ASC_KEY_ID:    ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          MKT="0.1.0"
+          if [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
+            MKT="${GITHUB_REF_NAME#v}"     # v0.1.2 or v0.1.2-beta.3 → 0.1.2-beta.3
+            MKT="${MKT%%-*}"               # strip any -beta.N → numeric X.Y.Z (CFBundleShortVersionString)
+          fi
+          BUILD="$(git rev-list --count HEAD)"
+          echo "Building marketing $MKT (build $BUILD)"
+          xcodebuild \
+            -project Orbit.xcodeproj \
+            -scheme Orbit \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/Orbit.xcarchive" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/private_keys/AuthKey_${ASC_KEY_ID}.p8" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            MARKETING_VERSION="$MKT" \
+            CURRENT_PROJECT_VERSION="$BUILD" \
+            archive
+
+      - name: Export + upload to TestFlight
+        working-directory: src/ios
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          ASC_KEY_ID:    ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          sed "s/REPLACE_WITH_TEAM_ID/${APPLE_TEAM_ID}/" ExportOptions.plist > "$RUNNER_TEMP/ExportOptions.plist"
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/Orbit.xcarchive" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/private_keys/AuthKey_${ASC_KEY_ID}.p8" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID"

@@ -18,7 +18,7 @@ src/ios/
   Support/Info.plist          # bundle keys, orbit:// URL scheme, orientations
   Support/Orbit.entitlements  # empty for now; APNs keys land in Phase E
   Support/Assets.xcassets     # AppIcon (placeholder, reuses the macOS mark) + AccentColor
-  .github/workflows/ios-client.yml   # (repo root) generate + build on CI
+  .github/workflows/client.yml       # (repo root) generate + build on CI (macOS + iOS)
 
 ../macos/OrbitKit             # shared cross-platform core (models, SSE, transcript reducer) — SPM dep
 ../macos/OrbitApp/Sources     # shared SwiftUI views + @Observable models, referenced in place
@@ -50,9 +50,10 @@ CI job.
 
 ## Release (TestFlight)
 
-Signed builds go to TestFlight via `.github/workflows/ios-release.yml`, using an App Store Connect
-API key for both signing (`-allowProvisioningUpdates` creates the cert + profile on the runner) and
-upload (`ExportOptions.plist`'s `destination = upload`). No manual certificates, no fastlane.
+Signed builds go to TestFlight via the `testflight` job in `.github/workflows/release.yml` (shared
+with the macOS DMG job), using an App Store Connect API key for both signing
+(`-allowProvisioningUpdates` creates the cert + profile on the runner) and upload
+(`ExportOptions.plist`'s `destination = upload`). No manual certificates, no fastlane.
 
 **One-time setup**
 1. In App Store Connect, create the app with bundle id **`io.orbitd.app`** (the same id in `project.yml`).
@@ -65,11 +66,13 @@ upload (`ExportOptions.plist`'s `destination = upload`). No manual certificates,
 
 **Cut a build**
 ```sh
-git tag ios-v0.1.0 && git push origin ios-v0.1.0   # → archives + uploads to TestFlight
+.claude/skills/release/release.sh 0.1.2   # pushes v0.1.2 → macOS DMG + iOS TestFlight
 ```
-`ios-v*` tags are distinct from the macOS `v*` tags, so the two release workflows never collide. The
-tag sets the marketing version; the build number is the commit count. `workflow_dispatch` also works
-(builds `0.1.0`).
+iOS and macOS **share one `v*` tag** and one workflow (`release.yml`): pushing `vX.Y.Z` runs both its
+`dmg` and `testflight` jobs. The tag sets the marketing version — any `-beta.N` suffix is stripped
+for iOS (`v0.1.2-beta.3` → TestFlight `0.1.2`, since `CFBundleShortVersionString` must be numeric);
+the build number is the commit count. To build iOS **only**, skip the tag and dispatch with the
+platform input: `gh workflow run release.yml --ref main -f platform=ios` (builds `0.1.0`).
 
 **Local fallback** (first build, or if CI signing needs debugging): `xcodegen generate` then open
 `Orbit.xcodeproj` in Xcode → *Product ▸ Archive* → *Distribute App ▸ TestFlight & App Store*. Xcode
