@@ -70,6 +70,12 @@ struct CompactShell: View {
             .tag(CompactTab.more)
         }
         .task { model.startPolling() }
+        // New session (the AgentPanes toolbar's compose button). On compact the three-column split
+        // collapses to a stack whose detail pane is only *pushed* by a session selection — flipping
+        // `composingAgentSession` can't reach it, so the button looked dead. Present the draft
+        // composer as a sheet instead (the iPhone-idiomatic compose surface, à la Mail). Attached to
+        // the TabView so it presents regardless of the active tab (e.g. a future ⌘N deep link).
+        .sheet(isPresented: $model.composingAgentSession) { AgentComposeSheet() }
     }
 
     /// Bridge the tab bar to `selectedSection` so deep links (which set the section) land on the
@@ -137,6 +143,37 @@ private struct AgentListCompact: View {
             model.composingAgentSession = false
         }
         .task { await model.agents?.load() }
+    }
+}
+
+/// The new-session draft composer, presented as a sheet on compact width. The regular-width shell
+/// renders this same `NewSessionView` inline in the Agents detail pane; the collapsed compact split
+/// can't reach that pane from a boolean, so we surface it as a modal instead. Sending creates the
+/// session, then dismisses and selects it so its console pushes onto the Agents stack.
+private struct AgentComposeSheet: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if let registry = model.consoleRegistry, let agents = model.agents,
+                   let id = model.selectedAgentID, let agent = agents.agent(id) {
+                    NewSessionView(agent: agent, registry: registry) { session in
+                        model.composingAgentSession = false
+                        model.selectedAgentSessionID = session.id
+                    }
+                    .navigationTitle(agent.name)
+                } else {
+                    ContentUnavailableView("Select an agent", systemImage: "person.2")
+                }
+            }
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { model.composingAgentSession = false }
+                }
+            }
+        }
     }
 }
 
