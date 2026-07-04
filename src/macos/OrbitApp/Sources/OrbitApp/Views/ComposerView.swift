@@ -491,7 +491,7 @@ private struct ComposerImageTap: ViewModifier {
 }
 
 /// Compact plan-usage pill for the composer footer (mirrors web's PlanUsageIndicator): a mini
-/// 5-hour bar + percent; tapping opens a popover with every subscription window, like `/usage`.
+/// 5-hour bar + percent; tapping opens the per-window detail, like `/usage`.
 private struct PlanUsageIndicator: View {
     let usage: PlanUsageSnapshot
     @State private var showDetail = false
@@ -506,26 +506,75 @@ private struct PlanUsageIndicator: View {
             }
             .buttonStyle(.plain)
             .help("Plan usage \(pct)%")
-            .popover(isPresented: $showDetail, arrowEdge: .top) {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Plan usage").font(.headline)
-                    ForEach(usage.rows) { row in
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                Text(row.label)
-                                Spacer()
-                                Text("\(row.percent)%").foregroundStyle(.secondary)
-                            }
-                            .font(.caption)
-                            UsageBar(percent: row.percent).frame(height: 5)
-                            if let reset = row.window.resetsAt.flatMap(formatReset) {
-                                Text("Resets \(reset)").font(.caption2).foregroundStyle(.tertiary)
-                            }
-                        }
+            .modifier(PlanUsageDetailPresentation(isPresented: $showDetail, usage: usage))
+        }
+    }
+}
+
+/// Presents the plan-usage detail per platform. macOS gets a tight anchored popover sized to its
+/// content. iOS gets a fitted bottom sheet — a bare `.popover` there auto-promotes to a full-screen
+/// modal that strands two short rows mid-screen, so we show a proper sheet: a grabber, a top-anchored
+/// title with Done, and a detent sized to the row count so there's no wasted space.
+private struct PlanUsageDetailPresentation: ViewModifier {
+    @Binding var isPresented: Bool
+    let usage: PlanUsageSnapshot
+
+    func body(content: Content) -> some View {
+        #if os(macOS)
+        content.popover(isPresented: $isPresented, arrowEdge: .top) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Plan usage").font(.headline)
+                PlanUsageDetailRows(rows: usage.rows, compact: true)
+            }
+            .padding(14)
+            .frame(width: 260)
+        }
+        #else
+        content.sheet(isPresented: $isPresented) {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack {
+                    Text("Plan usage").font(.title3.weight(.semibold))
+                    Spacer()
+                    Button("Done") { isPresented = false }
+                }
+                .padding(.bottom, 16)
+                PlanUsageDetailRows(rows: usage.rows)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 24)
+            .padding(.bottom, 20)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .presentationDetents([.height(CGFloat(120 + usage.rows.count * 66))])
+            .presentationDragIndicator(.visible)
+        }
+        #endif
+    }
+}
+
+/// The per-window rows shared by the macOS popover and the iOS sheet. `compact` shrinks the type and
+/// bar for the tight popover; the iOS sheet uses the roomier, touch-friendly sizing.
+private struct PlanUsageDetailRows: View {
+    let rows: [PlanUsageRow]
+    var compact: Bool = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: compact ? 12 : 18) {
+            ForEach(rows) { row in
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text(row.label)
+                        Spacer()
+                        Text("\(row.percent)%").foregroundStyle(.secondary)
+                    }
+                    .font(compact ? .caption : .subheadline)
+                    UsageBar(percent: row.percent).frame(height: compact ? 5 : 8)
+                    if let reset = row.window.resetsAt.flatMap(formatReset) {
+                        Text("Resets \(reset)")
+                            .font(compact ? .caption2 : .caption)
+                            .foregroundStyle(.tertiary)
                     }
                 }
-                .padding(14)
-                .frame(width: 260)
             }
         }
     }
