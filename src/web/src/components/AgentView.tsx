@@ -31,6 +31,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tansta
 import { App as AntApp, Button, Dropdown, Image, Input, type MenuProps, Popover, Segmented, Select, Tooltip } from 'antd';
 import {
   type MouseEvent as ReactMouseEvent,
+  type TouchEvent as ReactTouchEvent,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -628,6 +629,13 @@ export function AgentView({ runner }: { runner: Runner }) {
   // Which slice of the session list to show: active, archived, system, or trash.
   const [view, setView] = useState<'active' | 'archived' | 'deleted' | 'system'>('active');
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null); // session row whose action menu is open
+  // Touch swipe-to-reveal for session rows: hover has no touch equivalent, so on mobile the
+  // row's actions (pin/complete, or the ⋯ menu) hide behind a leftward swipe instead.
+  const [swipeOpenId, setSwipeOpenId] = useState<string | null>(null); // row held open by a swipe
+  const [swipeDragId, setSwipeDragId] = useState<string | null>(null); // row currently under a finger drag
+  const [swipeDx, setSwipeDx] = useState(0); // live drag offset (px; negative = leftward)
+  const swipeRef = useRef<{ id: string; x: number; y: number; axis: '' | 'h' | 'v' } | null>(null);
+  const swipeClickGuard = useRef(false); // eat the click that trails a horizontal swipe
   const [shareOpen, setShareOpen] = useState(false); // share dialog for the open session
   const [agentId, setAgentId] = useState<string | undefined>(undefined);
   const [events, setEvents] = useState<RunEvent[]>([]);
@@ -668,6 +676,47 @@ export function AgentView({ runner }: { runner: Runner }) {
   const resumeStreamRef = useRef<(() => void) | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null); // the left session-list column, for arrow-key scrolling
+
+  // How far a row slides to expose its actions. The active tab shows two chips (pin + ✓),
+  // every other tab a single ⋯, so it needs less room.
+  const swipeReveal = view === 'active' ? 72 : 44;
+  const onRowTouchStart = (e: ReactTouchEvent, id: string): void => {
+    if (!isMobile) return;
+    const t = e.touches[0];
+    swipeRef.current = { id, x: t.clientX, y: t.clientY, axis: '' };
+  };
+  const onRowTouchMove = (e: ReactTouchEvent): void => {
+    const st = swipeRef.current;
+    if (!st) return;
+    const t = e.touches[0];
+    const mx = t.clientX - st.x;
+    const my = t.clientY - st.y;
+    // Lock the axis once the finger clears a small deadzone; a vertical intent yields to the
+    // list's own scroll and never drags the row.
+    if (st.axis === '') {
+      if (Math.abs(mx) < 8 && Math.abs(my) < 8) return;
+      st.axis = Math.abs(mx) > Math.abs(my) ? 'h' : 'v';
+      if (st.axis === 'h') {
+        setSwipeDragId(st.id);
+        setSwipeOpenId((cur) => (cur && cur !== st.id ? null : cur)); // starting a swipe shuts any other open row
+      }
+    }
+    if (st.axis !== 'h') return;
+    const base = swipeOpenId === st.id ? -swipeReveal : 0;
+    setSwipeDx(Math.max(-swipeReveal - 20, Math.min(0, base + mx))); // clamp with a little left-side rubber-band
+  };
+  const onRowTouchEnd = (): void => {
+    const st = swipeRef.current;
+    swipeRef.current = null;
+    if (!st || st.axis !== 'h') {
+      setSwipeDragId(null);
+      return;
+    }
+    swipeClickGuard.current = true; // the trailing click must not navigate
+    setSwipeOpenId(swipeDx <= -swipeReveal / 2 ? st.id : null);
+    setSwipeDragId(null);
+    setSwipeDx(0);
+  };
   // The user's prompt for the turn currently in view, surfaced as a sticky bar when a long
   // answer has pushed that bubble off the top — so what was asked stays findable. null hides it.
   const [stuck, setStuck] = useState<{ seq: string | null; text: string } | null>(null);
@@ -2206,35 +2255,58 @@ export function AgentView({ runner }: { runner: Runner }) {
             // Trash (deleted) rows stay closed.
             const openable = view !== 'deleted';
             const line = sessionLine(s, openable);
+            const swiped = swipeOpenId === s.id;
+            const dragging = swipeDragId === s.id;
+            const swipeTx = dragging ? swipeDx : swiped ? -swipeReveal : 0;
             return (
               <div
-                className={`session-row${openable ? '' : ' no-open'}${s.id === selectedId ? ' active' : ''}${menuOpenId === s.id ? ' menu-open' : ''}${view === 'active' && s.pinnedAt ? ' pinned' : ''}`}
+                className={`session-row${openable ? '' : ' no-open'}${s.id === selectedId ? ' active' : ''}${menuOpenId === s.id ? ' menu-open' : ''}${view === 'active' && s.pinnedAt ? ' pinned' : ''}${swiped ? ' swipe-open' : ''}`}
                 key={s.id}
-                onClick={openable ? () => navigate(`/sessions/${encodeId(s.id)}`) : undefined}
+                onClick={() => {
+                  if (swipeClickGuard.current) {
+                    swipeClickGuard.current = false;
+                    return; // this click merely ends a swipe
+                  }
+                  if (swipeOpenId) {
+                    setSwipeOpenId(null); // a tap anywhere on an open row just closes it
+                    return;
+                  }
+                  if (openable) navigate(`/sessions/${encodeId(s.id)}`);
+                }}
+                onTouchStart={(e) => onRowTouchStart(e, s.id)}
+                onTouchMove={onRowTouchMove}
+                onTouchEnd={onRowTouchEnd}
               >
-                <span className="session-icon">
-                  <StatusIcon session={s} completed={view === 'archived'} />
-                </span>
-                <div className="session-main">
-                  <div className="session-title-row">
-                    <div className="session-title">{s.title}</div>
-                    {(s.mergeStatus === 'error' || s.mergeStatus === 'conflict') && (
-                      <Tooltip
-                        title={s.mergeStatus === 'conflict' ? 'Merge conflict — needs resolving' : 'Merge failed'}
-                        placement="top"
-                      >
-                        <span className="session-merge-badge">⚠</span>
-                      </Tooltip>
-                    )}
-                    <span className="session-time">{fmtTime(s.lastTurnAt ?? s.createdAt)}</span>
-                  </div>
-                  {line ? (
-                    <div
-                      className={`session-preview${line.tone === 'preview' ? '' : ` tone-${line.tone}`}`}
-                    >
-                      {line.text}
+                <div
+                  className={`session-swipe${dragging ? ' dragging' : ''}`}
+                  style={swipeTx ? { transform: `translateX(${swipeTx}px)` } : undefined}
+                >
+                  <span className="session-icon">
+                    <StatusIcon session={s} completed={view === 'archived'} />
+                  </span>
+                  <div className="session-main">
+                    <div className="session-title-row">
+                      <div className="session-title">{s.title}</div>
+                      {(s.mergeStatus === 'error' || s.mergeStatus === 'conflict') && (
+                        <Tooltip
+                          title={
+                            s.mergeStatus === 'conflict' ? 'Merge conflict — needs resolving' : 'Merge failed'
+                          }
+                          placement="top"
+                        >
+                          <span className="session-merge-badge">⚠</span>
+                        </Tooltip>
+                      )}
+                      <span className="session-time">{fmtTime(s.lastTurnAt ?? s.createdAt)}</span>
                     </div>
-                  ) : null}
+                    {line ? (
+                      <div
+                        className={`session-preview${line.tone === 'preview' ? '' : ` tone-${line.tone}`}`}
+                      >
+                        {line.text}
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
                 <div className="session-right">
                   <div className="session-actions" onClick={(e) => e.stopPropagation()}>
@@ -2246,6 +2318,7 @@ export function AgentView({ runner }: { runner: Runner }) {
                             onClick={(e) => {
                               e.stopPropagation();
                               pinMut.mutate({ id: s.id, pin: !s.pinnedAt });
+                              setSwipeOpenId(null);
                             }}
                           >
                             {s.pinnedAt ? <PushpinFilled /> : <PushpinOutlined />}
@@ -2257,6 +2330,7 @@ export function AgentView({ runner }: { runner: Runner }) {
                             onClick={(e) => {
                               e.stopPropagation();
                               archiveMut.mutate(s.id);
+                              setSwipeOpenId(null);
                             }}
                           >
                             <CheckOutlined />

@@ -2367,7 +2367,27 @@ body {
   padding: 0 8px;
   border-bottom: 1px solid var(--bg-hover);
   cursor: pointer;
+  /* Keep the swipe-away content from spilling past the row's edges. */
+  overflow: hidden;
   --row-bg: var(--bg-raised);
+}
+/* Wraps the row's icon + text so a touch swipe can slide it left, exposing the actions
+   pinned to the right edge. On desktop it never translates (transform stays 0). */
+.session-swipe {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+  transition: transform 0.18s ease;
+}
+.session-swipe.dragging {
+  transition: none; /* track the finger 1:1 mid-drag; only snaps animate */
+}
+/* A swiped-open row reveals its actions exactly like hover does. */
+.session-row.swipe-open .session-right {
+  opacity: 1;
+  pointer-events: auto;
 }
 .session-row:hover {
   background: var(--bg-hover);
@@ -4626,6 +4646,12 @@ body {
      stray sideways overflow would still surface a horizontal scrollbar. */
   body {
     overflow-x: hidden;
+  }
+
+  /* Let the browser own vertical scrolling but hand horizontal gestures to our
+     swipe-to-reveal handler, so the two don't fight. */
+  .session-row {
+    touch-action: pan-y;
   }
 
   /* Fixed top bar carrying the drawer toggle. */
