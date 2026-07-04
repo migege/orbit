@@ -280,13 +280,11 @@ struct StatusGlyphView: View {
         Group {
             switch glyph.shape {
             case .spinner:
-                ProgressView().controlSize(.small)
+                SpinnerGlyph(color: color)
             case .symbol(let name):
-                Image(systemName: name).font(.system(size: 15))
+                Image(systemName: name).font(.system(size: 15)).foregroundStyle(color)
             }
         }
-        .foregroundStyle(color)
-        .tint(color)
         .frame(width: 20, height: 20)
         .help(glyph.label)
         .accessibilityLabel(glyph.label)
@@ -299,6 +297,26 @@ struct StatusGlyphView: View {
         case .error:   return .red
         case .neutral: return .secondary
         }
+    }
+}
+
+/// A self-drawn indeterminate spinner (a rotating ¾ arc) for the "working" glyph. SwiftUI's
+/// `ProgressView` bridges to a UIKit activity indicator that renders *blank* after a `List` row is
+/// detached and reattached — open a session and navigate back and the spinner vanishes (while the
+/// static SF Symbols survive). A pure-SwiftUI arc re-animates reliably on reappear and also matches
+/// web's spinning-arc loader. `spinning` is reset on disappear so reappearance re-triggers the spin.
+private struct SpinnerGlyph: View {
+    let color: Color
+    @State private var spinning = false
+    var body: some View {
+        Circle()
+            .trim(from: 0, to: 0.7)
+            .stroke(color, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+            .frame(width: 13, height: 13)
+            .rotationEffect(.degrees(spinning ? 360 : 0))
+            .animation(.linear(duration: 0.85).repeatForever(autoreverses: false), value: spinning)
+            .onAppear { spinning = true }
+            .onDisappear { spinning = false }
     }
 }
 
