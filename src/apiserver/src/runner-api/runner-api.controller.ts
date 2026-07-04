@@ -842,6 +842,12 @@ export class RunnerApiController {
     // latest overall. An empty (all-streaming) batch leaves the prior value untouched.
     let frontier: { seq: number; tool: string | null } | null = null;
     for (const e of durable) {
+      // Sub-agent (Task/Agent) events carry the spawning call's parentToolUseId. Skip
+      // them: while a sub-agent runs, its own tool_use/tool_result would clobber then
+      // clear the parent's frontier, dropping the sidebar out of "Running…" even though
+      // the parent's Task call is still in flight. The parent's own tool_use has no
+      // parentToolUseId, so it stays the frontier until its tool_result lands.
+      if ((e.payload as { parentToolUseId?: string } | null)?.parentToolUseId) continue;
       if (frontier && e.seq <= frontier.seq) continue;
       const tool =
         e.type === RunEventType.TOOL_USE
