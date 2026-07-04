@@ -23,6 +23,7 @@ struct CompactShell: View {
                     .onChange(of: model.selectedSessionID, initial: true) { _, _ in
                         model.scheduleConsoleActivate()
                     }
+                    .refreshable { await model.loadSessions() }
             } detail: {
                 SectionDetail(section: .active)
             }
@@ -33,6 +34,7 @@ struct CompactShell: View {
             // TASKS — task list → detail
             NavigationSplitView {
                 TasksListView()
+                    .refreshable { await model.tasks?.load() }
             } detail: {
                 TaskDetailView()
             }
@@ -53,6 +55,7 @@ struct CompactShell: View {
             // RUNNERS — runner list → detail
             NavigationSplitView {
                 RunnersListView()
+                    .refreshable { await model.runners?.load() }
             } detail: {
                 RunnerDetailView()
             }
@@ -128,6 +131,7 @@ private struct AgentListCompact: View {
             }
         }
         .navigationTitle("Agents")
+        .refreshable { await model.agents?.load() }
         .onChange(of: model.selectedAgentID) { _, _ in
             model.selectedAgentSessionID = nil
             model.composingAgentSession = false

@@ -5,6 +5,7 @@ import OrbitKit
 import AppKit
 #elseif os(iOS)
 import UIKit
+import PhotosUI
 #endif
 
 #if os(macOS)
@@ -31,6 +32,11 @@ struct ComposerView: View {
     #if os(macOS)
     @State private var pasteMonitor: Any?
     @State private var pasteState = ComposerPasteState()
+    #endif
+    #if os(iOS)
+    @State private var showPhotoPicker = false
+    @State private var showFileImporter = false
+    @State private var pickedPhotos: [PhotosPickerItem] = []
     #endif
 
     // Show the `/` hint menu while the cursor sits on a `/token` that hasn't been Escape-dismissed.
@@ -264,8 +270,20 @@ struct ComposerView: View {
                 Label("Shell", systemImage: "terminal")
             }
             Divider()
-            Button { pickFiles(images: true) } label: { Label("Attach image", systemImage: "photo") }
-            Button { pickFiles(images: false) } label: { Label("Upload file", systemImage: "paperclip") }
+            Button {
+                #if os(iOS)
+                showPhotoPicker = true
+                #else
+                pickFiles(images: true)
+                #endif
+            } label: { Label("Attach image", systemImage: "photo") }
+            Button {
+                #if os(iOS)
+                showFileImporter = true
+                #else
+                pickFiles(images: false)
+                #endif
+            } label: { Label("Upload file", systemImage: "paperclip") }
         } label: {
             Image(systemName: "plus")
                 .font(.system(size: 15))
@@ -275,6 +293,18 @@ struct ComposerView: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .help("Add a command, skill, shell command, or attachment")
+        #if os(iOS)
+        .photosPicker(isPresented: $showPhotoPicker, selection: $pickedPhotos,
+                      maxSelectionCount: 5, matching: .images)
+        .onChange(of: pickedPhotos) { _, items in
+            guard !items.isEmpty else { return }
+            Task { await attachPhotos(items); pickedPhotos = [] }
+        }
+        .fileImporter(isPresented: $showFileImporter, allowedContentTypes: [.item],
+                      allowsMultipleSelection: true) { result in
+            if case .success(let urls) = result { Task { await attachFiles(urls) } }
+        }
+        #endif
     }
 
     // MARK: borderless footer menus (mirror the web composer's plain dropdowns)
@@ -410,9 +440,31 @@ struct ComposerView: View {
         guard panel.runModal() == .OK else { return }
         for url in panel.urls { Task { await console.attachFile(url: url) } }
         #endif
-        // iOS: photo/file picking (PHPicker + `.fileImporter`) is Phase D; the `+` menu items are
-        // inert there until then. `orbitPNGData()` for pasted/attached images lives in Platform.swift.
+        // iOS uses the SwiftUI `.photosPicker` / `.fileImporter` on the + menu (see addMenu) rather
+        // than an imperative panel — the pick is handled by attachPhotos / attachFiles below.
     }
+
+    #if os(iOS)
+    /// Photos-library picks: PhotosUI hands back the original bytes (often HEIC/JPEG); normalize to
+    /// PNG — one of the server's inline-image types — before uploading via the shared attach path.
+    private func attachPhotos(_ items: [PhotosPickerItem]) async {
+        for item in items {
+            guard let data = try? await item.loadTransferable(type: Data.self) else { continue }
+            let png = PlatformImage(data: data)?.orbitPNGData() ?? data
+            await console.attach(filename: "photo.png", mimeType: "image/png", data: png)
+        }
+    }
+
+    /// Document-picker files: the URLs are security-scoped, so hold access across the read that
+    /// `attachFile` does (it derives the MIME from the extension and enforces the size cap).
+    private func attachFiles(_ urls: [URL]) async {
+        for url in urls {
+            let scoped = url.startAccessingSecurityScopedResource()
+            await console.attachFile(url: url)
+            if scoped { url.stopAccessingSecurityScopedResource() }
+        }
+    }
+    #endif
 }
 
 /// Compact plan-usage pill for the composer footer (mirrors web's PlanUsageIndicator): a mini

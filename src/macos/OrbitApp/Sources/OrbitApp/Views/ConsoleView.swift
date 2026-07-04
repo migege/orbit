@@ -83,6 +83,7 @@ struct TranscriptView: View {
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)   // show the window background, not the List's own
+            .scrollDismissesKeyboard(.interactively)   // iOS: swipe the transcript to lower the keyboard
             .defaultScrollAnchor(.bottom)
             .modifier(BottomTracker(atBottom: $atBottom))
             // Follow new/streaming content only while pinned at the bottom (web's smart auto-scroll):
