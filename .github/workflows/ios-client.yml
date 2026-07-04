@@ -26,6 +26,9 @@ on:
       - "src/macos/OrbitApp/**"
       - "src/macos/OrbitKit/**"
       - ".github/workflows/ios-client.yml"
+  # Manual trigger so the Mac build can be run on demand (e.g. `gh workflow run ios-client.yml
+  # --ref <branch>`) to verify a phase without opening a throwaway PR.
+  workflow_dispatch:
 
 concurrency:
   group: ios-client-${{ github.ref }}
@@ -46,8 +49,9 @@ jobs:
 
   ios:
     name: iOS (generate + build)
-    # macOS runners bill at 10× — only burn them on PRs, not on every branch push.
-    if: github.event_name == 'pull_request'
+    # macOS runners bill at 10× — only burn them on PRs or an explicit manual dispatch,
+    # not on every branch push.
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4

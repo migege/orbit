@@ -68,6 +68,17 @@ extension Color {
         })
         #endif
     }
+
+    /// The editor/text-field surface: macOS's `.textBackgroundColor`, iOS's system background.
+    /// Used for the composer's rounded field so it reads as a distinct surface (with its border
+    /// and shadow) on both platforms.
+    static var editorSurface: Color {
+        #if os(macOS)
+        Color(nsColor: .textBackgroundColor)
+        #else
+        Color(uiColor: .systemBackground)
+        #endif
+    }
 }
 
 extension View {
@@ -78,6 +89,16 @@ extension View {
         self.menuStyle(.borderlessButton)
         #else
         self
+        #endif
+    }
+
+    /// A link-style button — borderless blue text. macOS has `.link`; iOS has no `LinkButtonStyle`,
+    /// so it approximates with a plain button tinted to the accent colour.
+    @ViewBuilder func linkButtonStyle() -> some View {
+        #if os(macOS)
+        self.buttonStyle(.link)
+        #else
+        self.buttonStyle(.plain).foregroundStyle(Color.accentColor)
         #endif
     }
 }

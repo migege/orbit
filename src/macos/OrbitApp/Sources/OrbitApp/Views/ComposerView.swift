@@ -127,7 +127,7 @@ struct ComposerView: View {
             // a touch instead of flipping to a hard blue outline.
             .background(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(Color(nsColor: .textBackgroundColor))
+                    .fill(Color.editorSurface)
                     .shadow(color: .black.opacity(inputFocused ? 0.12 : 0.06),
                             radius: inputFocused ? 7 : 4, y: 1.5)
             )

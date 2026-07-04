@@ -18,7 +18,7 @@ struct WorktreeBar: View {
                 Button { showDiff = true } label: {
                     Text("\(console.diff.count) changed file\(console.diff.count == 1 ? "" : "s")")
                 }
-                .buttonStyle(.link)
+                .linkButtonStyle()
             }
             Spacer()
             Button("Commit") { Task { await console.commit() } }.disabled(busy)
