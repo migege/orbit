@@ -4774,7 +4774,10 @@ body {
   .ant-input-affix-wrapper input,
   textarea.ant-input,
   .skills-search,
-  .share-modal-url {
+  .share-modal-url,
+  /* AntD Select focuses this hidden search input on tap; a <16px font here is what
+     still zooms the page when the composer's Mode / Model / Effort dropdowns open. */
+  .ant-select-selection-search-input {
     font-size: 16px;
   }
 }
