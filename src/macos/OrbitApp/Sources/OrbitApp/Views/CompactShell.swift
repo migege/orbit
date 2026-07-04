@@ -36,8 +36,11 @@ struct CompactShell: View {
                     .offset(x: x - dw)
 
                 // Section content — pushed right, dimmed, and tap/swipe-to-close via the scrim.
+                // The scrim is an overlay *inside* the offset (offset is the outermost modifier) so it
+                // travels with the content and dims only the visible peek at [x, x+w]. Applying the
+                // overlay after `.offset` would size it to the un-offset full-screen frame — painting
+                // over the drawer and stealing its taps, so drawer rows couldn't switch sections.
                 CompactSections(needsYou: model.groups.needsYou.count, openDrawer: openDrawer)
-                    .offset(x: x)
                     .overlay {
                         if x > 0 {
                             Color.black.opacity(0.35 * (x / dw))
@@ -46,6 +49,7 @@ struct CompactShell: View {
                                 .gesture(closeDrag(width: w))
                         }
                     }
+                    .offset(x: x)
 
                 // Left-edge open strip — present only at a section's root so it yields the edge to
                 // the system back-swipe on any pushed page.
