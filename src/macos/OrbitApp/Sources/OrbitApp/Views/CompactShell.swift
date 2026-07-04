@@ -62,10 +62,6 @@ struct CompactShell: View {
                 }
             }
             .task { model.startPolling() }
-            // New session draft composer (the Agents compose button). On compact the three-column
-            // split collapses to a stack whose detail is only *pushed* by a selection, so present the
-            // draft as a sheet instead. Attached here so it presents regardless of the active section.
-            .sheet(isPresented: $model.composingAgentSession) { AgentComposeSheet() }
         }
     }
 
@@ -171,6 +167,16 @@ private struct CompactSections: View {
                     .drawerToggle(open: openDrawer)
             } content: {
                 AgentContentColumn()
+                    // New session is *pushed* full-screen over the sessions list (not a bottom sheet):
+                    // it leads into the session rather than back to a list, so a push reads more
+                    // naturally and flows straight into the console once the first message is sent
+                    // (the completion below arms `selectedAgentSessionID`, which the collapsed split
+                    // pushes as the detail — the same path the console already takes). Attached to the
+                    // content column so it rides that column's stack; compact-only since this whole
+                    // shell is (iPad keeps `AgentConsoleDetail`'s inline draft).
+                    .navigationDestination(isPresented: $model.composingAgentSession) {
+                        AgentComposePush()
+                    }
             } detail: {
                 AgentConsoleDetail()
             }
@@ -389,34 +395,28 @@ private struct AgentListCompact: View {
     }
 }
 
-/// The new-session draft composer, presented as a sheet on compact width. The regular-width shell
-/// renders this same `NewSessionView` inline in the Agents detail pane; the collapsed compact split
-/// can't reach that pane from a boolean, so we surface it as a modal instead. Sending creates the
-/// session, then dismisses and selects it so its console pushes onto the Agents stack.
-private struct AgentComposeSheet: View {
+/// The new-session draft composer, pushed full-screen onto the compact Agents stack. The regular-width
+/// shell renders this same `NewSessionView` inline in the Agents detail pane; the collapsed compact
+/// split can't reach that pane from a boolean, so we push it as its own page here. The system back
+/// button abandons the draft (clearing the `isPresented` binding); sending creates the session and
+/// selects it so its console pushes onto the stack in its place.
+private struct AgentComposePush: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        NavigationStack {
-            Group {
-                if let registry = model.consoleRegistry, let agents = model.agents,
-                   let id = model.selectedAgentID, let agent = agents.agent(id) {
-                    NewSessionView(agent: agent, registry: registry) { session in
-                        model.composingAgentSession = false
-                        model.selectedAgentSessionID = session.id
-                    }
-                    .navigationTitle(agent.name)
-                } else {
-                    ContentUnavailableView("Select an agent", systemImage: "person.2")
+        Group {
+            if let registry = model.consoleRegistry, let agents = model.agents,
+               let id = model.selectedAgentID, let agent = agents.agent(id) {
+                NewSessionView(agent: agent, registry: registry) { session in
+                    model.composingAgentSession = false
+                    model.selectedAgentSessionID = session.id
                 }
-            }
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { model.composingAgentSession = false }
-                }
+                .navigationTitle(agent.name)
+            } else {
+                ContentUnavailableView("Select an agent", systemImage: "person.2")
             }
         }
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 #endif
