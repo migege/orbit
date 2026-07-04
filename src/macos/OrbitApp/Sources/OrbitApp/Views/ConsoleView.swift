@@ -721,20 +721,10 @@ struct FullScreenImageView: View {
                         if zoomed { scale = 1; offset = .zero } else { scale = 2.6 }
                     }
                 }
+                // A single tap anywhere dismisses the preview (no on-screen close button).
+                .onTapGesture { dismiss() }
         }
         .ignoresSafeArea()
-        .overlay(alignment: .topTrailing) {
-            Button { dismiss() } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .padding(11)
-                    .background(.ultraThinMaterial, in: Circle())
-            }
-            .padding(.trailing, 16).padding(.top, 4)
-            .opacity(1 - dismissProgress)
-            .accessibilityLabel("Close")
-        }
         .statusBarHidden(true)
         .presentationBackground(.clear)
     }
@@ -845,9 +835,10 @@ struct ImagePagerView: View {
                     if zoomed { scale = 1; pan = .zero } else { scale = 2.6 }
                 }
             }
+            // A single tap anywhere dismisses the preview (no on-screen close button).
+            .onTapGesture { dismiss() }
         }
         .ignoresSafeArea()
-        .overlay(alignment: .topTrailing) { closeButton }
         .overlay(alignment: .bottom) { pageDots }
         .statusBarHidden(true)
         .presentationBackground(.clear)
@@ -870,19 +861,6 @@ struct ImagePagerView: View {
         }
         .frame(width: size.width, height: size.height)
         .task(id: att.id) { await store.load(att.id) }
-    }
-
-    private var closeButton: some View {
-        Button { dismiss() } label: {
-            Image(systemName: "xmark")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(.white)
-                .padding(11)
-                .background(.ultraThinMaterial, in: Circle())
-        }
-        .padding(.trailing, 16).padding(.top, 4)
-        .opacity(1 - dismissProgress)
-        .accessibilityLabel("Close")
     }
 
     @ViewBuilder
