@@ -231,6 +231,10 @@ export interface RunnerHeartbeatResponse {
    *  worktree's uncommitted changes onto its branch, then POST the outcome via
    *  /runner/sessions/:id/commit-result. Absent on older control planes. */
   commitRequests?: CommitCommand[];
+  /** Legacy assistant artifacts that were written as runner-local /root/.orbit/uploads paths
+   *  before they were persisted as attachments. The runner uploads them back to the control
+   *  plane so historical transcript links can download. */
+  artifactRequests?: ArtifactCommand[];
 }
 
 /** Control plane → runner: merge one session's worktree branch into a target branch. */
@@ -253,6 +257,12 @@ export interface CommitCommand {
   sessionId: string;
   /** The session's worktree branch, e.g. orbit/<slug>-<hash>. */
   branch: string;
+}
+
+export interface ArtifactCommand {
+  requestId: string;
+  sessionId: string;
+  path: string;
 }
 
 // ─────────────────────────── Interactive sessions (Route B) ───────────────────────────
@@ -562,4 +572,11 @@ export interface SessionDiffResultRequest {
   /** Whether the branch already landed in the default merge target (see SessionLiveState).
    *  Recomputed with the diff, so opening the diff drawer refreshes it for an idle session. */
   branchMerged?: boolean;
+}
+
+export interface ArtifactResultRequest {
+  requestId: string;
+  status: 'uploaded' | 'missing' | 'error';
+  attachmentId?: string;
+  message?: string;
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -142,6 +143,7 @@ func runLoop(cfg *RunnerConfig) {
 		var mergeMu sync.Mutex
 		mergingNow := map[string]bool{}
 		committingNow := map[string]bool{}
+		artifactNow := map[string]bool{}
 		for {
 			select {
 			case <-hbStop:
@@ -262,6 +264,26 @@ func runLoop(cfg *RunnerConfig) {
 						delete(committingNow, req.SessionID)
 						mergeMu.Unlock()
 					}(c)
+				}
+				for _, a := range resp.ArtifactRequests {
+					mergeMu.Lock()
+					busy := artifactNow[a.RequestID]
+					if !busy {
+						artifactNow[a.RequestID] = true
+					}
+					mergeMu.Unlock()
+					if busy {
+						continue
+					}
+					go func(req ArtifactCommand) {
+						res := uploadLegacyArtifact(loopCtx, t, req)
+						if err := t.artifactResult(req.SessionID, res); err != nil {
+							logln("artifact-result POST failed for", req.SessionID+":", err)
+						}
+						mergeMu.Lock()
+						delete(artifactNow, req.RequestID)
+						mergeMu.Unlock()
+					}(a)
 				}
 			}
 		}
@@ -384,6 +406,31 @@ func runLoop(cfg *RunnerConfig) {
 		time.Sleep(200 * time.Millisecond)
 	}
 	close(hbStop)
+}
+
+func uploadLegacyArtifact(ctx context.Context, t *Transport, req ArtifactCommand) ArtifactResultRequest {
+	out := ArtifactResultRequest{RequestID: req.RequestID}
+	if req.RequestID == "" || req.SessionID == "" || req.Path == "" {
+		out.Status = "error"
+		out.Message = "invalid artifact request"
+		return out
+	}
+	clean := filepath.Clean(req.Path)
+	root := uploadsDir(req.SessionID)
+	if !pathWithinRoots(clean, []string{root}) {
+		out.Status = "missing"
+		out.Message = "artifact is outside session uploads or missing"
+		return out
+	}
+	id, err := t.uploadSessionAttachment(ctx, req.SessionID, clean, attachmentMime(clean))
+	if err != nil {
+		out.Status = "error"
+		out.Message = err.Error()
+		return out
+	}
+	out.Status = "uploaded"
+	out.AttachmentID = id
+	return out
 }
 
 func logln(args ...interface{}) {

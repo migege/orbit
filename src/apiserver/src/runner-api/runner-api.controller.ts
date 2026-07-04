@@ -19,6 +19,7 @@ import { Prisma, RunStatus, TaskStatus } from '@prisma/client';
 import {
   AgentProvider,
   AgentExecConfig,
+  ArtifactResultRequest,
   ApprovalCreateRequest,
   ApprovalDecisionResponse,
   ApprovalStatus,
@@ -316,16 +317,18 @@ export class RunnerApiController {
     let cancelSessionIds: string[] = [];
     let mergeRequests: RunnerHeartbeatResponse['mergeRequests'] = [];
     let commitRequests: RunnerHeartbeatResponse['commitRequests'] = [];
+    let artifactRequests: RunnerHeartbeatResponse['artifactRequests'] = [];
     try {
       cancelSessionIds = await this.realtime.drainCancellations(runner.id);
       mergeRequests = await this.realtime.drainMergeRequests(runner.id);
       commitRequests = await this.realtime.drainCommitRequests(runner.id);
+      artifactRequests = await this.realtime.drainArtifactRequests(runner.id);
     } catch {
       // A transient DB hiccup shouldn't fail the heartbeat; all arrive next cycle.
     }
     // Hand back the authoritative max-concurrent (the editable DB value) so the runner
     // syncs its self-gate to a UI/API change without needing a restart.
-    return { cancelSessionIds, maxConcurrent: updated.maxConcurrent, mergeRequests, commitRequests };
+    return { cancelSessionIds, maxConcurrent: updated.maxConcurrent, mergeRequests, commitRequests, artifactRequests };
   }
 
   // ── Interactive sessions (Route B) ──
@@ -466,6 +469,22 @@ export class RunnerApiController {
       select: { id: true },
     });
     return { id: row.id };
+  }
+
+  @UseGuards(RunnerAuthGuard)
+  @Post('sessions/:id/artifacts/result')
+  async artifactResult(
+    @CurrentRunner() runner: { id: string },
+    @Param('id') sessionId: string,
+    @Body() dto: ArtifactResultRequest,
+  ): Promise<{ ok: true }> {
+    await this.assertSessionOwnership(sessionId, runner.id);
+    if (!dto?.requestId) throw new BadRequestException('requestId is required');
+    await this.prisma.conversationTurn.updateMany({
+      where: { id: dto.requestId, sessionId, kind: 'artifact' },
+      data: { status: 'ANSWERED', answeredAt: new Date() },
+    });
+    return { ok: true };
   }
 
   /**

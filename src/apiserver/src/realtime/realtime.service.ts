@@ -2,7 +2,7 @@ import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/commo
 import { EventEmitter } from 'events';
 import { randomUUID } from 'crypto';
 import { Client } from 'pg';
-import { CommitCommand, MergeCommand, NormalizedRunEvent, RunEventType } from '@orbit/shared';
+import { ArtifactCommand, CommitCommand, MergeCommand, NormalizedRunEvent, RunEventType } from '@orbit/shared';
 import { Observable, Subject, filter, map } from 'rxjs';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -257,5 +257,21 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
       select: { id: true, branch: true },
     });
     return sessions.filter((s) => s.branch).map((s) => ({ sessionId: s.id, branch: s.branch! }));
+  }
+
+  async drainArtifactRequests(runnerId: string): Promise<ArtifactCommand[]> {
+    const turns = await this.prisma.conversationTurn.findMany({
+      where: {
+        kind: 'artifact',
+        status: 'PENDING',
+        session: { assignedRunnerId: runnerId },
+      },
+      select: { id: true, sessionId: true, content: true },
+      orderBy: { createdAt: 'asc' },
+      take: 20,
+    });
+    return turns
+      .filter((t) => t.content)
+      .map((t) => ({ requestId: t.id, sessionId: t.sessionId, path: t.content! }));
   }
 }

@@ -102,6 +102,8 @@ type HeartbeatResponse struct {
 	// changes onto its branch, then POST the outcome to /commit-result. Omitted by older
 	// control planes (absent → no commits).
 	CommitRequests []CommitCommand `json:"commitRequests,omitempty"`
+	// Legacy assistant artifacts to upload from this runner's per-session uploads dir.
+	ArtifactRequests []ArtifactCommand `json:"artifactRequests,omitempty"`
 }
 
 // MergeCommand mirrors @orbit/shared: a request to merge one session's worktree branch into
@@ -130,6 +132,19 @@ type MergeResultRequest struct {
 type CommitCommand struct {
 	SessionID string `json:"sessionId"`
 	Branch    string `json:"branch"`
+}
+
+type ArtifactCommand struct {
+	RequestID string `json:"requestId"`
+	SessionID string `json:"sessionId"`
+	Path      string `json:"path"`
+}
+
+type ArtifactResultRequest struct {
+	RequestID    string `json:"requestId"`
+	Status       string `json:"status"` // "uploaded" | "missing" | "error"
+	AttachmentID string `json:"attachmentId,omitempty"`
+	Message      string `json:"message,omitempty"`
 }
 
 // CommitResultRequest mirrors @orbit/shared SessionCommitResultRequest: the outcome of a
