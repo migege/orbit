@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- App Store / TestFlight distribution. `destination = upload` makes `xcodebuild
+	     -exportArchive` push the build straight to App Store Connect (given the API-key auth
+	     flags), so no separate altool/Transporter step is needed.
+	     `app-store-connect` is the Xcode 16+ name for the old `app-store` method. -->
+	<key>method</key>
+	<string>app-store-connect</string>
+	<key>destination</key>
+	<string>upload</string>
+	<key>signingStyle</key>
+	<string>automatic</string>
+	<key>uploadSymbols</key>
+	<true/>
+	<!-- CI substitutes the real team id from the APPLE_TEAM_ID secret. For a local export,
+	     replace this with your Developer Team ID (e.g. S27N9A88JC). -->
+	<key>teamID</key>
+	<string>REPLACE_WITH_TEAM_ID</string>
+</dict>
+</plist>
