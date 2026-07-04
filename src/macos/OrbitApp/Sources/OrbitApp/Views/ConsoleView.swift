@@ -291,6 +291,11 @@ struct UserBubbleView: View {
     // Collapse a giant pasted bubble: one huge Text lays out synchronously and stalls the UI.
     private let truncateAt = 6000
 
+    @Environment(AttachmentImageStore.self) private var store
+    @Namespace private var previewNS
+    // Tapped image → full-screen pager (iOS). Unused on macOS, where thumbnails aren't tappable.
+    @State private var previewTarget: ImagePreviewTarget?
+
     private var images: [TurnAttachment] { bubble.attachments.filter(\.isImage) }
     private var files: [TurnAttachment] { bubble.attachments.filter { !$0.isImage } }
 
@@ -301,7 +306,7 @@ struct UserBubbleView: View {
             Spacer(minLength: 60)
             VStack(alignment: .trailing, spacing: 3) {
                 if !images.isEmpty {
-                    attachmentRow { ForEach(images) { ChatAttachmentImage(attachment: $0) } }
+                    imageBlock
                 }
                 if !files.isEmpty {
                     attachmentRow { ForEach(files) { ChatAttachmentFile(attachment: $0) } }
@@ -325,12 +330,36 @@ struct UserBubbleView: View {
             .contentShape(Rectangle())
             .onHover { hovering = $0 }
         }
+        .imagePreview($previewTarget, images: images, ns: previewNS, store: store)
     }
 
-    // Wrapping right-aligned row of attachment thumbnails / chips (web's `.chat-images`/`.chat-files`).
+    // Wrapping row of attachment chips (web's flex-wrap `.chat-files`): flows onto multiple lines so
+    // several chips never overflow the bubble column off the edge of a narrow screen.
     @ViewBuilder
     private func attachmentRow<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
-        HStack(alignment: .top, spacing: 6) { content() }
+        FlowLayout(spacing: 6) { content() }
+    }
+
+    // A single sent image stays a large fitted thumbnail; two or more become a wrapping grid of
+    // uniform square thumbnails (WeChat / web `flex-wrap` parity) so none is clipped off the edge.
+    // Tapping any thumbnail opens the full-screen pager at that image (iOS).
+    @ViewBuilder
+    private var imageBlock: some View {
+        if images.count == 1 {
+            ChatAttachmentImage(attachment: images[0], onTap: tapAction(0),
+                                sourceID: images[0].id, ns: previewNS)
+        } else {
+            FlowLayout(spacing: 6) {
+                ForEach(Array(images.enumerated()), id: \.element.id) { i, att in
+                    ChatAttachmentThumb(attachment: att, onTap: tapAction(i),
+                                        sourceID: att.id, ns: previewNS)
+                }
+            }
+        }
+    }
+
+    private func tapAction(_ i: Int) -> () -> Void {
+        { previewTarget = ImagePreviewTarget(index: i, id: images[i].id) }
     }
 
     // Copy + relative time, hidden until hover (web's `.chat-user-meta`). While the turn is
@@ -376,8 +405,10 @@ struct UserBubbleView: View {
 /// tapping the thumbnail opens a full-screen, pinch-to-zoom viewer (web-preview parity).
 struct ChatAttachmentImage: View {
     let attachment: TurnAttachment
+    var onTap: () -> Void
+    var sourceID: String
+    var ns: Namespace.ID
     @Environment(AttachmentImageStore.self) private var store
-    @State private var preview = false
 
     // Thumbnail cap. iOS enlarges the sent image so a screenshot reads on a phone, and allows extra
     // height so a portrait shot isn't squeezed into a thin sliver; macOS keeps a compact 220² since
@@ -407,7 +438,7 @@ struct ChatAttachmentImage: View {
                     .frame(width: size.width, height: size.height)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                     .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(.primary.opacity(0.08)) }
-                    .tappableImagePreview(img, $preview)
+                    .imageTap(onTap, sourceID: sourceID, ns: ns)
             } else if store.isNotImage(attachment.id) {
                 ChatAttachmentFile(attachment: attachment)   // not an image after all
             } else {
@@ -436,27 +467,146 @@ struct ChatAttachmentFile: View {
     }
 }
 
-/// iOS: make a transcript image thumbnail tappable to open a full-screen, pinch-to-zoom viewer
-/// (parity with web's tap-to-preview). macOS: no-op — the thumbnail stays a static rounded image.
+/// A user-turn image attachment rendered as a uniform square thumbnail — the tile used when a turn
+/// carries two or more images (WeChat-style grid). A single image keeps `ChatAttachmentImage`'s
+/// larger fitted look. Falls back to a file chip if the bytes don't decode.
+struct ChatAttachmentThumb: View {
+    let attachment: TurnAttachment
+    var onTap: () -> Void
+    var sourceID: String
+    var ns: Namespace.ID
+    @Environment(AttachmentImageStore.self) private var store
+
+    #if os(iOS)
+    private static let side: CGFloat = 104
+    #else
+    private static let side: CGFloat = 96
+    #endif
+
+    var body: some View {
+        Group {
+            if let img = store.image(for: attachment.id) {
+                Image(platformImage: img)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: Self.side, height: Self.side)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(.primary.opacity(0.08)) }
+                    .imageTap(onTap, sourceID: sourceID, ns: ns)
+            } else if store.isNotImage(attachment.id) {
+                ChatAttachmentFile(attachment: attachment)   // not an image after all
+            } else {
+                RoundedRectangle(cornerRadius: 8).fill(.quaternary)
+                    .frame(width: Self.side, height: Self.side)
+            }
+        }
+        .task(id: attachment.id) { await store.load(attachment.id) }
+    }
+}
+
+/// iOS: make a transcript image thumbnail tappable to open the full-screen pager, and (iOS 18+) mark
+/// it as the zoom-transition source so the preview grows out of / shrinks back into this thumbnail —
+/// the WeChat-style expand animation. macOS: no-op — the thumbnail stays a static rounded image.
 private extension View {
-    @ViewBuilder func tappableImagePreview(_ image: PlatformImage, _ presented: Binding<Bool>) -> some View {
+    @ViewBuilder func imageTap(_ onTap: @escaping () -> Void, sourceID: String, ns: Namespace.ID) -> some View {
         #if os(iOS)
-        self.contentShape(Rectangle())
-            .onTapGesture { presented.wrappedValue = true }
-            .fullScreenCover(isPresented: presented) { FullScreenImageView(image: image) }
+        let tappable = self.contentShape(Rectangle()).onTapGesture(perform: onTap)
+        if #available(iOS 18.0, *) {
+            tappable.matchedTransitionSource(id: sourceID, in: ns)
+        } else {
+            tappable
+        }
         #else
         self
         #endif
     }
 }
 
+/// The image a tap opened the full-screen pager on: `index` seeds the starting page; `id` (the tapped
+/// attachment's id) is the iOS-18 zoom-transition source so the viewer zooms back to the right tile.
+struct ImagePreviewTarget: Identifiable {
+    let index: Int
+    let id: String
+}
+
+private extension View {
+    /// iOS: present the full-screen image pager for `target`, zooming out of the tapped thumbnail on
+    /// iOS 18+. macOS: no-op (thumbnails aren't tappable there, so `target` never becomes non-nil).
+    @ViewBuilder
+    func imagePreview(_ target: Binding<ImagePreviewTarget?>, images: [TurnAttachment],
+                      ns: Namespace.ID, store: AttachmentImageStore) -> some View {
+        #if os(iOS)
+        self.fullScreenCover(item: target) { t in
+            Group {
+                if #available(iOS 18.0, *) {
+                    ImagePagerView(images: images, startIndex: t.index)
+                        .navigationTransition(.zoom(sourceID: t.id, in: ns))
+                } else {
+                    ImagePagerView(images: images, startIndex: t.index)
+                }
+            }
+            .environment(store)
+        }
+        #else
+        self
+        #endif
+    }
+}
+
+/// Minimal wrapping layout (like CSS `flex-wrap`): packs subviews left-to-right and drops onto a new
+/// row when the next one wouldn't fit, sizing the block to its content so a trailing VStack still
+/// right-aligns it under the bubble. Fixes several thumbnails / chips overflowing one HStack off the
+/// edge of a phone screen.
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 6
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let rows = arrange(maxWidth: proposal.width ?? .infinity, subviews: subviews)
+        let width = rows.map(\.width).max() ?? 0
+        let height = rows.reduce(CGFloat(0)) { $0 + $1.height } + spacing * CGFloat(max(0, rows.count - 1))
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for row in arrange(maxWidth: bounds.width, subviews: subviews) {
+            var x = bounds.minX
+            for i in row.items {
+                let size = subviews[i].sizeThatFits(.unspecified)
+                subviews[i].place(at: CGPoint(x: x, y: y), anchor: .topLeading, proposal: ProposedViewSize(size))
+                x += size.width + spacing
+            }
+            y += row.height + spacing
+        }
+    }
+
+    private struct Row { var items: [Int] = []; var width: CGFloat = 0; var height: CGFloat = 0 }
+
+    private func arrange(maxWidth: CGFloat, subviews: Subviews) -> [Row] {
+        var rows: [Row] = []
+        var row = Row()
+        for i in subviews.indices {
+            let size = subviews[i].sizeThatFits(.unspecified)
+            let needed = row.items.isEmpty ? size.width : row.width + spacing + size.width
+            if !row.items.isEmpty, needed > maxWidth {
+                rows.append(row)
+                row = Row(items: [i], width: size.width, height: size.height)
+            } else {
+                row.width = row.items.isEmpty ? size.width : row.width + spacing + size.width
+                row.height = max(row.height, size.height)
+                row.items.append(i)
+            }
+        }
+        if !row.items.isEmpty { rows.append(row) }
+        return rows
+    }
+}
+
 #if os(iOS)
-/// Full-screen viewer for a sent image, opened by tapping its transcript thumbnail — the native
-/// client previously had no way to enlarge a sent screenshot. The image is centred and fit to the
-/// whole screen; pinch or double-tap to zoom, drag to pan while zoomed. To dismiss: the close button,
-/// or — at fit scale — an interactive drag where the image tracks the finger and shrinks while the
-/// backdrop fades to reveal the transcript underneath (the standard Photos/Messages feel), snapping
-/// back if released short of the threshold.
+/// Single-image full-screen viewer for an in-memory `PlatformImage` (the composer's staged draft
+/// thumbnails, which aren't attachment-backed yet). Pinch or double-tap to zoom, drag to pan while
+/// zoomed; drag down at fit scale to dismiss with the image shrinking as the backdrop fades. The
+/// sent-turn transcript uses `ImagePagerView` (swipe between a turn's images) instead.
 struct FullScreenImageView: View {
     let image: PlatformImage
     @Environment(\.dismiss) private var dismiss
@@ -491,8 +641,6 @@ struct FullScreenImageView: View {
             }
 
         ZStack {
-            // Fades out as the dismiss drag progresses; presentationBackground(.clear) lets the
-            // transcript show through the gap so the swipe reads as peeling the image away.
             Color.black.opacity(1 - dismissProgress).ignoresSafeArea()
 
             Image(platformImage: image)
@@ -525,6 +673,167 @@ struct FullScreenImageView: View {
         }
         .statusBarHidden(true)
         .presentationBackground(.clear)
+    }
+}
+
+/// Full-screen, swipeable viewer for the images in a user turn — opened by tapping any transcript
+/// thumbnail. Swipe left/right to move between the turn's images; pinch or double-tap to zoom, drag
+/// to pan while zoomed; drag down at fit scale to dismiss (the image shrinks and the transcript shows
+/// through). A single `DragGesture` routes by direction — horizontal ⇒ page, vertical ⇒ dismiss, any
+/// drag while zoomed ⇒ pan — so paging, dismissing and panning never fight each other.
+struct ImagePagerView: View {
+    let images: [TurnAttachment]
+    @Environment(AttachmentImageStore.self) private var store
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var index: Int
+    @State private var pageDX: CGFloat = 0      // live horizontal paging drag
+    @State private var dismissDY: CGFloat = 0   // live downward dismiss drag (fit scale only)
+    @GestureState private var pinch: CGFloat = 1
+    @State private var scale: CGFloat = 1        // committed zoom of the current page
+    @State private var pan: CGSize = .zero       // committed pan of the current page
+    @State private var panLive: CGSize = .zero   // live pan translation
+    @State private var mode: DragMode = .idle
+
+    private enum DragMode { case idle, page, dismiss, pan }
+    private static let gap: CGFloat = 24
+
+    init(images: [TurnAttachment], startIndex: Int) {
+        self.images = images
+        _index = State(initialValue: startIndex)
+    }
+
+    private var liveScale: CGFloat { max(1, scale * pinch) }
+    private var zoomed: Bool { liveScale > 1.01 }
+    private var dismissProgress: CGFloat { min(1, dismissDY / 260) }
+
+    var body: some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            let stride = w + Self.gap
+
+            let drag = DragGesture()
+                .onChanged { v in
+                    if mode == .idle {
+                        if zoomed { mode = .pan }
+                        else if abs(v.translation.width) > abs(v.translation.height) { mode = .page }
+                        else if v.translation.height > 0 { mode = .dismiss }
+                        else { mode = .page }
+                    }
+                    switch mode {
+                    case .page:
+                        var dx = v.translation.width
+                        if (index == 0 && dx > 0) || (index == images.count - 1 && dx < 0) { dx *= 0.35 }
+                        pageDX = dx
+                    case .dismiss: dismissDY = max(0, v.translation.height)
+                    case .pan: panLive = v.translation
+                    case .idle: break
+                    }
+                }
+                .onEnded { v in
+                    switch mode {
+                    case .page:
+                        var next = index
+                        if v.translation.width < -w * 0.25, index < images.count - 1 { next += 1 }
+                        else if v.translation.width > w * 0.25, index > 0 { next -= 1 }
+                        if next != index { scale = 1; pan = .zero; panLive = .zero }
+                        withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.86)) {
+                            index = next
+                            pageDX = 0
+                        }
+                    case .dismiss:
+                        if v.translation.height > 150 { dismiss() }
+                        else { withAnimation(.spring(response: 0.3, dampingFraction: 0.86)) { dismissDY = 0 } }
+                    case .pan:
+                        pan.width += panLive.width
+                        pan.height += panLive.height
+                        panLive = .zero
+                    case .idle: break
+                    }
+                    mode = .idle
+                }
+
+            let magnify = MagnificationGesture()
+                .updating($pinch) { value, state, _ in state = value }
+                .onEnded { value in scale = min(max(1, scale * value), 6) }
+
+            ZStack {
+                // Fades out as the dismiss drag progresses; presentationBackground(.clear) lets the
+                // transcript show through so the swipe reads as peeling the image away.
+                Color.black.opacity(1 - dismissProgress).ignoresSafeArea()
+
+                HStack(spacing: Self.gap) {
+                    ForEach(Array(images.enumerated()), id: \.element.id) { i, att in
+                        page(att, isCurrent: i == index, size: geo.size)
+                            .frame(width: w, height: geo.size.height)
+                    }
+                }
+                .offset(x: -CGFloat(index) * stride + pageDX)   // slide content within the fixed window
+                .frame(width: w, height: geo.size.height, alignment: .leading)
+                .offset(y: dismissDY)                            // dismiss drag moves the window down
+                .scaleEffect(1 - dismissProgress * 0.12)
+            }
+            .contentShape(Rectangle())
+            .gesture(drag)
+            .simultaneousGesture(magnify)
+            .onTapGesture(count: 2) {
+                withAnimation(.easeOut(duration: 0.22)) {
+                    if zoomed { scale = 1; pan = .zero } else { scale = 2.6 }
+                }
+            }
+        }
+        .ignoresSafeArea()
+        .overlay(alignment: .topTrailing) { closeButton }
+        .overlay(alignment: .bottom) { pageDots }
+        .statusBarHidden(true)
+        .presentationBackground(.clear)
+    }
+
+    @ViewBuilder
+    private func page(_ att: TurnAttachment, isCurrent: Bool, size: CGSize) -> some View {
+        Group {
+            if let img = store.image(for: att.id) {
+                Image(platformImage: img)
+                    .resizable()
+                    .scaledToFit()
+                    .scaleEffect(isCurrent ? liveScale : 1)
+                    .offset(isCurrent
+                            ? CGSize(width: pan.width + panLive.width, height: pan.height + panLive.height)
+                            : .zero)
+            } else {
+                ProgressView().tint(.white)
+            }
+        }
+        .frame(width: size.width, height: size.height)
+        .task(id: att.id) { await store.load(att.id) }
+    }
+
+    private var closeButton: some View {
+        Button { dismiss() } label: {
+            Image(systemName: "xmark")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.white)
+                .padding(11)
+                .background(.ultraThinMaterial, in: Circle())
+        }
+        .padding(.trailing, 16).padding(.top, 4)
+        .opacity(1 - dismissProgress)
+        .accessibilityLabel("Close")
+    }
+
+    @ViewBuilder
+    private var pageDots: some View {
+        if images.count > 1 {
+            HStack(spacing: 6) {
+                ForEach(images.indices, id: \.self) { i in
+                    Circle()
+                        .fill(i == index ? Color.white : Color.white.opacity(0.4))
+                        .frame(width: 6, height: 6)
+                }
+            }
+            .padding(.bottom, 30)
+            .opacity(1 - dismissProgress)
+        }
     }
 }
 #endif
