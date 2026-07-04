@@ -3011,17 +3011,15 @@ body {
    live AFTER the base .composer-pills rules: media queries add no specificity, so a
    later same-specificity rule would otherwise override these. */
 @media (max-width: 600px) {
-  /* Bump the composer's icon buttons to a 44px touch target on phones (Apple HIG
-     minimum). The + is narrowed to 24px on desktop for a tight icon-to-text gap; on
-     touch that's too small to hit, so restore it to a full square here. Icons stay
-     centred, so only the hit area grows. */
-  .composer-box .composer-attach-btn.ant-btn {
-    width: 44px;
-    height: 44px;
-  }
+  /* Enlarge the + and send buttons to a comfortable 40px square tap target on touch
+     (desktop keeps the tight 24px +). flex:none is essential: the box is a flex row
+     whose textarea is width:100%, so without it the flex algorithm shrinks these
+     buttons back into narrow rectangles (width collapses, height doesn't). */
+  .composer-box .composer-attach-btn.ant-btn,
   .composer-box .ant-btn-icon-only {
-    width: 44px;
-    height: 44px;
+    flex: none;
+    width: 40px;
+    height: 40px;
   }
   .composer-pills {
     flex-wrap: nowrap;
