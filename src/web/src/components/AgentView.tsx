@@ -603,6 +603,10 @@ export function AgentView({ runner }: { runner: Runner }) {
   // Installed-PWA / standalone is the only mode where ⌘N actually reaches the page
   // (a normal tab hands it to the browser). Gate the on-button shortcut hint on it.
   const isStandalone = useMediaQuery('(display-mode: standalone)');
+  // Touch devices have no hover, so a tap on a composer pill fires its Tooltip AND opens
+  // its Select at once — stacking the "Tips" bubble over the dropdown. Suppress those
+  // tooltips where hover is unavailable; the pill's own label already names its value.
+  const pillTipOpen = useMediaQuery('(hover: hover)') ? undefined : false;
   const [text, setText] = useState('');
   // Composer history cursor: -1 = editing the live draft; otherwise an index into the
   // session's stored history. `histDraft` stashes what was typed before recall started,
@@ -2930,7 +2934,7 @@ export function AgentView({ runner }: { runner: Runner }) {
           {/* The agent is only a Select when it can actually be picked (new, unlocked
               session); once read-only it shows as a static pill left of Model below. */}
           {!agentReadOnly && (
-            <Tooltip title="Agent">
+            <Tooltip title="Agent" open={pillTipOpen}>
               <span className="composer-pill composer-pill-agent">
                 <Select
                   size="small"
@@ -2949,7 +2953,7 @@ export function AgentView({ runner }: { runner: Runner }) {
           {/* Tooltip wraps the span (not the Select): a disabled Select has no pointer
               events, so the parent span is what surfaces the reason on hover. With the
               icons gone, the tooltip also names what each pill controls. */}
-          <Tooltip title={configHint || 'Permission mode'}>
+          <Tooltip title={configHint || 'Permission mode'} open={pillTipOpen}>
             <span className="composer-pill">
               <Select
                 size="small"
@@ -2973,13 +2977,13 @@ export function AgentView({ runner }: { runner: Runner }) {
           </Tooltip>
           <span className="composer-pill-spacer" />
           {agentReadOnly && shownAgentName && (
-            <Tooltip title="Agent">
+            <Tooltip title="Agent" open={pillTipOpen}>
               <span className="composer-pill composer-pill-static composer-pill-agent">
                 <span className="composer-pill-static-label">{shownAgentName}</span>
               </span>
             </Tooltip>
           )}
-          <Tooltip title={configHint || 'Model'}>
+          <Tooltip title={configHint || 'Model'} open={pillTipOpen}>
             <span className="composer-pill">
               <Select
                 size="small"
@@ -3003,7 +3007,7 @@ export function AgentView({ runner }: { runner: Runner }) {
               />
             </span>
           </Tooltip>
-          <Tooltip title={configHint || 'Reasoning effort'}>
+          <Tooltip title={configHint || 'Reasoning effort'} open={pillTipOpen}>
             <span className="composer-pill">
               <Select
                 size="small"
