@@ -1708,6 +1708,10 @@ export function AgentView({ runner }: { runner: Runner }) {
     navigate(a ? `/agents/${encodeId(a)}/new` : `/runners/${encodeId(runner.id)}`);
     // No setText here: the per-target switch effect restores the saved 'new' draft, and
     // blanking would instead clobber the *outgoing* session's draft (text hasn't moved yet).
+    // Drop the caret into the composer so the task can be typed straight away — both the
+    // "New session" click and the ⌘N shortcut funnel through here. Deferred a tick so the
+    // switch effect has swapped in the 'new' draft before focus lands.
+    setTimeout(() => taRef.current?.focus(), 0);
   };
   // ⌘/Ctrl+N opens the new-session draft — the keyboard twin of the "New session" button,
   // and the web mirror of the macOS client's ⌘N. Like ⌘D it fires even while the composer
