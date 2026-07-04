@@ -2389,9 +2389,11 @@ body {
   opacity: 1;
   pointer-events: auto;
 }
-.session-row:hover {
-  background: var(--bg-hover);
-  --row-bg: var(--bg-hover);
+@media (hover: hover) {
+  .session-row:hover {
+    background: var(--bg-hover);
+    --row-bg: var(--bg-hover);
+  }
 }
 /* Archived / trash rows are managed, not opened — no pointer affordance. */
 .session-row.no-open {
@@ -2482,7 +2484,15 @@ body {
   pointer-events: none;
   transition: opacity 0.12s ease;
 }
-.session-row:hover .session-right,
+/* Reveal-on-hover only for real pointers. On touch, actions come from a swipe (or the ⋯
+   menu once swiped open); keeping :hover off touch also stops iOS Safari's "first tap shows
+   hover, second tap clicks" — which was swallowing the tap that should open the session. */
+@media (hover: hover) {
+  .session-row:hover .session-right {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
 .session-row.menu-open .session-right {
   opacity: 1;
   pointer-events: auto;
