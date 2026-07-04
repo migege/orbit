@@ -82,6 +82,9 @@ cat > "$app/Contents/Info.plist" <<PLIST
   <key>CFBundleVersion</key><string>${BUILD_NUMBER}</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>NSHighResolutionCapable</key><true/>
+  <!-- Draw full-bleed on notched MacBook displays: without this, native full screen reserves a
+       notch-height black bar across the top instead of using the whole screen. -->
+  <key>NSPrefersDisplaySafeAreaCompatibilityMode</key><false/>
   <key>NSPrincipalClass</key><string>NSApplication</string>
   <key>CFBundleURLTypes</key><array><dict>
     <key>CFBundleURLName</key><string>${BUNDLE_ID}</string>
