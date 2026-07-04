@@ -348,6 +348,12 @@ const fmtTool = (name: string): string => name.replace(/^mcp__[^_]+__/, '');
 const bgRunningLabel = (n: number): string =>
   n > 1 ? `${n} background processes running` : 'Background process running';
 
+// "Running Agent" / "Running N agents" — shown while a session is working and has a sub-agent
+// (Task/Agent tool) in flight (server-tracked runningSubagentCount, from Session.runningSubagents).
+// The async Agent tool_result lands at once, so lastToolUse can't carry this on its own.
+const subagentRunningLabel = (n: number): string =>
+  n > 1 ? `Running ${n} agents` : 'Running Agent';
+
 // The line shown under a session title. For a LIVE (openable) session that's working we
 // surface its current state — the tool in flight, that it's blocked on you, or a bare
 // "Running…" — so the row never collapses to just a title with no sign of progress.
@@ -358,6 +364,11 @@ const sessionLine = (s: any, live: boolean): SessionLine | null => {
   if (live && s.status === 'RUNNING') {
     if ((s.pendingApprovals ?? 0) > 0) return { text: 'Waiting for approval', tone: 'approval' };
     if (s.lastToolUse) return { text: `Running ${fmtTool(s.lastToolUse)}…`, tone: 'running' };
+    // A sub-agent in flight: lastToolUse is already cleared (the async Agent tool_result +
+    // the parent's own system progress events), so surface it explicitly instead of falling
+    // through to the muted last-reply preview, which reads as idle.
+    if ((s.runningSubagentCount ?? 0) > 0)
+      return { text: `${subagentRunningLabel(s.runningSubagentCount)}…`, tone: 'running' };
     if (s.lastAssistantText) return { text: plainPreview(s.lastAssistantText), tone: 'preview' };
     return { text: 'Running…', tone: 'running' };
   }
@@ -751,6 +762,9 @@ export function AgentView({ runner }: { runner: Runner }) {
     return {
       ...d,
       runningBgCount: Array.isArray(d.runningBgShells) ? d.runningBgShells.length : (d.runningBgCount ?? 0),
+      runningSubagentCount: Array.isArray(d.runningSubagents)
+        ? d.runningSubagents.length
+        : (d.runningSubagentCount ?? 0),
       pendingApprovals: d.pendingApprovals ?? 0,
     };
   }, [detailForSelected]);

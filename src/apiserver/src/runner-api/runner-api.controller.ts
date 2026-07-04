@@ -894,6 +894,21 @@ export class RunnerApiController {
       )
       .map((e) => String((e.payload as { id?: unknown }).id ?? ''))
       .filter(Boolean);
+    // Sub-agents (Task/Agent tool) run async: the launch tool_result ("Async agent launched")
+    // lands immediately and the parent then streams its own top-scope system progress events,
+    // so lastToolUse can't stay 'Agent'. Track in-flight sub-agents the same way as background
+    // shells — by their launch tool_use id, cleared by the same terminal background_task
+    // (bgEnded) — so the list can show "Running Agent…" the whole time one runs. Only top-level
+    // launches count; a sub-agent's own nested tool_use carries parentToolUseId, so skip those.
+    const subStarted = events
+      .filter(
+        (e) =>
+          e.type === RunEventType.TOOL_USE &&
+          ['Task', 'Agent'].includes(String((e.payload as { name?: string }).name ?? '')) &&
+          !(e.payload as { parentToolUseId?: string }).parentToolUseId,
+      )
+      .map((e) => String((e.payload as { id?: unknown }).id ?? ''))
+      .filter(Boolean);
     const bgEnded = events
       .filter(
         (e) =>
@@ -910,15 +925,24 @@ export class RunnerApiController {
         String((e.payload as { subtype?: unknown }).subtype ?? '') === 'resumed',
     );
     if (bgReset) {
-      await this.prisma.session.update({ where: { id: sessionId }, data: { runningBgShells: [] } });
+      await this.prisma.session.update({
+        where: { id: sessionId },
+        data: { runningBgShells: [], runningSubagents: [] },
+      });
     }
     for (const id of bgStarted) {
       await this.prisma
         .$executeRaw`UPDATE "session" SET "running_bg_shells" = array_append(array_remove("running_bg_shells", ${id}), ${id}) WHERE "id" = ${sessionId}::uuid`;
     }
+    for (const id of subStarted) {
+      await this.prisma
+        .$executeRaw`UPDATE "session" SET "running_subagents" = array_append(array_remove("running_subagents", ${id}), ${id}) WHERE "id" = ${sessionId}::uuid`;
+    }
+    // A terminal background_task id belongs to either a background shell or a sub-agent;
+    // array_remove is a no-op on the set that doesn't hold it, so clear from both.
     for (const id of bgEnded) {
       await this.prisma
-        .$executeRaw`UPDATE "session" SET "running_bg_shells" = array_remove("running_bg_shells", ${id}) WHERE "id" = ${sessionId}::uuid`;
+        .$executeRaw`UPDATE "session" SET "running_bg_shells" = array_remove("running_bg_shells", ${id}), "running_subagents" = array_remove("running_subagents", ${id}) WHERE "id" = ${sessionId}::uuid`;
     }
 
     // Broadcast to live subscribers while the session is active (any LIVE status);

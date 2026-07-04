@@ -264,6 +264,7 @@ export class SessionsService {
       mergeStatus: string | null;
       pinnedAt: Date | null;
       runningBgCount: number;
+      runningSubagentCount: number;
       agentId: string | null;
       agentName: string | null;
       agentModel: string | null;
@@ -290,6 +291,7 @@ export class SessionsService {
         s.merge_status    AS "mergeStatus",
         s.pinned_at       AS "pinnedAt",
         cardinality(s.running_bg_shells)::int AS "runningBgCount",
+        cardinality(s.running_subagents)::int AS "runningSubagentCount",
         a.id    AS "agentId",
         a.name  AS "agentName",
         a.model AS "agentModel",
@@ -328,6 +330,7 @@ export class SessionsService {
       mergeStatus: r.mergeStatus,
       pinnedAt: r.pinnedAt,
       runningBgCount: r.runningBgCount,
+      runningSubagentCount: r.runningSubagentCount,
       agent: r.agentId ? { id: r.agentId, name: r.agentName, model: r.agentModel } : null,
       assignedRunner: r.runnerId ? { id: r.runnerId, name: r.runnerName } : null,
       taskId: r.taskId,

@@ -289,6 +289,13 @@ model Session {
   // Added on launch, removed on completion, cleared on (re)spawn/complete. Lets the list +
   // header show "Background running" without scanning events. Only meaningful while live.
   runningBgShells   String[]  @map("running_bg_shells")
+  // Denormalized set of the agent's still-running sub-agents (Task/Agent tool): the tool_use
+  // ids of sub-agent launches that haven't yet reported a terminal `<task-notification>`
+  // (background_task). Added on launch, removed on completion, cleared on (re)spawn. The Agent
+  // tool is async — its launch tool_result lands immediately and the parent then streams its
+  // own top-scope system progress events, so lastToolUse can't carry this. Lets the list show
+  // "Running Agent…" while a sub-agent is in flight. Only meaningful while live.
+  runningSubagents  String[]  @map("running_subagents")
   // ── Per-session git worktree isolation ──────────────────────────────────────
   // When the agent's workDir is a git repo, the runner runs this session in its own
   // git worktree on `branch`, forked from `baseSha` (the workDir HEAD at claim time).
