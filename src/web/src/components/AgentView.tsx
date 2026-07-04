@@ -2782,7 +2782,7 @@ export function AgentView({ runner }: { runner: Runner }) {
               session); once read-only it shows as a static pill left of Model below. */}
           {!agentReadOnly && (
             <Tooltip title="Agent">
-              <span className="composer-pill">
+              <span className="composer-pill composer-pill-agent">
                 <Select
                   size="small"
                   variant="borderless"
@@ -2825,7 +2825,7 @@ export function AgentView({ runner }: { runner: Runner }) {
           <span className="composer-pill-spacer" />
           {agentReadOnly && shownAgentName && (
             <Tooltip title="Agent">
-              <span className="composer-pill composer-pill-static">
+              <span className="composer-pill composer-pill-static composer-pill-agent">
                 <span className="composer-pill-static-label">{shownAgentName}</span>
               </span>
             </Tooltip>
