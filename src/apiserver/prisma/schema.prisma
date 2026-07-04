@@ -77,8 +77,28 @@ model User {
   ownedTasks       Task[] // tasks this user owns (tenant scope)
   taskLists        TaskList[] // task lists this user owns (tenant scope)
   attachments      Attachment[] // blobs this user uploaded (tenant scope)
+  deviceTokens     DeviceToken[] // registered iOS devices for APNs push
 
   @@map("user")
+}
+
+/// An iOS device's APNs token, owner-scoped, so the server can push "needs your reply" alerts to a
+/// user's phones/iPads. One row per device (`token` unique) — re-registering upserts, and a token
+/// handed to a different user re-points its `userId`. `environment` selects the APNs host
+/// (production for App Store/TestFlight, sandbox for dev builds). Registered via POST /api/push/register.
+model DeviceToken {
+  id          String   @id @default(uuid(7)) @db.Uuid
+  userId      String   @map("user_id") @db.Uuid
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token       String   @unique
+  platform    String   @default("ios")
+  environment String   @default("production")
+  bundleId    String   @map("bundle_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@index([userId])
+  @@map("device_token")
 }
 
 // A machine the user registered via `orbit register`. Claude Code runs here.

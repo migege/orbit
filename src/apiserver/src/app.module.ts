@@ -13,6 +13,7 @@ import { RunnersModule } from './runners/runners.module';
 import { RunnerApiModule } from './runner-api/runner-api.module';
 import { AttachmentsModule } from './attachments/attachments.module';
 import { SharedModule } from './shared/shared.module';
+import { PushModule } from './push/push.module';
 
 @Module({
   imports: [
@@ -30,6 +31,7 @@ import { SharedModule } from './shared/shared.module';
     RunnerApiModule,
     AttachmentsModule,
     SharedModule,
+    PushModule,
   ],
 })
 export class AppModule {}
