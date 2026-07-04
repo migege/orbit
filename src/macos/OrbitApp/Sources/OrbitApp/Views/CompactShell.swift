@@ -117,7 +117,7 @@ struct CompactShell: View {
         switch model.selectedSection {
         case .active:  return model.selectedSessionID == nil
         case .tasks:   return model.selectedTaskID == nil
-        case .agents:  return model.selectedAgentID == nil
+        case .agents:  return model.selectedAgentSessionID == nil
         case .runners: return model.selectedRunnerID == nil
         case .skills, .settings, .admin: return true
         }
@@ -161,13 +161,13 @@ private struct CompactSections: View {
                 TaskDetailView()
             }
 
-        // AGENTS — agent list → the agent's sessions → console (three levels, like the iPad)
+        // AGENTS — the agent is picked in the drawer, so the section root is that agent's *sessions*
+        // (no intermediate agent-list page); selecting one pushes its console. Backing out of the
+        // console lands on the session list, where the left-edge swipe reopens the drawer.
         case .agents:
             NavigationSplitView {
-                AgentListCompact()
-                    .drawerToggle(open: openDrawer)
-            } content: {
                 AgentContentColumn()
+                    .drawerToggle(open: openDrawer)
                     // New session is *pushed* full-screen over the sessions list (not a bottom sheet):
                     // it leads into the session rather than back to a list, so a push reads more
                     // naturally and flows straight into the console once the first message is sent
@@ -369,38 +369,6 @@ private extension View {
                 .accessibilityLabel(badge > 0 ? "Open navigation, \(badge) need you" : "Open navigation")
             }
         }
-    }
-}
-
-/// The Agents sidebar for compact width — the runner-grouped agent list that lives in the iPad
-/// main sidebar, pulled out as a standalone list so the Agents tab can drill agent → sessions →
-/// console. Selecting an agent clears any stale session/compose state, mirroring the iPad sidebar.
-private struct AgentListCompact: View {
-    @Environment(AppModel.self) private var model
-
-    var body: some View {
-        @Bindable var model = model
-        List(selection: $model.selectedAgentID) {
-            if let agents = model.agents, !agents.items.isEmpty {
-                ForEach(agents.groups) { group in
-                    Section(agents.runnerLabel(group.runnerId)) {
-                        ForEach(group.agents) { a in
-                            AgentRowView(agent: a).tag(a.id)
-                        }
-                    }
-                }
-            } else {
-                Text(model.agents?.loading == true ? "Loading…" : "No agents")
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .navigationTitle("Agents")
-        .refreshable { await model.agents?.load() }
-        .onChange(of: model.selectedAgentID) { _, _ in
-            model.selectedAgentSessionID = nil
-            model.composingAgentSession = false
-        }
-        .task { await model.agents?.load() }
     }
 }
 
