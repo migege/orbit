@@ -41,6 +41,14 @@ struct ConsoleView: View {
         .task(id: sessionID) {
             await registry.model(for: sessionID, agentID: agentID).run()
         }
+        #if os(iOS)
+        // Pushed onto the compact NavigationStack (and shown as the split detail on iPad), this page
+        // carries no title, so iOS would reserve a *large* — and empty — title bar: a big blank band
+        // at the top, above the worktree bar. Force the slim inline bar so the transcript starts
+        // right under the back button. (The New-session compose page already does this; without it the
+        // console reverts to the large bar the moment the session is created — the reported gap.)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
     }
 }
 
