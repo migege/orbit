@@ -98,6 +98,11 @@ public struct Session: Codable, Equatable, Sendable, Identifiable {
     public let lastAssistantText: String?
     public let lastToolUse: String?
     public let runningBgCount: Int?
+    /// Terminal-state detail the status glyph needs (mirrors web `StatusIcon`): `error` tells a
+    /// runner-offline disconnect apart from a real crash; `endReason` tells a benign recycle
+    /// (idle / task-done / user-ended — shown as dormant) apart from a hard cancel/orphan.
+    public let error: String?
+    public let endReason: String?
     /// The owning agent, nested by the list/detail payloads (the flat `agentId` is NOT sent
     /// there, so per-agent grouping reads `agent.id`).
     public let agent: SessionAgentRef?
@@ -107,7 +112,8 @@ public struct Session: Codable, Equatable, Sendable, Identifiable {
                 pendingApprovals: Int?, branch: String?,
                 updatedAt: String?, model: String? = nil, permissionMode: String? = nil,
                 effort: String? = nil, source: String? = nil, lastAssistantText: String? = nil,
-                lastToolUse: String? = nil, runningBgCount: Int? = nil, agent: SessionAgentRef? = nil) {
+                lastToolUse: String? = nil, runningBgCount: Int? = nil,
+                error: String? = nil, endReason: String? = nil, agent: SessionAgentRef? = nil) {
         self.id = id
         self.title = title
         self.status = status
@@ -124,6 +130,8 @@ public struct Session: Codable, Equatable, Sendable, Identifiable {
         self.lastAssistantText = lastAssistantText
         self.lastToolUse = lastToolUse
         self.runningBgCount = runningBgCount
+        self.error = error
+        self.endReason = endReason
         self.agent = agent
     }
 }

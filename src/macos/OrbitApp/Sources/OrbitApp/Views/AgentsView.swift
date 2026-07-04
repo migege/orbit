@@ -80,7 +80,7 @@ struct AgentPanes: View {
         // rather than stacking chrome bands above the list.
         List(selection: $selectedSessionID) {
             ForEach(agents.agentSessions) { s in
-                AgentSessionRow(session: s).tag(s.id)
+                AgentSessionRow(session: s, completed: view == .completed).tag(s.id)
             }
         }
         .focused($listFocused)
@@ -236,13 +236,16 @@ struct NewSessionView: View {
 
 struct AgentSessionRow: View {
     let session: Session
+    /// True when the Completed (archived) tab is showing this row — mirrors web's
+    /// `completed={view === 'archived'}`, so a filed session reads as done, not "Cancelled".
+    var completed: Bool = false
     // Second line: the last-reply / live-state preview (mirrors the web Agent console). Rows here
     // are always openable (macOS has no Trash tab), so `live: true` — matching web's `openable`.
     private var line: SessionLine? { SessionLine.make(for: session, live: true) }
 
     var body: some View {
         HStack(spacing: 8) {
-            Circle().fill(color).frame(width: 6, height: 6)
+            StatusGlyphView(glyph: .make(for: session, completed: completed))
             VStack(alignment: .leading, spacing: 2) {
                 Text(session.title ?? "Untitled session").lineLimit(1)
                 if let line {
@@ -258,20 +261,43 @@ struct AgentSessionRow: View {
         }
         .padding(.vertical, 2)
     }
-    private var color: Color {
-        switch session.status {
-        case .running:       return .blue
-        case .awaitingInput: return .orange
-        case .succeeded:     return .green
-        case .failed:        return .red
-        default:             return .secondary
-        }
-    }
     private func lineColor(_ tone: SessionLine.Tone) -> Color {
         switch tone {
         case .preview, .queued: return .secondary
         case .running:          return .blue
         case .approval:         return .orange
+        }
+    }
+}
+
+/// Renders a `SessionStatusGlyph` at the leading edge of a session row — the shared port of web's
+/// `StatusIcon`. A working session shows an animated spinner (web's `LoadingOutlined spin`);
+/// everything else is an SF Symbol, tinted by the glyph's semantic tone. Fixed frame so titles
+/// line up whether the glyph is a spinner or a symbol.
+struct StatusGlyphView: View {
+    let glyph: SessionStatusGlyph
+    var body: some View {
+        Group {
+            switch glyph.shape {
+            case .spinner:
+                ProgressView().controlSize(.small)
+            case .symbol(let name):
+                Image(systemName: name).font(.system(size: 15))
+            }
+        }
+        .foregroundStyle(color)
+        .tint(color)
+        .frame(width: 20, height: 20)
+        .help(glyph.label)
+        .accessibilityLabel(glyph.label)
+    }
+    private var color: Color {
+        switch glyph.tone {
+        case .brand:   return .blue
+        case .success: return .green
+        case .warning: return .orange
+        case .error:   return .red
+        case .neutral: return .secondary
         }
     }
 }
