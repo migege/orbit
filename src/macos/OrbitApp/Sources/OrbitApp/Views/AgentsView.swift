@@ -117,26 +117,14 @@ struct AgentPanes: View {
             }
         }
         .toolbar {
-            // New session — leading, mirroring Mail's compose: enters the draft compose state shown
-            // in the detail pane (NewSessionView). Clearing the selection makes room for it.
-            ToolbarItem(placement: .navigation) {
-                Button {
-                    app.composingAgentSession = true
-                    selectedSessionID = nil
-                } label: {
-                    Label("New session", systemImage: "square.and.pencil")
-                }
-                .help("Start a new session with \(agent.name)")
-            }
             #if os(iOS)
-            // Compact nav bar can't fit a 3-way segmented control beside the back button, compose,
-            // and a gear. Collapse both the scope switcher *and* the agent-settings gear into a
-            // single trailing menu: the label shows the current scope (so it still reads at a
-            // glance) and "Agent settings" folds in as a menu action instead of a separate button.
-            ToolbarItem(placement: .primaryAction) {
+            // Compact: both actions sit at the trailing edge. The scope switcher collapses to a
+            // pure filter-icon menu (no text) — Active/Completed/System as checkmarked options plus
+            // the agent-settings gear folded in — and New Session is the rightmost primary action.
+            // Declared scope-first so New Session lands at the trailing edge (SwiftUI lays trailing
+            // items out in declaration order, leading→trailing; verify the order on device).
+            ToolbarItem(placement: .topBarTrailing) {
                 Menu {
-                    // Scope options as checkmarked buttons (the repo's menu idiom — see
-                    // ComposerView — rather than a nested Picker), so the current scope reads clearly.
                     ForEach(SessionView.allCases) { v in
                         Button { view = v } label: {
                             if v == view { Label(v.title, systemImage: "checkmark") }
@@ -148,16 +136,31 @@ struct AgentPanes: View {
                         Label("Agent settings", systemImage: "gearshape")
                     }
                 } label: {
-                    HStack(spacing: 4) {
-                        Text(view.title)
-                        Image(systemName: "chevron.down").font(.caption2.weight(.semibold))
-                    }
+                    Image(systemName: "line.3.horizontal.decrease")
                 }
                 .accessibilityLabel("Session scope, \(view.title)")
             }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    app.composingAgentSession = true
+                    selectedSessionID = nil
+                } label: {
+                    Label("New session", systemImage: "square.and.pencil")
+                }
+                .accessibilityLabel("Start a new session with \(agent.name)")
+            }
             #else
-            // macOS: the wide window toolbar keeps the platform-idiomatic layout — a compact,
-            // content-hugging segmented control centered (principal) and a separate settings gear.
+            // macOS: the wide window toolbar keeps the platform-idiomatic layout — New Session
+            // (leading), a compact centered segmented scope switcher (principal), and a settings gear.
+            ToolbarItem(placement: .navigation) {
+                Button {
+                    app.composingAgentSession = true
+                    selectedSessionID = nil
+                } label: {
+                    Label("New session", systemImage: "square.and.pencil")
+                }
+                .help("Start a new session with \(agent.name)")
+            }
             ToolbarItem(placement: .principal) {
                 Picker("View", selection: $view) {
                     ForEach(SessionView.allCases) { Text($0.title).tag($0) }
