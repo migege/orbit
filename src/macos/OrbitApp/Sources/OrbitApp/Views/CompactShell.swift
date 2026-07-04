@@ -205,10 +205,6 @@ private struct NavigationDrawer: View {
     @Environment(AppModel.self) private var model
     let needsYou: Int
     let close: () -> Void
-    /// Whether the Agents row is expanded to its runner-grouped agents. Persisted (defaults collapsed)
-    /// so nav-only users keep a clean drawer while power users who hop between agents keep the
-    /// quick-jump list open across launches.
-    @AppStorage("drawerAgentsExpanded") private var agentsExpanded = false
 
     var body: some View {
         let isAdmin = model.user?.role == "ADMIN"
@@ -221,8 +217,9 @@ private struct NavigationDrawer: View {
 
             List {
                 ForEach(AppSection.visible(isAdmin: isAdmin)) { section in
-                    // Agents folds into the drawer as an expandable quick-jump (mirroring the macOS
-                    // sidebar disclosure); every other section is a plain destination row.
+                    // The Agents nav row is replaced in place by its runner-grouped agents, listed
+                    // directly (no wrapper, no collapse) so the drawer carries one less level. Every
+                    // other section stays a plain destination row.
                     if section == .agents {
                         agentsRows
                     } else {
@@ -231,9 +228,9 @@ private struct NavigationDrawer: View {
                 }
             }
             .listStyle(.plain)
-            // Load the runner-grouped agents lazily — only once the quick-jump section is first
-            // opened, so the default (collapsed) drawer adds no fetch at launch.
-            .task(id: agentsExpanded) { if agentsExpanded { await model.agents?.load() } }
+            // Agents are always shown now, so load the list when the drawer mounts (mirrors the macOS
+            // sidebar). It's light; the heavy session list loads separately.
+            .task { await model.agents?.load() }
 
             Divider()
             AccountFooter()
@@ -273,71 +270,26 @@ private struct NavigationDrawer: View {
         .listRowBackground(selected ? Color.accentColor.opacity(0.12) : Color.clear)
     }
 
-    /// The Agents row plus, when expanded, its runner-grouped agents. Emitted as sibling list rows.
+    /// The runner-grouped agents, listed directly where the Agents nav row used to be — each runner
+    /// label leads its agents, with no "Agents" wrapper and no collapse. Emitted as sibling list
+    /// rows. Renders nothing until the list loads (or when there are no agents).
     @ViewBuilder
     private var agentsRows: some View {
-        agentsHeaderRow
-        if agentsExpanded {
-            if let agents = model.agents, !agents.items.isEmpty {
-                ForEach(agents.groups) { group in
-                    Text(agents.runnerLabel(group.runnerId))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .padding(.leading, 36)
-                        .padding(.vertical, 2)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .listRowBackground(Color.clear)
-                    ForEach(group.agents) { agent in
-                        agentRow(agent)
-                    }
-                }
-            } else {
-                Text(model.agents?.loading == true ? "Loading…" : "No agents")
+        if let agents = model.agents, !agents.items.isEmpty {
+            ForEach(agents.groups) { group in
+                Text(agents.runnerLabel(group.runnerId))
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .padding(.leading, 36)
+                    .padding(.leading, 20)
+                    .padding(.top, 8)
+                    .padding(.bottom, 2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .listRowBackground(Color.clear)
-            }
-        }
-    }
-
-    /// Two disjoint hit targets: the label navigates to the full Agents page (unchanged behavior,
-    /// where model · workDir + edit + New session live); the trailing caret only expands/collapses
-    /// the quick-jump list in place.
-    private var agentsHeaderRow: some View {
-        let selected = model.selectedSection == .agents
-        return HStack(spacing: 0) {
-            Button {
-                model.selectedSection = .agents
-                close()
-            } label: {
-                HStack(spacing: 12) {
-                    Image(systemName: AppSection.agents.systemImage)
-                        .frame(width: 24)
-                        .foregroundStyle(selected ? Color.accentColor : Color.secondary)
-                    Text(AppSection.agents.title)
-                        .fontWeight(selected ? .semibold : .regular)
-                        .foregroundStyle(.primary)
-                    Spacer(minLength: 0)
+                ForEach(group.agents) { agent in
+                    agentRow(agent)
                 }
-                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-
-            Button {
-                withAnimation(.snappy(duration: 0.2)) { agentsExpanded.toggle() }
-            } label: {
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.secondary)
-                    .rotationEffect(.degrees(agentsExpanded ? 90 : 0))
-                    .frame(width: 40, height: 32)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(agentsExpanded ? "Collapse agents" : "Expand agents")
         }
-        .listRowBackground(selected ? Color.accentColor.opacity(0.12) : Color.clear)
     }
 
     /// A compact agent row: just the name (which already carries the "@ provider" suffix, so it
@@ -360,8 +312,8 @@ private struct NavigationDrawer: View {
                 }
                 Spacer(minLength: 0)
             }
-            .padding(.leading, 46)
-            .padding(.vertical, 2)
+            .padding(.leading, 32)
+            .padding(.vertical, 3)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
