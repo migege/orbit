@@ -337,9 +337,12 @@ struct ComposerView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(.primary.opacity(0.08)) }
                 // iOS: tap the staged thumbnail to open the full-screen viewer before sending
-                // (the tiny 48² chip is hard to read otherwise). The remove button is overlaid
-                // *after* this, so it stays on top and its taps aren't captured by the preview.
-                .modifier(ComposerImageTap(image: image))
+                // (the tiny 48² chip is hard to read otherwise). Preview the full-resolution bytes
+                // seeded in the shared store at attach time — the same source the sent bubble uses —
+                // not the downsampled `previewImageData`, so the viewer looks identical to the bubble.
+                // The remove button is overlaid *after* this, so it stays on top and its taps aren't
+                // captured by the preview.
+                .modifier(ComposerImageTap(image: console.attachments.image(for: att.id) ?? image))
                 .overlay(alignment: .topTrailing) {
                     Button { console.removeAttachment(att) } label: {
                         Image(systemName: "xmark.circle.fill")
