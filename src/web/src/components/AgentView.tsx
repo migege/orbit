@@ -1776,6 +1776,20 @@ export function AgentView({ runner }: { runner: Runner }) {
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
   }, [composerHeight]);
+  // The resize handle only earns its keep once auto-grow has hit its maxRows cap (the box is
+  // scrolling) or the user already dragged an explicit height — a short/empty box has nothing
+  // worth resizing, so we hide the handle until then. Re-measure whenever the text or the
+  // manual height changes (a double-click reset drops us back to auto-grow).
+  const [composerCapped, setComposerCapped] = useState(false);
+  useEffect(() => {
+    const ta: HTMLTextAreaElement | undefined = taRef.current?.resizableTextArea?.textArea;
+    if (!ta) return;
+    // Measure on the next frame, after rc-textarea's autoSize pass settles this value's height.
+    const id = requestAnimationFrame(() => {
+      setComposerCapped(ta.scrollHeight > ta.clientHeight + 1);
+    });
+    return () => cancelAnimationFrame(id);
+  }, [text, composerHeight]);
   const [slashIndex, setSlashIndex] = useState(0);
   const [slashDismissed, setSlashDismissed] = useState<string | null>(null);
   // The `+` menu opens the picker scoped to one asset kind; null (manual `/` typing) shows both.
@@ -2510,13 +2524,17 @@ export function AgentView({ runner }: { runner: Runner }) {
           </div>
         )}
         <div className="composer-box">
-          {/* Drag to set an explicit height (overrides auto-grow); double-click to reset. */}
-          <div
-            className="composer-resize-handle"
-            onMouseDown={startComposerResize}
-            onDoubleClick={() => setComposerHeight(null)}
-            title="Drag to resize · double-click to reset"
-          />
+          {/* Drag to set an explicit height (overrides auto-grow); double-click to reset.
+              Only shown once the box has hit its auto-grow cap or the user set a manual
+              height — an empty/short composer has nothing worth resizing. */}
+          {(composerHeight != null || composerCapped) && (
+            <div
+              className="composer-resize-handle"
+              onMouseDown={startComposerResize}
+              onDoubleClick={() => setComposerHeight(null)}
+              title="Drag to resize · double-click to reset"
+            />
+          )}
           {showSlash && (
             <div className="composer-slash-menu" role="listbox">
               {slashMatches.map((it, i) => (

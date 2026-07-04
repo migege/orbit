@@ -2817,7 +2817,8 @@ body {
 }
 /* Top-edge grip to drag the composer taller/shorter; double-click resets to auto-grow.
    Sits over the box's top border so it reads as an affordance without stealing text room.
-   The pill only shows on hover to stay out of the way. */
+   Only rendered once the box has hit its auto-grow cap (see composerCapped), so the pill
+   only shows on hover to stay out of the way. */
 .composer-resize-handle {
   position: absolute;
   top: -3px;
