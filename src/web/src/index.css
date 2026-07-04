@@ -2508,7 +2508,9 @@ body {
   background: transparent;
   color: var(--text-2);
 }
-/* Pin toggle: a bare pushpin like the ✓, chip-highlighted on direct hover. */
+/* Pin toggle: a bare pushpin like the ✓, chip-highlighted on direct hover. It only ever shows
+   together with the row's other actions (on hover) — a pinned row is marked at rest by the
+   accent bar below instead, so there is never a lone floating pin. */
 .session-kebab.session-pin-toggle {
   background: transparent;
   color: var(--text-3);
@@ -2517,21 +2519,11 @@ body {
   background: var(--bg-hover-strong);
   color: var(--text-1);
 }
-/* A pinned row keeps its actions overlay shown even when idle, so its filled pin stays
-   visible — it doubles as the "pinned" marker and the unpin control. The ✓ complete button
-   is gated to hover on its own, so an idle pinned row shows just the pin (no double icon). */
-.session-row.has-pin .session-right {
-  opacity: 1;
-  pointer-events: auto;
-}
-.session-kebab.session-complete {
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.12s ease;
-}
-.session-row:hover .session-kebab.session-complete {
-  opacity: 1;
-  pointer-events: auto;
+/* Pinned rows: a thin accent bar on the leading edge marks the pinned state at rest (they also
+   sort to the top). The pin/✓ actions still appear only on hover, exactly like every other row.
+   box-shadow (not background) so it survives the hover/selected background tints. */
+.session-row.pinned {
+  box-shadow: inset 3px 0 0 var(--brand);
 }
 /* Persistent left marker on the /active page rows, which have no hover actions of their own. */
 .session-pin-flag {

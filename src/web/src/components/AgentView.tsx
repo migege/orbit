@@ -2038,7 +2038,7 @@ export function AgentView({ runner }: { runner: Runner }) {
             const line = sessionLine(s, openable);
             return (
               <div
-                className={`session-row${openable ? '' : ' no-open'}${s.id === selectedId ? ' active' : ''}${menuOpenId === s.id ? ' menu-open' : ''}${view === 'active' && s.pinnedAt ? ' has-pin' : ''}`}
+                className={`session-row${openable ? '' : ' no-open'}${s.id === selectedId ? ' active' : ''}${menuOpenId === s.id ? ' menu-open' : ''}${view === 'active' && s.pinnedAt ? ' pinned' : ''}`}
                 key={s.id}
                 onClick={openable ? () => navigate(`/sessions/${encodeId(s.id)}`) : undefined}
               >
