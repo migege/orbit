@@ -176,6 +176,43 @@ jobs:
           mkdir -p "$RUNNER_TEMP/private_keys"
           echo "$ASC_KEY_P8_BASE64" | base64 --decode > "$RUNNER_TEMP/private_keys/AuthKey_${ASC_KEY_ID}.p8"
 
+      # Manual signing: rebuild a FIXED Apple Distribution identity + App Store provisioning profile
+      # from secrets. Automatic signing (-allowProvisioningUpdates) mints a fresh "Apple Development"
+      # certificate on every clean runner and eventually trips Apple's per-account certificate cap
+      # ("maximum number of certificates" → no profile found). A pinned distribution cert is reused
+      # forever, so releases stop accumulating certs.
+      - name: Import distribution certificate + provisioning profile
+        env:
+          IOS_DIST_CERT_P12_BASE64:     ${{ secrets.IOS_DIST_CERT_P12_BASE64 }}
+          IOS_DIST_CERT_PASSWORD:       ${{ secrets.IOS_DIST_CERT_PASSWORD }}
+          IOS_PROVISION_PROFILE_BASE64: ${{ secrets.IOS_PROVISION_PROFILE_BASE64 }}
+          KEYCHAIN_PASSWORD:            ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN="$RUNNER_TEMP/app-signing.keychain-db"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          echo "$IOS_DIST_CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/dist.p12"
+          security import "$RUNNER_TEMP/dist.p12" -P "$IOS_DIST_CERT_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          # Make the temp keychain default + searchable so codesign finds the identity.
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | sed s/\"//g)
+          security default-keychain -s "$KEYCHAIN"
+          rm -f "$RUNNER_TEMP/dist.p12"
+          # Install the App Store provisioning profile; surface its Name for the signer / ExportOptions.
+          echo "$IOS_PROVISION_PROFILE_BASE64" | base64 --decode > "$RUNNER_TEMP/profile.mobileprovision"
+          security cms -D -i "$RUNNER_TEMP/profile.mobileprovision" > "$RUNNER_TEMP/profile.plist"
+          UUID="$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$RUNNER_TEMP/profile.plist")"
+          NAME="$(/usr/libexec/PlistBuddy -c 'Print :Name' "$RUNNER_TEMP/profile.plist")"
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          cp "$RUNNER_TEMP/profile.mobileprovision" \
+            "$HOME/Library/MobileDevice/Provisioning Profiles/$UUID.mobileprovision"
+          echo "PROVISION_PROFILE_NAME=$NAME" >> "$GITHUB_ENV"
+          echo "Installed profile '$NAME' ($UUID)"
+
       - name: Generate Xcode project
         working-directory: src/ios
         run: xcodegen generate
@@ -184,8 +221,6 @@ jobs:
         working-directory: src/ios
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          ASC_KEY_ID:    ${{ secrets.ASC_KEY_ID }}
-          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
         run: |
           MKT="0.1.0"
           if [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
@@ -193,18 +228,17 @@ jobs:
             MKT="${MKT%%-*}"               # strip any -beta.N → numeric X.Y.Z (CFBundleShortVersionString)
           fi
           BUILD="$(git rev-list --count HEAD)"
-          echo "Building marketing $MKT (build $BUILD)"
+          echo "Building marketing $MKT (build $BUILD) with profile '$PROVISION_PROFILE_NAME'"
           xcodebuild \
             -project Orbit.xcodeproj \
             -scheme Orbit \
             -configuration Release \
             -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/Orbit.xcarchive" \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath "$RUNNER_TEMP/private_keys/AuthKey_${ASC_KEY_ID}.p8" \
-            -authenticationKeyID "$ASC_KEY_ID" \
-            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
             DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            PROVISIONING_PROFILE_SPECIFIER="$PROVISION_PROFILE_NAME" \
             MARKETING_VERSION="$MKT" \
             CURRENT_PROJECT_VERSION="$BUILD" \
             archive
@@ -217,11 +251,13 @@ jobs:
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
         run: |
           sed "s/REPLACE_WITH_TEAM_ID/${APPLE_TEAM_ID}/" ExportOptions.plist > "$RUNNER_TEMP/ExportOptions.plist"
+          # Overwrite the profile-name placeholder via PlistBuddy (handles spaces in the name safely).
+          /usr/libexec/PlistBuddy -c "Set :provisioningProfiles:io.orbitd.app $PROVISION_PROFILE_NAME" \
+            "$RUNNER_TEMP/ExportOptions.plist"
           xcodebuild -exportArchive \
             -archivePath "$RUNNER_TEMP/Orbit.xcarchive" \
             -exportPath "$RUNNER_TEMP/export" \
             -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
-            -allowProvisioningUpdates \
             -authenticationKeyPath "$RUNNER_TEMP/private_keys/AuthKey_${ASC_KEY_ID}.p8" \
             -authenticationKeyID "$ASC_KEY_ID" \
             -authenticationKeyIssuerID "$ASC_ISSUER_ID"
