@@ -40,7 +40,7 @@ import {
 } from 'react';
 import { useMatch, useNavigate } from 'react-router-dom';
 import { decodeId, encodeId } from '../lib/idCodec';
-import { useIsMobile } from '../lib/useMediaQuery';
+import { useIsMobile, useMediaQuery } from '../lib/useMediaQuery';
 import { agentsQuery, sessionQuery, sessionsQuery } from '../lib/queries';
 import {
   DEFAULT_MODEL,
@@ -151,6 +151,14 @@ const MODE_OPTIONS = Object.keys(MODE_TO_PERMISSION);
 // Last-picked reasoning effort, remembered across reloads so a new session starts
 // at the effort you last chose instead of resetting to Default. ('' = Default.)
 const EFFORT_KEY = 'orbit.effort';
+
+// New-session hotkey hint. The chord itself accepts ⌘/Ctrl on every platform; only the
+// label differs — ⌘ on macOS, Ctrl elsewhere (matches ApprovalPanel's convention). The
+// hint is only *shown* in standalone/PWA mode, because a normal browser tab reserves ⌘N
+// for "New Window" and the page can't override it — advertising it there would mislead.
+const IS_MAC =
+  typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent);
+const NEW_SESSION_HINT = IS_MAC ? '⌘N' : 'Ctrl N';
 
 // Subscription windows surfaced in the composer's plan-usage popover. Claude has
 // named windows; Codex reports primary/secondary windows through its app-server.
@@ -572,6 +580,9 @@ export function AgentView({ runner }: { runner: Runner }) {
   // Below the mobile breakpoint the two panes stack one-at-a-time; a couple of layout
   // choices (the auto-open redirect, the in-pane back button) key off this.
   const isMobile = useIsMobile();
+  // Installed-PWA / standalone is the only mode where ⌘N actually reaches the page
+  // (a normal tab hands it to the browser). Gate the on-button shortcut hint on it.
+  const isStandalone = useMediaQuery('(display-mode: standalone)');
   const [text, setText] = useState('');
   // Composer history cursor: -1 = editing the live draft; otherwise an index into the
   // session's stored history. `histDraft` stashes what was typed before recall started,
@@ -1931,6 +1942,7 @@ export function AgentView({ runner }: { runner: Runner }) {
         <div className={`session-new ${composing ? 'active' : ''}`} onClick={goNew}>
           <PlusOutlined />
           <span>New session</span>
+          {isStandalone && !isMobile && <kbd className="session-new-kbd">{NEW_SESSION_HINT}</kbd>}
         </div>
         <Segmented
           block

@@ -1631,6 +1631,17 @@ body {
   background: var(--brand-tint);
   border-color: var(--brand-border);
 }
+.session-new-kbd {
+  margin-left: auto;
+  padding: 1px 6px;
+  border: 1px solid var(--brand-border);
+  border-radius: 5px;
+  font: inherit;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--brand);
+  opacity: 0.6;
+}
 .session-new.active {
   background: var(--brand-tint);
   border-color: var(--brand-border);
