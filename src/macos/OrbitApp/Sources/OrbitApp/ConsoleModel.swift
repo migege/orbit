@@ -213,8 +213,16 @@ final class ConsoleModel {
         }
 
         reconnectAttempt = 0
+        var isReconnect = false          // the first connect is seeded by `approvalsSeed` above
         while !Task.isCancelled {
             kickRequested = false
+            // On a reconnect (foregrounded / network back / dropped stream), re-fetch the durable
+            // approvals. A card resolved elsewhere — e.g. answered on the web client — while this
+            // socket was suspended won't replay, since its `approval_resolved` rides seq 0 (live-only),
+            // so without this the stale card lingers. iOS suspends sockets on background, making this
+            // the common path there. Kicked concurrently so it doesn't delay the reconnect.
+            if isReconnect { Task { [weak self] in await self?.refreshApprovals() } }
+            isReconnect = true
             let outcome = await withTaskGroup(of: StreamOutcome.self) { group in
                 // The live read, on the main actor (folds into the shared reducer). Ends on a clean
                 // close, throws on a drop, or is cancelled by the kick watcher / view teardown.
@@ -658,15 +666,19 @@ final class ConsoleModel {
         }
     }
 
-    /// Fetch durable pending approvals (the REST source of truth) and fold them in. Without this
-    /// a prompt that predates the stream — or whose seq-0 nudge landed during a reconnect gap —
-    /// never surfaces, since those nudges aren't replayed.
+    /// Fetch durable pending approvals (the REST source of truth) and reconcile them into the
+    /// reducer. This both *surfaces* a prompt that predates the stream (or whose seq-0 nudge landed
+    /// during a reconnect gap — those nudges aren't replayed) and *clears* a card resolved elsewhere
+    /// (e.g. answered on the web client) while this socket was suspended, whose `approval_resolved`
+    /// we likewise never received. The `knownBefore` snapshot is captured before the await so a live
+    /// nudge that folds in during the fetch isn't mistaken for a stale card and dropped.
     private func refreshApprovals() async {
+        let knownBefore = Set(reducer.state.pendingApprovals.map(\.id))
         guard let infos = try? await api.approvals(sessionID: sessionID) else { return }
-        reducer.seedApprovals(infos.map {
+        reducer.reconcileApprovals(infos.map {
             PendingApproval(id: $0.id, kind: Approvals.kind(toolName: $0.toolName),
                             toolName: $0.toolName, input: $0.input)
-        })
+        }, knownBefore: knownBefore)
         publishStateNow()
     }
 

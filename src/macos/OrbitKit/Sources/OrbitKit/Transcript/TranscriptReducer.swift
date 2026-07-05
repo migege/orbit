@@ -261,10 +261,19 @@ public struct TranscriptReducer: Sendable, Codable {
         if let id = str(ev, "id") ?? str(ev, "approvalId") { removeApproval(id: id) }
     }
 
-    /// Merge durable pending approvals fetched via REST — the source of truth on (re)connect,
-    /// since `approval_request` nudges ride seq 0 and are never replayed. Add-only (by id) so a
-    /// live nudge already folded in is neither duplicated nor clobbered.
-    public mutating func seedApprovals(_ approvals: [PendingApproval]) {
+    /// Reconcile pending approvals against the REST source of truth (GET /approvals?status=PENDING),
+    /// the authoritative list on (re)connect since the seq-0 `approval_request`/`approval_resolved`
+    /// nudges are live-only and never replayed. Any approval we *already knew about before the fetch*
+    /// (`knownBefore`) that the server no longer lists was resolved elsewhere — e.g. answered on the
+    /// web client while this socket was suspended/dropped, so its `approval_resolved` never reached
+    /// us — so drop it. Approvals absent from `knownBefore` are live nudges that arrived via SSE
+    /// *during* the fetch: keep them even when the (older) REST snapshot predates them, so a
+    /// concurrent request isn't clobbered. Then add any listed approval we don't already hold.
+    /// Mirrors the web, which refetches `listApprovals` on session open and replaces its approvals
+    /// state wholesale.
+    public mutating func reconcileApprovals(_ approvals: [PendingApproval], knownBefore: Set<String>) {
+        let listed = Set(approvals.map(\.id))
+        state.pendingApprovals.removeAll { knownBefore.contains($0.id) && !listed.contains($0.id) }
         for appr in approvals where !state.pendingApprovals.contains(where: { $0.id == appr.id }) {
             state.pendingApprovals.append(appr)
         }

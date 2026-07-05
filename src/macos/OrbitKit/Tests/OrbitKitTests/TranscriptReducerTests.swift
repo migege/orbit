@@ -245,23 +245,55 @@ final class TranscriptReducerTests: XCTestCase {
         XCTAssertEqual(appr.input.map { Approvals.parseQuestions(from: $0) }?.first?.question, "Which DB?")
     }
 
-    /// Durable approvals fetched via REST seed the state (add-only, deduped by id), and a human
-    /// decision removes one optimistically — mirroring the live-only seq-0 nudges that aren't replayed.
-    func testSeedAndRemoveApprovals() {
+    /// Reconciling durable approvals (the REST source of truth) against local state: a listed
+    /// approval already folded in from a live nudge isn't duplicated, a newly listed one is added,
+    /// and a human decision removes one optimistically.
+    func testReconcileAddsAndDedupes() {
         var r = TranscriptReducer()
         // A live nudge already folded in for ap1.
         r.apply(RunEvent(seq: 0, type: .approvalRequest, payload: .object([
             "id": .string("ap1"), "toolName": .string("Bash"),
             "input": .object(["command": .string("ls")])])))
 
-        r.seedApprovals([
+        r.reconcileApprovals([
             PendingApproval(id: "ap1", kind: .tool, toolName: "Bash", input: nil),         // dup → skipped
             PendingApproval(id: "ap2", kind: .question, toolName: "AskUserQuestion", input: nil),
-        ])
+        ], knownBefore: ["ap1"])
         XCTAssertEqual(r.state.pendingApprovals.map(\.id), ["ap1", "ap2"], "ap1 not duplicated")
 
         r.removeApproval(id: "ap2")
         XCTAssertEqual(r.state.pendingApprovals.map(\.id), ["ap1"])
+    }
+
+    /// The reported bug: a card answered on the web client while this client was disconnected must
+    /// disappear on reconnect. Its seq-0 `approval_resolved` is never replayed, so the durable REST
+    /// list (which no longer includes it) is the only signal — reconciling against it drops the card,
+    /// because it was known before the fetch yet is absent from the authoritative list.
+    func testReconcileDropsApprovalResolvedElsewhere() {
+        var r = TranscriptReducer()
+        r.apply(RunEvent(seq: 0, type: .approvalRequest, payload: .object([
+            "id": .string("ap-web"), "toolName": .string("AskUserQuestion"),
+            "input": .object(["questions": .array([])])])))
+        XCTAssertEqual(r.state.pendingApprovals.map(\.id), ["ap-web"])
+
+        // Reconnect: GET /approvals returns empty (it was answered on web).
+        r.reconcileApprovals([], knownBefore: ["ap-web"])
+        XCTAssertTrue(r.state.pendingApprovals.isEmpty, "card resolved on web is cleared on reconnect")
+    }
+
+    /// Race safety: a live `approval_request` that folds in *during* the REST fetch (so its id isn't
+    /// in the pre-fetch `knownBefore` snapshot) must survive reconciliation even though the older REST
+    /// snapshot predates it — otherwise a freshly-arrived prompt would be clobbered on every reconnect.
+    func testReconcileKeepsLiveNudgeThatRacedTheFetch() {
+        var r = TranscriptReducer()
+        // A nudge for ap-live arrives while the (empty) REST fetch is in flight.
+        r.apply(RunEvent(seq: 0, type: .approvalRequest, payload: .object([
+            "id": .string("ap-live"), "toolName": .string("Bash"),
+            "input": .object(["command": .string("ls")])])))
+
+        // The REST snapshot (taken before ap-live existed) is empty, and knownBefore predates it too.
+        r.reconcileApprovals([], knownBefore: [])
+        XCTAssertEqual(r.state.pendingApprovals.map(\.id), ["ap-live"], "concurrent live nudge preserved")
     }
 
     // MARK: - tail-first initial load (the "reopened session shows no reply" fix)
