@@ -180,7 +180,8 @@ export class QueueService {
           (session.permissionMode as PermissionMode) ??
           (agent?.permissionMode as PermissionMode) ??
           PermissionMode.DONT_ASK,
-        effort: normalizeEffortForProvider(provider, session.effort),
+        // Per-session effort wins; else the agent's default effort (like model/mode above).
+        effort: normalizeEffortForProvider(provider, session.effort ?? agent?.effort),
         maxTurns: agent?.maxTurns ?? undefined,
         maxBudgetUsd: agent?.maxBudgetUsd ?? undefined,
         mcpConfig: (agent?.mcpConfig as Record<string, unknown> | null) ?? undefined,

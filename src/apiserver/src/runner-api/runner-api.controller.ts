@@ -376,7 +376,8 @@ export class RunnerApiController {
           (s.permissionMode as PermissionMode) ??
           (agent?.permissionMode as PermissionMode) ??
           PermissionMode.DONT_ASK,
-        effort: normalizeEffortForProvider(provider, s.effort),
+        // Per-session effort wins; else the agent's default effort (like model/mode above).
+        effort: normalizeEffortForProvider(provider, s.effort ?? agent?.effort),
         maxTurns: agent?.maxTurns ?? undefined,
         maxBudgetUsd: agent?.maxBudgetUsd ?? undefined,
         mcpConfig: (agent?.mcpConfig as Record<string, unknown> | null) ?? undefined,

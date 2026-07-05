@@ -1116,15 +1116,17 @@ export function AgentView({ runner }: { runner: Runner }) {
     );
   }, [selectedId, pickedAgent?.id, pickedAgent?.model, pickedAgent?.provider]);
 
-  // Effort has no agent-level default, so a fresh session restores the last-picked effort from
-  // the account preference (synced across devices — the iOS/macOS clients seed the same value).
-  // Reacts to `me` loading so the pill fills once preferences arrive, matching Model/Mode.
+  // A fresh session seeds its effort with the most specific default available: the picked agent's
+  // own effort (set on the Runner page) first, else the account-level default-effort preference
+  // (synced across devices — the iOS/macOS clients seed the same fallback). `??` treats only
+  // null/undefined as "unset", so an agent explicitly set to Default ('') stays Default rather than
+  // falling through. Reacts to `me` loading so the pill fills once preferences arrive.
   useEffect(() => {
     if (selectedId) return;
     const provider = pickedAgent?.provider ?? 'claude';
-    const stored = me.data?.preferences?.defaultEffort ?? '';
-    setEffort(normalizeEffortForProvider(provider, stored));
-  }, [selectedId, pickedAgent?.provider, me.data?.preferences?.defaultEffort]);
+    const candidate = pickedAgent?.effort ?? me.data?.preferences?.defaultEffort ?? '';
+    setEffort(normalizeEffortForProvider(provider, candidate));
+  }, [selectedId, pickedAgent?.provider, pickedAgent?.effort, me.data?.preferences?.defaultEffort]);
 
   // Likewise seed the Mode pill from the picked agent's configured default. Without
   // this the pill stays at the hardcoded 'Default', so a new session always sends
@@ -1547,7 +1549,11 @@ export function AgentView({ runner }: { runner: Runner }) {
         agentId,
         model,
         permissionMode: MODE_TO_PERMISSION[mode],
-        effort: wireEffort || undefined,
+        // Send even '' (Default) explicitly: the composer already seeds the pill from the agent's
+        // default, so the pill is authoritative — an explicit Default must stick, not fall back to
+        // the agent's effort server-side (session.effort ?? agent.effort). Task runs omit it, so
+        // those still inherit the agent default.
+        effort: wireEffort,
         attachmentIds,
         // A `!cmd` draft seeds the session's first turn as a shell command, not a message.
         shell,

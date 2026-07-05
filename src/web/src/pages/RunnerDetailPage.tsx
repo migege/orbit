@@ -36,6 +36,7 @@ import {
   MODE_OPTIONS,
   PROVIDER_OPTIONS,
   modelOptionsForProvider,
+  effortOptionsForProvider,
 } from '../lib/agentDefaults';
 
 interface Agent {
@@ -45,6 +46,7 @@ interface Agent {
   provider?: string;
   model?: string;
   permissionMode?: string;
+  effort?: string | null;
   workDir?: string | null;
   env?: Record<string, string> | null;
   runnerId?: string | null;
@@ -236,6 +238,7 @@ export function RunnerDetailPage() {
   const [fProvider, setFProvider] = useState('claude');
   const [fModel, setFModel] = useState(DEFAULT_MODEL);
   const [fMode, setFMode] = useState('auto');
+  const [fEffort, setFEffort] = useState('');
   const [fAppend, setFAppend] = useState('');
   const [fWorkDir, setFWorkDir] = useState('');
   const [fEnv, setFEnv] = useState<{ key: string; value: string }[]>([]);
@@ -258,6 +261,9 @@ export function RunnerDetailPage() {
     const nextModel = DEFAULT_MODEL_BY_PROVIDER[provider] ?? DEFAULT_MODEL;
     setFModel(nextModel);
     if (fMode === 'auto' && !AUTO_CAPABLE_MODELS.has(nextModel)) setFMode('default');
+    // Effort levels differ per provider (codex has 'minimal', not 'max'); reset to Default so the
+    // Select never shows a value absent from the new provider's options.
+    setFEffort('');
   };
 
   const saveMut = useMutation({
@@ -267,6 +273,8 @@ export function RunnerDetailPage() {
         provider: fProvider,
         model: fModel,
         permissionMode: fMode,
+        // Sent even when '' (Default) so picking Default clears a previously-set effort.
+        effort: fEffort,
         appendSystemPrompt: fAppend.trim() || undefined,
         workDir: fWorkDir.trim() || undefined,
         env: Object.fromEntries(
@@ -296,6 +304,7 @@ export function RunnerDetailPage() {
     setFProvider('claude');
     setFModel(prefModel);
     setFMode(prefMode);
+    setFEffort('');
     setFAppend('');
     setFWorkDir('');
     setFEnv([]);
@@ -307,6 +316,7 @@ export function RunnerDetailPage() {
     setFProvider(a.provider ?? 'claude');
     setFModel(a.model ?? DEFAULT_MODEL_BY_PROVIDER[a.provider ?? 'claude'] ?? DEFAULT_MODEL);
     setFMode(a.permissionMode ?? 'dontAsk');
+    setFEffort(a.effort ?? '');
     setFAppend(a.appendSystemPrompt ?? '');
     setFWorkDir(a.workDir ?? '');
     setFEnv(Object.entries(a.env ?? {}).map(([key, value]) => ({ key, value })));
@@ -363,6 +373,15 @@ export function RunnerDetailPage() {
             options={MODE_OPTIONS.filter(
               (o) => o.value !== 'auto' || AUTO_CAPABLE_MODELS.has(fModel),
             )}
+            style={{ width: '100%' }}
+          />
+        </div>
+        <div className="rd-form-field">
+          <div className="rd-form-label">Reasoning effort</div>
+          <Select
+            value={fEffort}
+            onChange={setFEffort}
+            options={effortOptionsForProvider(fProvider)}
             style={{ width: '100%' }}
           />
         </div>

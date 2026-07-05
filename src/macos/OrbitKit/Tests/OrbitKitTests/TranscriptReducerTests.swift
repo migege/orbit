@@ -220,6 +220,36 @@ final class TranscriptReducerTests: XCTestCase {
         r.removeApproval(id: "ap2")
         XCTAssertEqual(r.state.pendingApprovals.map(\.id), ["ap1"])
     }
+
+    // MARK: - tail-first initial load (the "reopened session shows no reply" fix)
+
+    /// The server's `/events/page` JSON decodes into `EventPage`, and folding that page — which
+    /// starts mid-conversation (its first event is an orphan `tool_result` whose `tool_use` is on
+    /// an earlier page) — still reconstructs the recent assistant reply and advances the status.
+    /// This is the contract `ConsoleModel.run()` relies on to paint a reopened session at its latest
+    /// message instead of replaying the whole history over SSE.
+    func testFoldsTailPageWithOrphanBoundaryEvent() throws {
+        let json = """
+        { "hasMore": true, "events": [
+          { "seq": 840, "type": "tool_result", "payload": { "toolUseId": "old", "content": "..." } },
+          { "seq": 841, "type": "assistant", "payload": { "text": "侦察回来了。" } },
+          { "seq": 842, "type": "turn_end", "payload": { "status": "AWAITING_INPUT" } }
+        ] }
+        """
+        let page = try JSONDecoder().decode(EventPage.self, from: Data(json.utf8))
+        XCTAssertTrue(page.hasMore)
+        XCTAssertEqual(page.events.count, 3)
+
+        var r = TranscriptReducer()
+        for ev in page.events { r.apply(ev) }
+        let s = r.state
+
+        // The orphan tool_result folds to nothing; the assistant reply renders; status advances.
+        XCTAssertEqual(s.items.compactMap(\.asAssistant).map(\.text), ["侦察回来了。"])
+        XCTAssertEqual(s.status, .awaitingInput)
+        // maxSeq is the tail's high-water mark, so the follow-on SSE resumes from seq > 842.
+        XCTAssertEqual(s.maxSeq, 842)
+    }
 }
 
 // Test-only convenience accessors (kept out of the library surface).

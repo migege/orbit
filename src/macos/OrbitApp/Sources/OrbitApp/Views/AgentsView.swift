@@ -200,7 +200,12 @@ struct AgentSettingsSheet: View {
                     }
                 }
         }
+        // A sizing hint for the macOS sheet only. On iOS a sheet is bound to the screen width, so
+        // forcing a 480pt minimum overflows an iPhone (~390pt) — the form then centres wider than
+        // the viewport and clips both edges (title/leading labels cut off). Let iOS size natively.
+        #if os(macOS)
         .frame(minWidth: 480, minHeight: 520)
+        #endif
     }
 }
 
@@ -406,6 +411,7 @@ struct AgentFormContent: View {
     @State private var name = ""
     @State private var model = ""
     @State private var mode: PermissionMode = .dontAsk
+    @State private var effort: Effort = .default
     @State private var instructions = ""
     @State private var workDir = ""
     @State private var enabled = true
@@ -428,6 +434,12 @@ struct AgentFormContent: View {
                     ForEach(AgentDefaults.permissionModes, id: \.self) {
                         Text(AgentDefaults.label($0)).tag($0)
                     }
+                }
+
+                // A new session with this agent seeds its reasoning effort from here (like model /
+                // permission mode); "Default" (the empty value) leaves it to the model's default.
+                Picker("Effort", selection: $effort) {
+                    ForEach(Effort.allCases) { Text($0.label).tag($0) }
                 }
 
                 Toggle("Enabled", isOn: $enabled)
@@ -476,6 +488,7 @@ struct AgentFormContent: View {
         name = agent.name
         model = agent.model ?? AgentDefaults.defaultModelID
         mode = PermissionMode(rawValue: agent.permissionMode ?? "dontAsk") ?? .dontAsk
+        effort = Effort(rawValue: agent.effort ?? "") ?? .default
         instructions = agent.appendSystemPrompt ?? ""
         workDir = agent.workDir ?? ""
         enabled = agent.enabled ?? true
@@ -487,6 +500,9 @@ struct AgentFormContent: View {
             model: model,
             appendSystemPrompt: instructions.isEmpty ? nil : instructions,
             permissionMode: mode.rawValue,
+            // Always send the raw value ("" for Default) so picking Default actually clears a
+            // previously-set effort — omitting (nil) would leave the old value unchanged.
+            effort: effort.rawValue,
             workDir: workDir.isEmpty ? nil : workDir,
             enabled: enabled
         )

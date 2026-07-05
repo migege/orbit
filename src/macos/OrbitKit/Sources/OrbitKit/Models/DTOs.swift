@@ -38,6 +38,9 @@ public struct Agent: Codable, Equatable, Sendable, Identifiable {
     public let provider: String?
     public let model: String?
     public let permissionMode: String?
+    /// The agent's default reasoning effort ('' = model default, else low/medium/high/xhigh/max).
+    /// A new session seeds its effort from this (like model/permissionMode) — see the composer.
+    public let effort: String?
     public let workDir: String?
     // The rest back the detail / edit form; all optional so a list payload (which may omit
     // them) still decodes. Mirrors the columns in the Prisma Agent model / `UpdateAgentDto`.

@@ -94,6 +94,9 @@ final class ConsoleModel {
 
     var statusMessage: String?
 
+    /// Newest persisted events pulled for the initial paint (web parity — `TAIL_PAGE`). See `run()`.
+    private static let tailPage = 200
+
     private var reducer = TranscriptReducer()
     private let stream: EventStreaming
     private let api: APIClient
@@ -138,6 +141,9 @@ final class ConsoleModel {
         let m = agent.model ?? AgentDefaults.defaultModelID
         self.modelID = AgentDefaults.models.contains { $0.id == m } ? m : AgentDefaults.defaultModelID
         self.permissionMode = PermissionMode(rawValue: agent.permissionMode ?? "dontAsk") ?? .dontAsk
+        // Seed the effort pill from the agent's default too (web parity), so a new session shows —
+        // and starts at — the agent's configured effort unless the user overrides it.
+        if let ef = agent.effort, let e = Effort(rawValue: ef) { self.effort = e }
     }
 
     /// Snapshot the full reducer (state + dedup/cursor internals) for the local store. Restoring
@@ -167,6 +173,19 @@ final class ConsoleModel {
         }
         monitor.start(queue: DispatchQueue(label: "io.orbitd.console.netpath"))
         defer { monitor.cancel() }
+
+        // Tail-first initial paint (web parity — commit 34f2d97, "open at the latest message
+        // first"). Rather than replaying the whole history over SSE — which on a long session is
+        // hundreds of KB read byte-by-byte, so the latest reply takes many seconds to surface, or
+        // never in practice — fetch just the newest page over HTTP, fold it in, then stream live
+        // from its max seq. Cold open only: a restored reducer already carries its transcript and
+        // maxSeq, so it skips straight to the SSE resume below (which streams seq > maxSeq).
+        if reducer.state.maxSeq == 0, !sessionID.isEmpty {
+            if let page = try? await api.eventPage(sessionID: sessionID, tail: Self.tailPage) {
+                for ev in page.events { reducer.apply(ev) }
+                publishStateNow()
+            }
+        }
 
         reconnectAttempt = 0
         while !Task.isCancelled {
@@ -487,8 +506,11 @@ final class ConsoleModel {
         defer { sending = false }
         do {
             let session = try await api.createSession(CreateSessionRequest(
+                // Send the raw effort — "" (Default) included — not `.wire` (which omits Default):
+                // the pill is seeded from the agent's default, so an explicit Default must stick
+                // rather than fall back to the agent's effort server-side. Web parity (AgentView).
                 prompt: text, agentId: agent.id, model: modelID,
-                permissionMode: permissionMode.rawValue, effort: effort.wire,
+                permissionMode: permissionMode.rawValue, effort: effort.rawValue,
                 shell: shell ? true : nil,
                 attachmentIds: attachmentIds.isEmpty ? nil : attachmentIds))
             composerText = ""

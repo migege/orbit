@@ -73,6 +73,19 @@ public final class APIClient: @unchecked Sendable {
     /// fields the list-shaped `Session` drops.
     public func sessionDetail(_ id: String) async throws -> SessionDetail { try await get("sessions/\(id)") }
 
+    /// A page of a session's persisted events for tail-first loading (web parity): `tail=N` returns
+    /// the newest N (initial paint — open a long session at the latest message instead of replaying
+    /// its whole history over SSE), `before=<seq>&limit=N` the N events just older than a seq
+    /// (scroll-up). Events come back chronological (seq ascending).
+    public func eventPage(sessionID: String, tail: Int? = nil,
+                          before: Int? = nil, limit: Int? = nil) async throws -> EventPage {
+        var q: [URLQueryItem] = []
+        if let tail { q.append(URLQueryItem(name: "tail", value: String(tail))) }
+        if let before { q.append(URLQueryItem(name: "before", value: String(before))) }
+        if let limit { q.append(URLQueryItem(name: "limit", value: String(limit))) }
+        return try await get("sessions/\(sessionID)/events/page", query: q)
+    }
+
     public func createSession(_ req: CreateSessionRequest) async throws -> Session {
         try await post("sessions", body: req)
     }
