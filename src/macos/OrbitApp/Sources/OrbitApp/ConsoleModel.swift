@@ -302,18 +302,26 @@ final class ConsoleModel {
     // re-spawns claude (see SessionsService.updateConfig). So we only push genuine user edits.
     private var syncedConfig: (model: String, permissionMode: String, effort: String)?
 
-    /// Load the footer context once: the owning agent's name + the runner's plan usage, and —
-    /// for a LIVE session — adopt its stored model/permission/effort so the pills show the
-    /// server's choice (matching web). A terminal session keeps the local picks for resume.
+    /// Load the footer context once: the owning agent's name + the runner's plan usage, and
+    /// adopt the session's stored model/permission/effort so the pills show its real settings
+    /// (matching web — see AgentView's seed effects). This runs for terminal sessions too: a
+    /// resumable session's pills seed its next resume, and without it the Mode pill would stick
+    /// at the hardcoded `.default` instead of the mode the session actually uses.
     private func loadContext() async {
         guard let s = try? await api.session(sessionID) else { return }
         serverStatus = s.status
         agentName = s.agent?.name
         provider = s.provider ?? s.agent?.provider ?? "claude"
+        if let m = s.model { modelID = m }
+        // A stored mode is adopted verbatim; a session with no stored mode falls back to
+        // `dontAsk` (web's `permissionMode ?? 'dontAsk'`), never the hardcoded `.default`.
+        if let pm = s.permissionMode { permissionMode = PermissionMode(rawValue: pm) ?? .default }
+        else { permissionMode = .dontAsk }
+        if let ef = s.effort, let e = Effort(rawValue: ef) { effort = e }
+        // A LIVE session pushes later pill edits to the server (PATCH /config); record the
+        // adopted values so `applyConfig` can distinguish a real user edit from this adopt.
+        // A terminal session isn't live, so its pills stay local until the next resume.
         if ComposerLogic.isLive(status: s.status) {
-            if let m = s.model { modelID = m }
-            if let pm = s.permissionMode, let mode = PermissionMode(rawValue: pm) { permissionMode = mode }
-            if let ef = s.effort, let e = Effort(rawValue: ef) { effort = e }
             syncedConfig = (modelID, permissionMode.rawValue, effort.rawValue)
         }
         // Plan usage rides the GET /runners list (there's no per-runner detail endpoint —
