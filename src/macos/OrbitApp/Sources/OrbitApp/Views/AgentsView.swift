@@ -188,17 +188,11 @@ struct AgentPanes: View {
 struct AgentSettingsSheet: View {
     let agents: AgentsModel
     let agent: Agent
-    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
             AgentFormContent(agents: agents, agent: agent)
                 .navigationTitle("\(agent.name) settings")
-                .toolbar {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") { dismiss() }
-                    }
-                }
         }
         // A sizing hint for the macOS sheet only. On iOS a sheet is bound to the screen width, so
         // forcing a 480pt minimum overflows an iPhone (~390pt) — the form then centres wider than
@@ -407,6 +401,7 @@ private struct SpinnerGlyph: View {
 struct AgentFormContent: View {
     let agents: AgentsModel
     let agent: Agent
+    @Environment(\.dismiss) private var dismiss
 
     @State private var name = ""
     @State private var model = ""
@@ -470,22 +465,26 @@ struct AgentFormContent: View {
             }
 
             Section {
-                HStack {
-                    Button("Save changes") { save() }
-                        .keyboardShortcut(.return, modifiers: [])
-                        .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
-                    Spacer()
-                    Button("Delete", role: .destructive) { confirmingDelete = true }
-                }
+                Button("Delete agent", role: .destructive) { confirmingDelete = true }
             }
         }
         .formStyle(.grouped)
         .onAppear(perform: prefill)
-        // Delete sits a tap away from Save, so gate it behind an explicit confirmation. The server
-        // soft-deletes (the agent's sessions are kept and linked), but it still vanishes from the
-        // list, so make the action deliberate.
-        .confirmationDialog("Delete \(agent.name)?", isPresented: $confirmingDelete, titleVisibility: .visible) {
+        // "Done" commits the working copy and closes — the iOS-idiomatic sheet flow (swipe-down to
+        // cancel/discard the edits). We only PATCH when something actually changed and the name is
+        // still non-empty, so opening settings to look and closing writes nothing.
+        .toolbar {
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Done") { commitAndDismiss() }
+            }
+        }
+        // Delete is destructive and drops the agent from the list, so gate it behind an explicit
+        // confirmation. The server soft-deletes (its sessions are kept and stay linked); close the
+        // sheet afterward since the agent is gone from here.
+        .confirmationDialog("Delete \(agent.name)?", isPresented: $confirmingDelete,
+                            titleVisibility: .visible) {
             Button("Delete agent", role: .destructive) {
+                dismiss()
                 Task { await agents.delete(agent.id) }
             }
             Button("Cancel", role: .cancel) { }
@@ -502,6 +501,27 @@ struct AgentFormContent: View {
         instructions = agent.appendSystemPrompt ?? ""
         workDir = agent.workDir ?? ""
         enabled = agent.enabled ?? true
+    }
+
+    /// True when the working copy diverges from the agent as prefilled — mirrors `prefill()` field
+    /// for field so a look-and-close never fires a needless PATCH.
+    private var isDirty: Bool {
+        name != agent.name
+        || model != (agent.model ?? AgentDefaults.defaultModelID)
+        || mode != (PermissionMode(rawValue: agent.permissionMode ?? "dontAsk") ?? .dontAsk)
+        || effort != (Effort(rawValue: agent.effort ?? "") ?? .default)
+        || instructions != (agent.appendSystemPrompt ?? "")
+        || workDir != (agent.workDir ?? "")
+        || enabled != (agent.enabled ?? true)
+    }
+
+    /// Save (only if changed and still valid) then close. An emptied name is invalid — the form was
+    /// seeded from a real name — so we discard rather than persist it.
+    private func commitAndDismiss() {
+        if isDirty && !name.trimmingCharacters(in: .whitespaces).isEmpty {
+            save()
+        }
+        dismiss()
     }
 
     private func save() {
