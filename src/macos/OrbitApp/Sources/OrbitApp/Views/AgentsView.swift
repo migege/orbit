@@ -410,6 +410,7 @@ struct AgentFormContent: View {
     @State private var instructions = ""
     @State private var workDir = ""
     @State private var enabled = true
+    @State private var confirmingDelete = false
 
     var body: some View {
         Form {
@@ -464,12 +465,7 @@ struct AgentFormContent: View {
             }
 
             Section {
-                Button("Delete agent", role: .destructive) {
-                    // Dismiss first, then delete: the delete round-trip outlives the sheet, and
-                    // closing right away avoids leaving the editor open on a now-removed agent.
-                    dismiss()
-                    Task { await agents.delete(agent.id) }
-                }
+                Button("Delete agent", role: .destructive) { confirmingDelete = true }
             }
         }
         .formStyle(.grouped)
@@ -481,6 +477,19 @@ struct AgentFormContent: View {
             ToolbarItem(placement: .confirmationAction) {
                 Button("Done") { commitAndDismiss() }
             }
+        }
+        // Delete is destructive and drops the agent from the list, so gate it behind an explicit
+        // confirmation. The server soft-deletes (its sessions are kept and stay linked); close the
+        // sheet afterward since the agent is gone from here.
+        .confirmationDialog("Delete \(agent.name)?", isPresented: $confirmingDelete,
+                            titleVisibility: .visible) {
+            Button("Delete agent", role: .destructive) {
+                dismiss()
+                Task { await agents.delete(agent.id) }
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("This removes the agent from your Agents list. Its sessions are kept.")
         }
     }
 
