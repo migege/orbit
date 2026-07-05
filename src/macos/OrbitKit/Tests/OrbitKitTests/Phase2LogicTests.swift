@@ -295,4 +295,16 @@ final class Phase2LogicTests: XCTestCase {
             ResumeRequest(clientTurnId: "c1", content: "go", model: "m", permissionMode: "auto", effort: "max"))
         XCTAssertTrue(String(decoding: data, as: UTF8.self).contains("\"effort\":\"max\""))
     }
+
+    /// Reviving a dormant session must carry staged image ids so the server links them to the
+    /// reviving turn (else the image is dropped and only the text survives). A text-only resume
+    /// omits the key via synthesized `encodeIfPresent`.
+    func testResumeEncodesAttachmentIds() throws {
+        let withImages = try jsonObject(
+            ResumeRequest(clientTurnId: "c1", content: "look", attachmentIds: ["att-1", "att-2"]))
+        XCTAssertEqual(withImages["attachmentIds"] as? [String], ["att-1", "att-2"])
+
+        let textOnly = try jsonObject(ResumeRequest(clientTurnId: "c1", content: "hi"))
+        XCTAssertFalse(textOnly.keys.contains("attachmentIds"), "text-only resume must omit attachmentIds")
+    }
 }

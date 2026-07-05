@@ -362,14 +362,21 @@ public struct ResumeRequest: Codable, Sendable {
     public let model: String?
     public let permissionMode: String?
     public let effort: String?
+    /// Ids of pre-uploaded image attachments (already scoped to this session) to link to the
+    /// reviving turn. nil omits the field (text-only resume). Without this a resume of a dormant
+    /// session drops staged images — the durable `user` event then reconciles the optimistic
+    /// bubble away, so the image vanishes and the runner never receives it.
+    public let attachmentIds: [String]?
     public init(clientTurnId: String, content: String, kind: String? = nil,
-                model: String? = nil, permissionMode: String? = nil, effort: String? = nil) {
+                model: String? = nil, permissionMode: String? = nil, effort: String? = nil,
+                attachmentIds: [String]? = nil) {
         self.clientTurnId = clientTurnId
         self.content = content
         self.kind = kind
         self.model = model
         self.permissionMode = permissionMode
         self.effort = effort
+        self.attachmentIds = attachmentIds
     }
 }
 

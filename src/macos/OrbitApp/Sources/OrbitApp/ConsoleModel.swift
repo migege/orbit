@@ -495,7 +495,8 @@ final class ConsoleModel {
                                          ResumeRequest(clientTurnId: clientTurnId, content: text,
                                                        kind: shell ? "shell" : "message",
                                                        model: modelID, permissionMode: permissionMode.rawValue,
-                                                       effort: effort.wire))
+                                                       effort: effort.wire,
+                                                       attachmentIds: attachmentIds.isEmpty ? nil : attachmentIds))
                 // The session is revived (back to PENDING/RUNNING); drop the stale terminal
                 // snapshot so the stream drives status again and a quick follow-up doesn't
                 // re-resume a session that hasn't re-claimed yet.
