@@ -300,7 +300,7 @@ struct ComposerView: View {
             Image(systemName: "plus")
                 .font(.system(size: 15))
                 .foregroundStyle(.secondary)
-                .composerHitTarget()
+                .composerHitTarget(width: 30)
         }
         .borderlessMenuStyle()
         .menuIndicator(.hidden)
@@ -638,12 +638,14 @@ private let sendGlyphFont: Font = .title2
 #endif
 
 private extension View {
-    /// Pad a composer glyph out to Apple's 44×44pt minimum touch target on iOS, where a finger needs
-    /// the room. On macOS the mouse cursor is precise enough that the icon-sized hit area is fine, so
-    /// this is a no-op there and the bar keeps its tight desktop layout.
-    func composerHitTarget() -> some View {
+    /// Give a composer glyph a 44pt-tall touch target on iOS, where a finger needs the room. Width
+    /// defaults to 44 — the send/stop circles fill that. The thin `+` passes a narrower width so its
+    /// hit box doesn't strand a block of empty space to the left of the text (a 15pt glyph centered in
+    /// 44pt reads as the `+` "taking up too much room"); 30pt keeps a comfortable tap area without the
+    /// gap. macOS is a no-op: the mouse is precise enough that the icon-sized hit area is fine there.
+    func composerHitTarget(width: CGFloat = 44) -> some View {
         #if os(iOS)
-        frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+        frame(width: width, height: 44).contentShape(Rectangle())
         #else
         self
         #endif
