@@ -2030,26 +2030,27 @@ export function AgentView({ runner }: { runner: Runner }) {
     });
     return () => cancelAnimationFrame(id);
   }, [text, composerHeight]);
-  // Drag-and-drop files onto the composer — same upload path as the picker/paste, gated on
-  // canAttach. dragDepth counts enter/leave across child elements (each fires its own events)
-  // so the drop hint doesn't flicker as the pointer crosses the textarea, button, etc.
+  // Drag-and-drop files anywhere onto the session pane (transcript + composer) — a far bigger
+  // target than the composer box, matching Slack/ChatGPT. Same upload path as the picker/paste,
+  // gated on canAttach. dragDepth counts enter/leave across child elements (each fires its own
+  // events) so the drop hint doesn't flicker as the pointer crosses messages, the textarea, etc.
   const dragDepth = useRef(0);
   const [dragging, setDragging] = useState(false);
   const dragHasFiles = (e: ReactDragEvent): boolean =>
     Array.from(e.dataTransfer?.types ?? []).includes('Files');
-  const onComposerDragEnter = (e: ReactDragEvent): void => {
+  const onSessionDragEnter = (e: ReactDragEvent): void => {
     if (!canAttach || !dragHasFiles(e)) return;
     e.preventDefault();
     dragDepth.current += 1;
     setDragging(true);
   };
-  const onComposerDragOver = (e: ReactDragEvent): void => {
+  const onSessionDragOver = (e: ReactDragEvent): void => {
     if (!canAttach || !dragHasFiles(e)) return;
-    // preventDefault marks the box a valid drop target; without it the browser opens the file.
+    // preventDefault marks the pane a valid drop target; without it the browser opens the file.
     e.preventDefault();
     e.dataTransfer.dropEffect = 'copy';
   };
-  const onComposerDragLeave = (): void => {
+  const onSessionDragLeave = (): void => {
     if (!dragging) return;
     dragDepth.current -= 1;
     if (dragDepth.current <= 0) {
@@ -2057,7 +2058,7 @@ export function AgentView({ runner }: { runner: Runner }) {
       setDragging(false);
     }
   };
-  const onComposerDrop = (e: ReactDragEvent): void => {
+  const onSessionDrop = (e: ReactDragEvent): void => {
     dragDepth.current = 0;
     setDragging(false);
     if (!canAttach) return;
@@ -2442,7 +2443,19 @@ export function AgentView({ runner }: { runner: Runner }) {
         aria-orientation="vertical"
       />
 
-      <div className="agent-view">
+      <div
+        className="agent-view"
+        onDragEnter={onSessionDragEnter}
+        onDragOver={onSessionDragOver}
+        onDragLeave={onSessionDragLeave}
+        onDrop={onSessionDrop}
+      >
+        {/* Drop-to-upload hint covering the whole session pane while files are dragged over it. */}
+        {dragging && (
+          <div className="agent-dropzone">
+            <PaperClipOutlined /> Drop files to upload
+          </div>
+        )}
         <div className="agent-header">
           {isMobile && (
             <button
@@ -2829,19 +2842,7 @@ export function AgentView({ runner }: { runner: Runner }) {
             </button>
           </div>
         )}
-        <div
-          className={`composer-box${dragging ? ' is-dragover' : ''}`}
-          onDragEnter={onComposerDragEnter}
-          onDragOver={onComposerDragOver}
-          onDragLeave={onComposerDragLeave}
-          onDrop={onComposerDrop}
-        >
-          {/* Drop-to-upload hint, shown only while dragging files over the composer. */}
-          {dragging && (
-            <div className="composer-dropzone">
-              <PaperClipOutlined /> Drop files to upload
-            </div>
-          )}
+        <div className="composer-box">
           {/* Drag to set an explicit height (overrides auto-grow); double-click to reset.
               Only shown once the box has hit its auto-grow cap or the user set a manual
               height — an empty/short composer has nothing worth resizing. */}

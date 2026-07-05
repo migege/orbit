@@ -1682,6 +1682,8 @@ body {
   flex-direction: column;
   height: 100%;
   padding: 16px var(--pane-gutter);
+  /* Anchor the drag-and-drop overlay (.agent-dropzone) to the whole pane. */
+  position: relative;
 }
 .agent-header {
   display: flex;
@@ -2792,24 +2794,22 @@ body {
 .composer-box:focus-within {
   border-color: var(--brand);
 }
-.composer-box.is-dragover {
-  border-color: var(--brand);
-}
-/* Drop-to-upload hint: covers the whole box while files are dragged over it. */
-.composer-dropzone {
+/* Drop-to-upload hint: covers the whole session pane while files are dragged over it. Sits
+   inset from the pane edges with a translucent scrim so the conversation still shows through. */
+.agent-dropzone {
   position: absolute;
-  inset: 0;
-  z-index: 10;
+  inset: 12px;
+  z-index: 20;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  border-radius: 10px;
-  border: 1px dashed var(--brand);
-  background: var(--brand-tint);
+  gap: 10px;
+  border-radius: 14px;
+  border: 2px dashed var(--brand);
+  background: color-mix(in srgb, var(--bg-base) 78%, transparent);
   color: var(--brand);
-  font-size: 13px;
-  font-weight: 500;
+  font-size: 15px;
+  font-weight: 600;
   pointer-events: none;
 }
 /* Reply-context chip: shown above the box when "Chat about this" hands a question reply
