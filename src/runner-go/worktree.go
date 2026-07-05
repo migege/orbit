@@ -101,6 +101,17 @@ func branchMergedInto(wt *Worktree) bool {
 	if target == "" || target == wt.Branch {
 		return false
 	}
+	// A branch that never committed past its fork point still has its tip sitting at BaseSha,
+	// which is by construction already in main's history — so is-ancestor would trivially say
+	// "merged" for a session that did no work. Require ≥1 commit past the fork before claiming
+	// the work landed; otherwise there was nothing to merge. (Genuinely merged branches keep
+	// their commits ahead of the old fork point, so they still count as ahead here.)
+	if wt.BaseSha != "" {
+		ahead, err := git(wt.RepoDir, "rev-list", "--count", wt.BaseSha+".."+wt.Branch)
+		if err == nil && strings.TrimSpace(ahead) == "0" {
+			return false
+		}
+	}
 	// `merge-base --is-ancestor A B` exits 0 when A is contained in B, 1 when not, 128 on error;
 	// git() returns a non-nil error for any non-zero exit, so err == nil ⇔ already merged.
 	_, err := git(wt.RepoDir, "merge-base", "--is-ancestor", wt.Branch, target)
