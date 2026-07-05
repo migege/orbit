@@ -33,6 +33,14 @@ public struct TranscriptReducer: Sendable, Codable {
     private var openAssistant: Int?     // index of the in-progress assistant bubble, if any
     private var openThinking: Int?
     private var idSeq = 0
+    /// Command text of each `Bash(run_in_background)` launch, keyed by its tool_use id. The
+    /// `background_*` events never carry the command, so the tray title is correlated from the
+    /// launch captured here — matching web's `deriveBackgroundShells`, which titles the row
+    /// `description ?? command`. Transient: rebuilt from replayed tool_use events and excluded
+    /// from the persisted keys below, so snapshots written before it existed still decode.
+    private var bgLaunch: [String: String] = [:]
+
+    private enum CodingKeys: String, CodingKey { case state, seen, openAssistant, openThinking, idSeq }
 
     public init() {}
 
@@ -57,7 +65,7 @@ public struct TranscriptReducer: Sendable, Codable {
         case .approvalRequest:  upsertApproval(ev)
         case .approvalResolved: resolveApproval(ev)
         case .backgroundTask:   upsertBackground(ev)
-        case .backgroundOutput: appendBackgroundOutput(ev)
+        case .backgroundOutput: applyBackgroundOutput(ev)
         case .status, .result:  applyStatus(ev)
         case .system, .unknown: break          // lifecycle noise — no transcript item
         }
@@ -158,6 +166,14 @@ public struct TranscriptReducer: Sendable, Codable {
         let id = str(ev, "toolUseId") ?? str(ev, "tool_use_id") ?? str(ev, "id") ?? nextID()
         let name = str(ev, "name") ?? str(ev, "toolName") ?? "tool"
         let input = ev.payload["input"] ?? .null
+        // A background shell launch: remember its command so the (command-less) background_* events
+        // can title the tray row. Prefer the human `description`, like web does.
+        if name == "Bash", input["run_in_background"]?.boolValue == true {
+            let desc = input["description"]?.stringValue
+            if let label = (desc?.isEmpty == false ? desc : nil) ?? input["command"]?.stringValue {
+                bgLaunch[id] = label
+            }
+        }
         state.items.append(.toolCall(ToolCard(id: id, name: name, input: input, result: nil, status: .running)))
     }
 
@@ -266,10 +282,15 @@ public struct TranscriptReducer: Sendable, Codable {
 
     // MARK: - background processes
 
+    // Runner keys background events by `shellId` (Claude's shell id) and `toolUseId` (the launching
+    // Bash call) — NOT `id`/`taskId`. Read those first (older aliases kept as a fallback) so events
+    // correlate to one process instead of each minting a throwaway synthetic id.
     private mutating func upsertBackground(_ ev: RunEvent) {
-        let id = str(ev, "id") ?? str(ev, "taskId") ?? nextID()
+        let toolUseID = str(ev, "toolUseId")
+        let id = str(ev, "shellId") ?? toolUseID ?? str(ev, "id") ?? str(ev, "taskId") ?? nextID()
         let status = str(ev, "status") ?? "running"
-        let command = str(ev, "command")
+        // The command isn't on this event; correlate it from the launching Bash tool_use (bgLaunch).
+        let command = str(ev, "command") ?? toolUseID.flatMap { bgLaunch[$0] }
         if let i = state.background.firstIndex(where: { $0.id == id }) {
             state.background[i].status = status
             if let command { state.background[i].command = command }
@@ -278,14 +299,18 @@ public struct TranscriptReducer: Sendable, Codable {
         }
     }
 
-    private mutating func appendBackgroundOutput(_ ev: RunEvent) {
-        guard let id = str(ev, "id") ?? str(ev, "taskId") else { return }
-        let chunk = str(ev, "output") ?? str(ev, "chunk") ?? str(ev, "text") ?? ""
-        guard !chunk.isEmpty else { return }
+    // `background_output` carries the WHOLE current output tail (a capped file snapshot re-sent on
+    // each change under the `content` key), not an incremental delta — so replace, don't append.
+    private mutating func applyBackgroundOutput(_ ev: RunEvent) {
+        let toolUseID = str(ev, "toolUseId")
+        guard let id = str(ev, "shellId") ?? toolUseID ?? str(ev, "id") ?? str(ev, "taskId") else { return }
+        let snapshot = str(ev, "content") ?? str(ev, "output") ?? str(ev, "chunk") ?? str(ev, "text") ?? ""
+        guard !snapshot.isEmpty else { return }
         if let i = state.background.firstIndex(where: { $0.id == id }) {
-            state.background[i].outputTail += chunk
+            state.background[i].outputTail = snapshot
         } else {
-            state.background.append(BackgroundProc(id: id, command: nil, status: "running", outputTail: chunk))
+            state.background.append(BackgroundProc(id: id, command: toolUseID.flatMap { bgLaunch[$0] },
+                                                   status: "running", outputTail: snapshot))
         }
     }
 

@@ -27,16 +27,25 @@ final class TranscriptReducerTests: XCTestCase {
                                                                        "toolName": .string("Bash"),
                                                                        "input": .object(["command": .string("rm x")])])),
             RunEvent(seq: 0, type: .approvalResolved, payload: .object(["id": .string("ap1")])),
-            RunEvent(seq: 7, type: .backgroundTask, payload: .object(["id": .string("bg1"),
-                                                                      "status": .string("running"),
-                                                                      "command": .string("npm test")])),
-            RunEvent(seq: 0, type: .backgroundOutput, payload: .object(["id": .string("bg1"),
-                                                                        "output": .string("PASS")])),
-            RunEvent(seq: 8, type: .backgroundTask, payload: .object(["id": .string("bg1"),
+            // Background Bash launch (run_in_background): the command lives HERE, on the tool_use —
+            // the background_* events below never carry it (the real runner contract).
+            RunEvent(seq: 7, type: .toolUse, payload: .object(["toolUseId": .string("bgt1"),
+                                                               "name": .string("Bash"),
+                                                               "input": .object(["command": .string("npm test"),
+                                                                                 "run_in_background": .bool(true)])])),
+            // Runner keys these by shellId + toolUseId and streams the live tail under `content`.
+            RunEvent(seq: 8, type: .backgroundTask, payload: .object(["shellId": .string("bg1"),
+                                                                      "toolUseId": .string("bgt1"),
+                                                                      "status": .string("running")])),
+            RunEvent(seq: 0, type: .backgroundOutput, payload: .object(["shellId": .string("bg1"),
+                                                                        "toolUseId": .string("bgt1"),
+                                                                        "content": .string("PASS")])),
+            RunEvent(seq: 9, type: .backgroundTask, payload: .object(["shellId": .string("bg1"),
+                                                                      "toolUseId": .string("bgt1"),
                                                                       "status": .string("completed")])),
             // Duplicate of seq 3 (e.g. an over-eager reconnect replay): must be deduped.
             RunEvent(seq: 3, type: .assistant, payload: .object(["text": .string("I'll list them.")])),
-            RunEvent(seq: 9, type: .turnEnd, payload: .object(["status": .string("AWAITING_INPUT")])),
+            RunEvent(seq: 10, type: .turnEnd, payload: .object(["status": .string("AWAITING_INPUT")])),
         ]
     }
 
@@ -45,8 +54,9 @@ final class TranscriptReducerTests: XCTestCase {
         for ev in recordedSession() { r.apply(ev) }
         let s = r.state
 
-        // 4 transcript items: user, assistant, tool, assistant (system is lifecycle, not an item).
-        XCTAssertEqual(s.items.count, 4, "expected user + assistant + tool + assistant")
+        // 5 transcript items: user, assistant, tool (ls), assistant, tool (background npm test).
+        // (system is lifecycle, not an item.)
+        XCTAssertEqual(s.items.count, 5, "expected user + assistant + tool + assistant + background tool")
 
         XCTAssertEqual(s.items[0].asUser?.text, "List the files")
         XCTAssertEqual(s.items[0].asUser?.pending, false)
@@ -70,11 +80,44 @@ final class TranscriptReducerTests: XCTestCase {
         XCTAssertEqual(s.background.count, 1)
         XCTAssertEqual(s.background.first?.status, "completed")
         XCTAssertEqual(s.background.first?.outputTail, "PASS")
-        XCTAssertEqual(s.background.first?.command, "npm test")
+        XCTAssertEqual(s.background.first?.command, "npm test",
+                       "command is correlated from the launching Bash tool_use, not the background event")
 
         XCTAssertEqual(s.status, .awaitingInput)
-        // maxSeq tracks the durable high-water (turn_end seq 9) — the reconnect cursor.
-        XCTAssertEqual(s.maxSeq, 9)
+        // maxSeq tracks the durable high-water (turn_end seq 10) — the reconnect cursor.
+        XCTAssertEqual(s.maxSeq, 10)
+    }
+
+    /// The runner keys background events by `shellId`/`toolUseId` and re-sends the WHOLE output
+    /// tail under `content` on every change (a capped file snapshot, not a delta). Repeated
+    /// `background_output` events must REPLACE the tail, and the process id must track shellId —
+    /// not mint a fresh synthetic "i<n>" each time (the bug that showed bare ids in the tray).
+    func testBackgroundOutputSnapshotReplacesAndKeepsOneProcess() {
+        var r = TranscriptReducer()
+        r.apply(RunEvent(seq: 0, type: .backgroundOutput,
+                         payload: .object(["shellId": .string("sh1"), "content": .string("line 1\n")])))
+        r.apply(RunEvent(seq: 0, type: .backgroundOutput,
+                         payload: .object(["shellId": .string("sh1"), "content": .string("line 1\nline 2\n")])))
+        XCTAssertEqual(r.state.background.count, 1, "same shellId ⇒ one process, not one per event")
+        XCTAssertEqual(r.state.background.first?.id, "sh1", "id tracks shellId, no synthetic fallback")
+        XCTAssertEqual(r.state.background.first?.outputTail, "line 1\nline 2\n", "snapshot replaces, not appends")
+    }
+
+    /// The tray title comes from the launching Bash(run_in_background) tool_use — the background_task
+    /// completion event carries no command. Prefer the human `description` when present (web parity).
+    func testBackgroundCommandTitledFromLaunchDescription() {
+        var r = TranscriptReducer()
+        r.apply(RunEvent(seq: 4, type: .toolUse, payload: .object([
+            "toolUseId": .string("tu9"), "name": .string("Bash"),
+            "input": .object(["command": .string("sleep 30 && echo done"),
+                              "description": .string("wait then greet"),
+                              "run_in_background": .bool(true)])])))
+        r.apply(RunEvent(seq: 5, type: .backgroundTask, payload: .object([
+            "shellId": .string("sh9"), "toolUseId": .string("tu9"), "status": .string("completed")])))
+        XCTAssertEqual(r.state.background.count, 1)
+        XCTAssertEqual(r.state.background.first?.command, "wait then greet",
+                       "description preferred over the raw command")
+        XCTAssertEqual(r.state.background.first?.status, "completed")
     }
 
     func testDurableDedupKeepsSingleItem() {
