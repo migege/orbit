@@ -1,29 +1,23 @@
 import SwiftUI
 import OrbitKit
 
-/// The app shell: a three-column split mirroring the web AppShell — a section rail (Active /
-/// Tasks / Agents / Skills / Runners / Settings / Admin), the selected section's list, and a
-/// detail pane. Only Active is wired to real views in batch B; the other sections are
-/// placeholders filled in by later batches (C Tasks, D Agents, E the rest).
+/// The app shell: a three-column split mirroring the web AppShell — a section rail (Tasks /
+/// Agents / Skills / Runners / Settings / Admin), the selected section's list, and a detail pane.
 struct MainView: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
         @Bindable var model = model
         NavigationSplitView {
-            SectionSidebar(isAdmin: model.user?.role == "ADMIN",
-                           needsYou: model.groups.needsYou.count)
+            SectionSidebar(isAdmin: model.user?.role == "ADMIN")
                 .navigationSplitViewColumnWidth(min: 200, ideal: 230, max: 300)
         } content: {
-            SectionContent(section: model.selectedSection, sessionSelection: $model.selectedSessionID)
+            SectionContent(section: model.selectedSection)
                 .navigationSplitViewColumnWidth(min: 240, ideal: 300, max: 420)
         } detail: {
             SectionDetail(section: model.selectedSection)
         }
         .task { model.startPolling() }
-        // Drive the debounced console mount off the list selection (covers arrow-key navigation,
-        // clicks, and a restored selection on appear).
-        .onChange(of: model.selectedSessionID, initial: true) { _, _ in model.scheduleConsoleActivate() }
         // Stream lifecycle: start exactly the focused session's SSE and stop any other, from the
         // always-present shell so it never depends on a console view unmounting (see syncConsoleFocus).
         .onChange(of: model.focusedConsoleSessionID, initial: true) { _, _ in model.syncConsoleFocus() }
@@ -40,12 +34,11 @@ enum SidebarSelection: Hashable {
 }
 
 /// The leftmost rail, now a source list: top-level sections, with "Agents" expandable to its
-/// runner-grouped agents (the list that used to live in the middle column). Active carries the
-/// "needs you" badge; Admin is role-gated. Section list + gating come from OrbitKit's `AppSection`.
+/// runner-grouped agents (the list that used to live in the middle column). Admin is role-gated.
+/// Section list + gating come from OrbitKit's `AppSection`.
 struct SectionSidebar: View {
     @Environment(AppModel.self) private var model
     let isAdmin: Bool
-    let needsYou: Int
     @State private var agentsExpanded = true
 
     /// Bridge the two model fields (`selectedSection` + `selectedAgentID`) to the List's single
@@ -81,7 +74,6 @@ struct SectionSidebar: View {
                     agentsDisclosure(shortcutIndex: shortcutIndex)
                 } else {
                     Label(section.title, systemImage: section.systemImage)
-                        .badge(section == .active ? needsYou : 0)   // .badge(0) renders nothing
                         .tag(SidebarSelection.section(section))
                 }
             }
@@ -94,7 +86,7 @@ struct SectionSidebar: View {
             }
             .background(.bar)
         }
-        .task { await model.agents?.load() }
+        .task { await model.loadAgentsThenLand() }
     }
 
     private func agentsDisclosure(shortcutIndex: [String: Int]) -> some View {
@@ -179,17 +171,12 @@ struct AvatarMonogram: View {
     }
 }
 
-/// Middle column: the selected section's list. Active reuses the live session list; the rest
-/// are placeholders until their batch lands.
+/// Middle column: the selected section's list.
 struct SectionContent: View {
     let section: AppSection
-    @Binding var sessionSelection: String?
 
     var body: some View {
         switch section {
-        case .active:
-            ActiveSidebar(selection: $sessionSelection)
-                .navigationTitle("Active")
         case .tasks:
             TasksListView()
         case .agents:
@@ -206,24 +193,13 @@ struct SectionContent: View {
     }
 }
 
-/// Right column: detail for the selection. Active shows the live console (or a prompt to pick a
-/// session); other sections show a neutral placeholder until built out.
+/// Right column: detail for the selection. Each section shows its own detail; single-pane
+/// sections fall through to a neutral placeholder.
 struct SectionDetail: View {
     let section: AppSection
-    @Environment(AppModel.self) private var model
 
     var body: some View {
         switch section {
-        case .active:
-            if let id = model.activeConsoleSessionID, let registry = model.consoleRegistry {
-                // No `.id(id)`: the view persists across selection changes and swaps its stream via
-                // `.task(id:)`, reusing the warm cached console instead of rebuilding from scratch.
-                ConsoleView(sessionID: id, agentID: model.agentID(for: id), registry: registry)
-            } else {
-                ContentUnavailableView("Select a session",
-                                       systemImage: "bubble.left.and.bubble.right",
-                                       description: Text("Live transcript appears here."))
-            }
         case .tasks:
             TaskDetailView()
         case .agents:
@@ -246,75 +222,5 @@ struct ComingSoon: View {
     var body: some View {
         ContentUnavailableView(section.title, systemImage: section.systemImage, description: Text(note))
             .navigationTitle(section.title)
-    }
-}
-
-struct ActiveSidebar: View {
-    @Environment(AppModel.self) private var model
-    @Binding var selection: String?
-    // Drives the List's keyboard focus. Set true when the composer hands ↑/↓ back on Escape, so the
-    // list can be arrow-navigated without a click; the binding also tracks click-to-focus.
-    @FocusState private var listFocused: Bool
-
-    var body: some View {
-        List(selection: $selection) {
-            bucket("Needs you", model.groups.needsYou, tint: .orange)
-            bucket("Running", model.groups.running, tint: .green)
-            bucket("Queued", model.groups.queued, tint: .secondary)
-        }
-        .focused($listFocused)
-        .onChange(of: model.sessionListFocusRequest) { _, _ in listFocused = true }
-        .overlay {
-            if model.groups.isEmpty {
-                ContentUnavailableView("No active sessions", systemImage: "moon.zzz")
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func bucket(_ title: String, _ items: [Session], tint: Color) -> some View {
-        if !items.isEmpty {
-            Section(title) {
-                ForEach(items) { session in
-                    SessionRow(session: session, tint: tint).tag(session.id)
-                        .sessionRowActions(session)
-                }
-            }
-        }
-    }
-}
-
-struct SessionRow: View {
-    let session: Session
-    let tint: Color
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Circle().fill(tint).frame(width: 7, height: 7)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(session.title ?? "Untitled session")
-                    .lineLimit(1)
-                Text(statusLabel).font(.caption).foregroundStyle(.secondary)
-            }
-            Spacer()
-            if let n = session.pendingApprovals, n > 0 {
-                Text("\(n)")
-                    .font(.caption2.bold())
-                    .padding(.horizontal, 6).padding(.vertical, 2)
-                    .background(.orange, in: Capsule())
-                    .foregroundStyle(.white)
-            }
-        }
-        .padding(.vertical, 2)
-    }
-
-    private var statusLabel: String {
-        switch session.status {
-        case .running: return "Running"
-        case .awaitingInput: return "Awaiting input"
-        case .pending: return "Queued"
-        case .interrupted: return "Interrupted"
-        default: return session.status.rawValue.capitalized
-        }
     }
 }

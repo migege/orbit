@@ -9,8 +9,7 @@ import OrbitKit
 ///   • an edge-swipe from the left (fast + one-handed), enabled only at a section's root so it never
 ///     fights the system back-swipe on a pushed page.
 /// The drawer pushes the content to the right with a dimming scrim; tapping the scrim or swiping
-/// left closes it. The current section is highlighted, and Active's "needs you" count rides on the
-/// hamburger as a dot so the signal survives while the drawer is closed.
+/// left closes it. The current section is highlighted.
 ///
 /// Under the hood the drawer just drives `selectedSection`, and `CompactSections` renders that one
 /// section's navigation stack. Every existing `List(selection:)` sidebar + detail pair from the iPad
@@ -31,7 +30,7 @@ struct CompactShell: View {
 
             ZStack(alignment: .leading) {
                 // Drawer, revealed at the leading edge as the content slides right.
-                NavigationDrawer(needsYou: model.groups.needsYou.count, close: closeDrawer)
+                NavigationDrawer(close: closeDrawer)
                     .frame(width: dw)
                     .offset(x: x - dw)
 
@@ -40,7 +39,7 @@ struct CompactShell: View {
                 // travels with the content and dims only the visible peek at [x, x+w]. Applying the
                 // overlay after `.offset` would size it to the un-offset full-screen frame — painting
                 // over the drawer and stealing its taps, so drawer rows couldn't switch sections.
-                CompactSections(needsYou: model.groups.needsYou.count, openDrawer: openDrawer)
+                CompactSections(openDrawer: openDrawer)
                     .overlay {
                         if x > 0 {
                             Color.black.opacity(0.35 * (x / dw))
@@ -127,25 +126,11 @@ struct CompactShell: View {
 /// stacks; drilling *within* the current section is still preserved.
 private struct CompactSections: View {
     @Environment(AppModel.self) private var model
-    let needsYou: Int
     let openDrawer: () -> Void
 
     var body: some View {
         @Bindable var model = model
         switch model.selectedSection {
-        // ACTIVE — live sessions → console
-        case .active:
-            NavigationSplitView {
-                SectionContent(section: .active, sessionSelection: $model.selectedSessionID)
-                    .drawerToggle(open: openDrawer, badge: needsYou)
-                    .onChange(of: model.selectedSessionID, initial: true) { _, _ in
-                        model.scheduleConsoleActivate()
-                    }
-                    .refreshable { await model.loadSessions() }
-            } detail: {
-                SectionDetail(section: .active)
-            }
-
         // TASKS — task list → detail
         case .tasks:
             NavigationSplitView {
@@ -210,10 +195,9 @@ private struct CompactSections: View {
 }
 
 /// The left navigation drawer: the section rail (mirroring the web sidebar) over the account footer.
-/// The current section is highlighted; Active carries the amber "needs you" count.
+/// The current section is highlighted.
 private struct NavigationDrawer: View {
     @Environment(AppModel.self) private var model
-    let needsYou: Int
     let close: () -> Void
 
     var body: some View {
@@ -239,8 +223,8 @@ private struct NavigationDrawer: View {
             }
             .listStyle(.plain)
             // Agents are always shown now, so load the list when the drawer mounts (mirrors the macOS
-            // sidebar). It's light; the heavy session list loads separately.
-            .task { await model.agents?.load() }
+            // sidebar), then land on the first agent. It's light; the heavy session list loads separately.
+            .task { await model.loadAgentsThenLand() }
 
             Divider()
             AccountFooter()
@@ -250,8 +234,7 @@ private struct NavigationDrawer: View {
         .background(Color(uiColor: .systemBackground))
     }
 
-    /// A plain destination row: tapping switches section and closes the drawer. Active carries the
-    /// amber "needs you" count.
+    /// A plain destination row: tapping switches section and closes the drawer.
     private func sectionRow(_ section: AppSection) -> some View {
         let selected = section == model.selectedSection
         return Button {
@@ -266,14 +249,6 @@ private struct NavigationDrawer: View {
                     .fontWeight(selected ? .semibold : .regular)
                     .foregroundStyle(.primary)
                 Spacer(minLength: 0)
-                if section == .active && needsYou > 0 {
-                    Text("\(needsYou)")
-                        .font(.caption2.bold())
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(.orange, in: Capsule())
-                        .foregroundStyle(.white)
-                }
             }
             .contentShape(Rectangle())
         }
@@ -341,22 +316,14 @@ private struct NavigationDrawer: View {
 
 private extension View {
     /// Adds the leading hamburger that opens the nav drawer. Applied to a section's *root* view so it
-    /// shows only in the root nav bar (pushed pages keep the system back button). `badge > 0` marks
-    /// the button with an amber dot so a "needs you" signal survives while the drawer is closed.
-    func drawerToggle(open: @escaping () -> Void, badge: Int = 0) -> some View {
+    /// shows only in the root nav bar (pushed pages keep the system back button).
+    func drawerToggle(open: @escaping () -> Void) -> some View {
         toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 Button(action: open) {
                     Image(systemName: "line.3.horizontal")
-                        .overlay(alignment: .topTrailing) {
-                            if badge > 0 {
-                                Circle().fill(.orange)
-                                    .frame(width: 8, height: 8)
-                                    .offset(x: 5, y: -4)
-                            }
-                        }
                 }
-                .accessibilityLabel(badge > 0 ? "Open navigation, \(badge) need you" : "Open navigation")
+                .accessibilityLabel("Open navigation")
             }
         }
     }

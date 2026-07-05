@@ -11,6 +11,7 @@ import {
   sessionsQuery,
   setupStatusQuery,
 } from '../lib/queries';
+import { agentRunnerId, firstOpenableAgent } from '../lib/agentOrder';
 
 // Routes that render their own loaders and have no first-screen data to wait on.
 const BYPASS = ['/login', '/enroll', '/setup'];
@@ -39,11 +40,11 @@ type DeepLink = { kind: 'session' | 'agent'; id: string };
  * milestones that each fill an equal slice. Every query shares its key with the
  * page/sidebar, so those read straight from cache and never refetch.
  *
- * Which queries are critical depends on the landed route. The home/list views wait on
- * the global session + runner lists. A reload on /sessions/<id> or /agents/<id> instead
- * lands in AgentView: resolve its runner (session detail, or the agents list), then warm
- * the runner-scoped active-session list AgentView reads on open — otherwise the splash
- * dismisses too early and the console flashes a spinner / "Starting…" while that lands.
+ * Which queries are critical depends on the landed route. The home route redirects to the first
+ * agent's console, and a reload on /sessions/<id> or /agents/<id> lands in AgentView directly:
+ * either way, resolve the runner (session detail, or the agents list), then warm the runner-scoped
+ * active-session list AgentView reads on open — otherwise the splash dismisses too early and the
+ * console flashes a spinner / "Starting…" while that lands.
  *
  * Only the authenticated app pre-warms. A signed-out visitor on a real route instead
  * waits on a single check — setup-status — so a fresh, zero-user deployment can be routed
@@ -88,26 +89,27 @@ export function BootGate({ children }: { children: React.ReactNode }) {
   // Warm the signed-in user so the nav footer's name paints with the first frame.
   // Not a readiness milestone — it must never hold the splash open.
   useQuery({ ...meQuery(), enabled: warm });
-  // Home/list routes wait on the global session list (shared with the Active view/sidebar).
-  const sessionsGlobal = useQuery({ ...sessionsQuery(), enabled: warm && !deep });
   // A /sessions/<id> deep link carries no runner — its session detail resolves one.
   const sessionDetail = useQuery({
     ...sessionQuery(deep?.kind === 'session' ? deep.id : null),
     enabled: warm && deep?.kind === 'session',
   });
-  // An /agents/<id> deep link resolves its runner from the agents list.
-  const agents = useQuery({ ...agentsQuery(), enabled: warm && deep?.kind === 'agent' });
+  // The agents list resolves the runner behind the first screen: for an /agents/<id> deep link,
+  // that agent; for the home route (which redirects to the first agent's console), the first
+  // openable agent. A /sessions/<id> deep link resolves its runner above, so it skips this.
+  const agents = useQuery({ ...agentsQuery(), enabled: warm && deep?.kind !== 'session' });
+  const homeFirst = deep ? undefined : firstOpenableAgent(agents.data ?? []);
   const runnerId =
     deep?.kind === 'session'
       ? (sessionDetail.data?.assignedRunnerId ?? null)
       : deep?.kind === 'agent'
         ? ((agents.data ?? []).find((a) => a.id === deep.id)?.runnerId ?? null)
-        : null;
+        : (homeFirst ? agentRunnerId(homeFirst) : null);
   // The runner-scoped active list AgentView reads on open — same factory, so it lands in
   // cache under the same key and the console paints in one shot instead of flashing "Starting…".
   const scopedSessions = useQuery({
     ...sessionsQuery({ runnerId, view: 'active' }),
-    enabled: warm && !!deep && !!runnerId,
+    enabled: warm && !!runnerId,
   });
 
   // Per-route readiness milestones (besides the mounted app). The signed-out setup check
@@ -120,11 +122,12 @@ export function BootGate({ children }: { children: React.ReactNode }) {
   } else if (deep?.kind === 'session') {
     const resolved = sessionDetail.isFetched;
     checks = [runners.isFetched, resolved, runnerId ? scopedSessions.isFetched : resolved];
-  } else if (deep?.kind === 'agent') {
+  } else {
+    // Agent deep link OR home: the agents list resolves the (first) agent, then its scoped
+    // active-session list. With no openable agent to wait on, the agents fetch itself is the
+    // final milestone, so the splash can never hang.
     const resolved = agents.isFetched;
     checks = [runners.isFetched, resolved, runnerId ? scopedSessions.isFetched : resolved];
-  } else {
-    checks = [runners.isFetched, sessionsGlobal.isFetched];
   }
   const settled = checks.filter(Boolean).length;
   const ready = settled === checks.length;

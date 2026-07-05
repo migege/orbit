@@ -23,17 +23,13 @@ final class AppModel {
     // data
     var user: User?
     var sessions: [Session] = []
-    var groups: SessionGroups = .empty
-    var selectedSessionID: String?
-    /// The session whose console is actually mounted — trails `selectedSessionID` by a short
-    /// debounce so fast arrow-key navigation doesn't open (and immediately discard) a stream for
-    /// every session it flies past. Driving the detail pane off this, not `selectedSessionID`, is
-    /// the "A" half of the switch-cost fix; the warm cache (`consoleRegistry`) is the rest.
-    var activeConsoleSessionID: String?
-    private var consoleActivateTask: Task<Void, Never>?
-    private static let consoleActivateDebounce: UInt64 = 200_000_000   // 200ms
-    // Top-level nav: which AppShell section is showing, and the per-section selection.
-    var selectedSection: AppSection = .active
+    // Top-level nav: which AppShell section is showing, and the per-section selection. The app
+    // lands on the Agents section (the first agent's session list); the agent is selected once the
+    // list loads — see `loadAgentsThenLand`.
+    var selectedSection: AppSection = .agents
+    /// Latches the one-shot default-landing resolution so it runs only after the first agent-list
+    /// load, and never overrides a later user/deep-link choice.
+    private var didResolveDefaultLanding = false
     var selectedTaskID: String?
     var selectedRunnerID: String?
     var selectedAgentID: String?
@@ -182,13 +178,10 @@ final class AppModel {
         controlTask?.cancel()
         controlTask = nil
         controlPlaneLive = false
-        consoleActivateTask?.cancel()
-        consoleActivateTask = nil
         consoleRegistry?.reset()   // persist open transcripts, drop the warm cache
         if let baseURL { tokenStore.setToken(nil, for: baseURL) }
         signedIn = false
         sessions = []
-        groups = .empty
         resetNavigation()
         lastSnapshot = nil
         menuSummary = .empty
@@ -199,9 +192,8 @@ final class AppModel {
     /// cleared wholesale — when adding a navigation field to this model, add its reset here, or a
     /// stale selection leaks into the next sign-in.
     private func resetNavigation() {
-        selectedSessionID = nil
-        activeConsoleSessionID = nil
-        selectedSection = .active
+        selectedSection = .agents
+        didResolveDefaultLanding = false
         selectedTaskID = nil
         selectedRunnerID = nil
         selectedAgentID = nil
@@ -233,7 +225,7 @@ final class AppModel {
             if let self, self.user == nil { self.user = try? await self.api?.me() }
             while !Task.isCancelled {
                 if let self, !self.controlPlaneLive { await self.loadSessions() }
-                if let self { self.consoleRegistry?.flush(self.activeConsoleSessionID) }
+                if let self { self.consoleRegistry?.flush(self.focusedConsoleSessionID) }
                 try? await Task.sleep(nanoseconds: 4_000_000_000)
             }
         }
@@ -325,31 +317,12 @@ final class AppModel {
         try? await Task.sleep(nanoseconds: UInt64(ms) * 1_000_000)
     }
 
-    /// Mount the selected session's console after a short debounce. Called from the view on every
-    /// `selectedSessionID` change (and once on appear). Rapid arrow-key changes keep cancelling and
-    /// rescheduling, so only the session the user settles on actually opens a stream.
-    func scheduleConsoleActivate() {
-        let target = selectedSessionID
-        guard target != activeConsoleSessionID else { return }
-        consoleActivateTask?.cancel()
-        consoleActivateTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: Self.consoleActivateDebounce)
-            guard let self, !Task.isCancelled, self.selectedSessionID == target else { return }
-            // Checkpoint the console we're leaving, then pre-warm the new one so the detail pane
-            // renders its cached transcript with no spinner.
-            self.consoleRegistry?.flush(self.activeConsoleSessionID)
-            if let target { _ = self.consoleRegistry?.model(for: target, agentID: self.agentID(for: target)) }
-            self.activeConsoleSessionID = target
-        }
-    }
-
     /// The session whose console is currently on screen (whichever section) — and therefore the one
     /// that should be live-streaming. Nil when a list / placeholder / new-session draft is showing.
     /// Section-aware so switching sections (or backing out to a list) stops the previous console's
     /// stream even if SwiftUI keeps its view cached.
     var focusedConsoleSessionID: String? {
         switch selectedSection {
-        case .active: return activeConsoleSessionID
         // A compose page hosting its just-created console in place (`composedConsoleSessionID`) wins
         // over the compose/selection rule: `composingAgentSession` is still true there, so without this
         // the session would render but never stream.
@@ -371,15 +344,15 @@ final class AppModel {
         guard let api else { return }
         do {
             let list = try await api.listSessions(view: "active")
-            // Notify on poll-to-poll transitions (skip the first load, which only primes).
+            // Notify on poll-to-poll transitions (skip the first load, which only primes). Skip the
+            // session whose console is on screen — its own stream already shows the change.
             if let prev = lastSnapshot {
-                for event in SessionDelta.diff(previous: prev, current: list, focusedSessionID: selectedSessionID) {
+                for event in SessionDelta.diff(previous: prev, current: list, focusedSessionID: focusedConsoleSessionID) {
                     notifications.post(Notifications.content(for: event))
                 }
             }
             lastSnapshot = list
             sessions = list
-            groups = SessionGrouping.group(list)
             menuSummary = MenuBar.summary(from: list)
             updateDockBadge(menuSummary.badge)
         } catch APIError.unauthorized {
@@ -410,18 +383,13 @@ final class AppModel {
         return map
     }
 
-    /// The agent ⌘N opens a new session for: the one selected in the Agents section, else the agent
-    /// behind the session open in Active, else the first agent. nil only when no agents exist — ⌘N
-    /// is disabled then.
+    /// The agent ⌘N opens a new session for: the one selected in the Agents section, else the first
+    /// agent. nil only when no agents exist — ⌘N is disabled then.
     var currentAgentID: String? {
         let all = orderedAgents
         guard !all.isEmpty else { return nil }
         if selectedSection == .agents, let id = selectedAgentID, all.contains(where: { $0.id == id }) {
             return id
-        }
-        if let sid = activeConsoleSessionID ?? selectedSessionID, let aid = agentID(for: sid),
-           all.contains(where: { $0.id == aid }) {
-            return aid
         }
         return all.first?.id
     }
@@ -475,11 +443,10 @@ final class AppModel {
     }
 
     /// The session whose console fills the detail pane right now — the ⌘D ("Complete Session")
-    /// target. In Active that's the mounted console; in Agents it's the selected agent session
-    /// (nil while drafting a new one). nil in every other section, which disables the command.
+    /// target. In Agents it's the selected agent session (nil while drafting a new one). nil in
+    /// every other section, which disables the command.
     var currentSessionID: String? {
         switch selectedSection {
-        case .active: return activeConsoleSessionID ?? selectedSessionID
         case .agents: return composingAgentSession ? nil : selectedAgentSessionID
         default:      return nil
         }
@@ -491,7 +458,6 @@ final class AppModel {
     /// edge for the system back-swipe.
     var sectionAtRoot: Bool {
         switch selectedSection {
-        case .active:  return selectedSessionID == nil
         case .tasks:   return selectedTaskID == nil
         // The compose page (composing) is pushed too, not just a selected session's console — so the
         // agents stack is at root only when neither is up, leaving the edge to the system back-swipe.
@@ -519,15 +485,13 @@ final class AppModel {
         }
     }
 
-    /// Clear a session out of every pane that has it open (list selection + mounted console), so a
+    /// Clear a session out of the pane that has it open (the agent console selection), so a
     /// completed/deleted session can't linger in the detail view. Used by ⌘D and the row actions.
     private func dropIfOpen(_ id: String) {
-        if selectedSessionID == id { selectedSessionID = nil }
-        if activeConsoleSessionID == id { activeConsoleSessionID = nil }
         if selectedAgentSessionID == id { selectedAgentSessionID = nil }
     }
 
-    // MARK: session row actions (shared by the Active sidebar + the agent session lists)
+    // MARK: session row actions (shared by the menu-bar quick items + the agent session lists)
 
     /// A just-performed reversible action, surfaced as an Undo toast for a few seconds. Restore is
     /// the universal undo — the server's `restore` clears both archive and trash state.
@@ -614,10 +578,46 @@ final class AppModel {
     func route(to route: Route) {
         selectedSection = AppSection.forRoute(route)
         switch route {
-        case .active:          break
-        case .session(let id): selectedSessionID = id
+        case .active:          if selectedAgentID == nil { selectedAgentID = orderedAgents.first?.id }
+        case .session(let id): openSession(id)
         case .task(let id):    selectedTaskID = id
         case .runner(let id):  selectedRunnerID = id
+        }
+    }
+
+    /// Open a session's console. There's no standalone session view anymore, so route into its
+    /// owning agent's console (the section is already `.agents`, set by `route`). Resolve the agent
+    /// from the loaded Active list, else fetch the session to learn it; showing the session id right
+    /// away lets the console paint while the agent resolves in the background.
+    private func openSession(_ id: String) {
+        composingAgentSession = false
+        selectedAgentSessionID = id
+        if let aid = agentID(for: id) {
+            selectedAgentID = aid
+        } else {
+            Task { @MainActor [weak self] in
+                guard let self, let session = try? await self.api?.session(id),
+                      self.selectedAgentSessionID == id else { return }   // ignore a stale resolve
+                self.selectedAgentID = session.agent?.id ?? session.agentId
+            }
+        }
+    }
+
+    /// Load the agent list, then land on the first agent's session list (the app's home) if we're
+    /// still on the launch default. Runs the resolution once; a deep link / notification that
+    /// already chose an agent (or another section) is respected. No agents → the Runners section,
+    /// the native parallel of web's runners/register onboarding.
+    func loadAgentsThenLand() async {
+        await agents?.load()
+        guard !didResolveDefaultLanding else { return }
+        didResolveDefaultLanding = true
+        // Only claim the launch default: a deep link / notification that already chose an agent, a
+        // session (still resolving its agent), or another section is respected.
+        guard selectedSection == .agents, selectedAgentID == nil, selectedAgentSessionID == nil else { return }
+        if let first = orderedAgents.first?.id {
+            selectedAgentID = first
+        } else {
+            selectedSection = .runners
         }
     }
 

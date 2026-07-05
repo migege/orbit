@@ -13,20 +13,10 @@ export function LoginPage() {
       const res = await api<AuthResponse>('/auth/login', { method: 'POST', body: values });
       setToken(res.accessToken);
       const next = new URLSearchParams(window.location.search).get('next');
-      if (next && next.startsWith('/')) {
-        location.href = next;
-        return;
-      }
-      // Brand-new accounts have no runner yet — drop them on the registration guide
-      // so onboarding starts there instead of an empty Active view.
-      let dest = '/active';
-      try {
-        const runners = await api<unknown[]>('/runners');
-        if (runners.length === 0) dest = '/runners/register';
-      } catch {
-        // If the check fails, fall back to the normal landing.
-      }
-      location.href = dest;
+      // Land at the root and let <DefaultLanding> resolve the destination — the first agent's
+      // session list, or onboarding (registration guide / runners) when there's no agent to open
+      // yet. A full reload so BootGate pre-warms that first screen behind the splash.
+      location.href = next && next.startsWith('/') ? next : '/';
     } catch (err) {
       message.error((err as Error).message);
     }

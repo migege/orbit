@@ -35,13 +35,13 @@ import type { PlanUsage, SlashCommandInfo } from '@orbit/shared';
 import { api, clearToken } from '../api';
 import { decodeId, encodeId } from '../lib/idCodec';
 import { meQuery, sessionQuery, sessionsQuery } from '../lib/queries';
+import { orderAgents } from '../lib/agentOrder';
 import { useThemeMode, type ThemeMode } from '../lib/theme';
 
-// Feishu-style top navigation. Each entry routes to "/<key>" (they all share the
-// Tasks view for now — only the heading differs). "Runners" opens the runners
-// page.
+// Feishu-style top navigation. Each entry routes to "/<key>": "Runners" opens the runners
+// page, "Skills" the skills page (Admin is appended for admins below). The agents themselves
+// live in the "Agents" group further down.
 const TOP = [
-  { key: 'active', icon: <UserOutlined />, label: 'Active' },
   { key: 'runners', icon: <DesktopOutlined />, label: 'Runners' },
   { key: 'skills', icon: <ThunderboltOutlined />, label: 'Skills' },
 ];
@@ -147,21 +147,18 @@ export function TasksSidePanel({ open = false }: { open?: boolean }) {
   // row highlighted after navigating away to a list or top-nav route.
   const activeAgentId = openAgentId ?? (sessionId ? sessionQ.data?.agent?.id : null) ?? null;
 
-  // On a top-nav route the highlight follows the URL ("/" and "/tasks" both map
-  // to Active); the runner-centric routes (/runners, /runner, /agents, /sessions)
-  // keep "Runners" highlighted. Clicking a list item below overrides it locally.
-  const routeKey =
-    loc.pathname === '/' || loc.pathname === '/tasks'
-      ? 'active'
-      : activeAgentId
-        ? '' // scoped to one agent — its row highlights below, no top item
-        : loc.pathname.startsWith('/agents/') ||
-            loc.pathname.startsWith('/sessions/') ||
-            loc.pathname.startsWith('/runner')
-          ? 'runners'
-          : loc.pathname.startsWith('/lists/')
-            ? loc.pathname.slice('/lists/'.length)
-            : loc.pathname.slice(1);
+  // The runner-centric routes (/runners, /runner, /agents, /sessions) keep "Runners"
+  // highlighted; an open agent highlights its own row below instead. Clicking a list item
+  // below overrides it locally.
+  const routeKey = activeAgentId
+    ? '' // scoped to one agent — its row highlights below, no top item
+    : loc.pathname.startsWith('/agents/') ||
+        loc.pathname.startsWith('/sessions/') ||
+        loc.pathname.startsWith('/runner')
+      ? 'runners'
+      : loc.pathname.startsWith('/lists/')
+        ? loc.pathname.slice('/lists/'.length)
+        : loc.pathname.slice(1);
   const [sel, setSel] = useState(routeKey);
   useEffect(() => setSel(routeKey), [routeKey]);
 
@@ -229,21 +226,9 @@ export function TasksSidePanel({ open = false }: { open?: boolean }) {
 
   // The "Agents" list is the user's agent definitions (model + tools).
   const agents = useQuery({ queryKey: ['agents'], queryFn: () => api<Agent[]>('/agents') });
-  // Custom drag order (position) first; agents never dragged (position null) fall to
-  // the end, ordered oldest-first. ⌘N maps to this final order. Sort client-side so it
-  // holds even if the API returns them unordered, mirroring the server's ordering.
-  const agentList = useMemo(
-    () =>
-      [...(agents.data ?? [])].sort((a, b) => {
-        const pa = a.position ?? null;
-        const pb = b.position ?? null;
-        if (pa !== null && pb !== null) return pa - pb;
-        if (pa !== null) return -1;
-        if (pb !== null) return 1;
-        return a.createdAt < b.createdAt ? -1 : 1;
-      }),
-    [agents.data],
-  );
+  // Sidebar display order — shared with the boot pre-warm and the default landing so "the first
+  // agent" means the same thing everywhere. ⌘1‒9 (and ⌘N's fallback) map to this order.
+  const agentList = useMemo(() => orderAgents(agents.data ?? []), [agents.data]);
 
   // User-created task lists shown in the "Task List" group below. Poll so the
   // per-list running indicator stays live: 5s while anything is running (mirrors the
@@ -288,10 +273,9 @@ export function TasksSidePanel({ open = false }: { open?: boolean }) {
   });
   const unlistedCount = (tasks.data ?? []).filter((t: any) => !t.listId).length;
 
-  // The "Active" badge must match what ActiveSessionsView lists — live sessions only:
-  // RUNNING or PENDING, including system/task-execution sessions (NOT the total task
-  // count). Shares the ['sessions', null, 'active'] cache that view fills, so it adds no
-  // extra request.
+  // Live sessions (RUNNING/PENDING), used below to decorate each agent row with its own
+  // "needs you" count. Polls faster while anything is live. Shares the ['sessions', null,
+  // 'active'] cache the sidebar/console already fill, so it adds no extra request.
   const activeSessions = useQuery({
     ...sessionsQuery({ view: 'active' }),
     refetchInterval: (q) =>
@@ -299,16 +283,7 @@ export function TasksSidePanel({ open = false }: { open?: boolean }) {
         ? 5_000
         : 15_000,
   });
-  const activeCount = (activeSessions.data ?? []).filter(
-    (s: any) => s.status === 'RUNNING' || s.status === 'PENDING',
-  ).length;
-  // "Needs you": active sessions blocked on a pending approval the user must act on
-  // (Allow/Deny on a permission card). Surfaces ActiveSessionsView's "Needs you" group
-  // up into the nav so it's visible from any page. Same cache, no extra request.
-  const needsReplyCount = (activeSessions.data ?? []).filter(
-    (s: any) => (s.pendingApprovals ?? 0) > 0,
-  ).length;
-  // The same "needs you" signal decomposed per agent: how many of each agent's active
+  // The "needs you" signal decomposed per agent: how many of each agent's active
   // sessions are blocked on an approval. Lets an agent row show its own attention count
   // (and hide its ⌘ shortcut) so you can jump straight to the agent that needs you.
   // Same active-sessions cache, no extra request; keyed by nested agent.id (flat
@@ -440,29 +415,20 @@ export function TasksSidePanel({ open = false }: { open?: boolean }) {
         </button>
       </div>
 
-      {/* Collapsed-only icon rail: the fixed top-nav as icons, carrying the Active
-          "needs you" (or live) count so the core "it's your turn" signal survives a
-          collapse. The dynamic lists (agents, task lists) have no icon form, so they
-          fold away — expand to bring them back. Shown only when collapsed, on desktop. */}
+      {/* Collapsed-only icon rail: the fixed top-nav as icons. The dynamic lists (agents,
+          task lists) have no icon form, so they fold away — expand to bring them back. The
+          agents themselves stay as monogram avatars below. Shown only when collapsed, on desktop. */}
       <div className="tp-rail">
-        {TOP.map((t) => {
-          const isActive = t.key === 'active';
-          const needsYou = isActive && needsReplyCount > 0;
-          const count = isActive ? (needsYou ? needsReplyCount : activeCount) : null;
-          return (
-            <div
-              key={t.key}
-              className={`tp-rail-item ${sel === t.key ? 'active' : ''}`}
-              onClick={() => navigate(`/${t.key}`)}
-              title={needsYou ? `${needsReplyCount} session(s) need your reply` : t.label}
-            >
-              <span className="tp-ico">{t.icon}</span>
-              {count != null && count > 0 && (
-                <span className={`tp-rail-badge${needsYou ? ' needs-you' : ''}`}>{count}</span>
-              )}
-            </div>
-          );
-        })}
+        {TOP.map((t) => (
+          <div
+            key={t.key}
+            className={`tp-rail-item ${sel === t.key ? 'active' : ''}`}
+            onClick={() => navigate(`/${t.key}`)}
+            title={t.label}
+          >
+            <span className="tp-ico">{t.icon}</span>
+          </div>
+        ))}
         {/* The user's agents, kept reachable when collapsed: a monogram avatar each
             (agents are entities with identity + online state + ⌘1‒9, so unlike the
             text-titled task lists they read fine as icons). Same order, same shortcuts. */}
@@ -485,34 +451,16 @@ export function TasksSidePanel({ open = false }: { open?: boolean }) {
 
       <div className="tp-scroll">
         <div className="tp-section">
-          {navItems.map((t) => {
-            // "Active" shows its live session total. But when some of those sessions are
-            // blocked on an approval the user must act on, the count flips to that
-            // "needs you" number in an amber attention badge — so "it's your turn" reads
-            // from any page (the highlighted number = sessions awaiting you, not the total
-            // running). Other nav items carry no count.
-            const isActive = t.key === 'active';
-            const needsYou = isActive && needsReplyCount > 0;
-            const count = isActive ? (needsYou ? needsReplyCount : activeCount) : null;
-            return (
-              <div
-                key={t.key}
-                className={`tp-item ${sel === t.key ? 'active' : ''}`}
-                onClick={() => navigate(`/${t.key}`)}
-              >
-                <span className="tp-ico">{t.icon}</span>
-                <span className="tp-label">{t.label}</span>
-                {count != null && (
-                  <span
-                    className={`tp-count${needsYou ? ' needs-you' : ''}`}
-                    title={needsYou ? `${needsReplyCount} session(s) need your reply` : undefined}
-                  >
-                    {count}
-                  </span>
-                )}
-              </div>
-            );
-          })}
+          {navItems.map((t) => (
+            <div
+              key={t.key}
+              className={`tp-item ${sel === t.key ? 'active' : ''}`}
+              onClick={() => navigate(`/${t.key}`)}
+            >
+              <span className="tp-ico">{t.icon}</span>
+              <span className="tp-label">{t.label}</span>
+            </div>
+          ))}
         </div>
 
         <div className="tp-divider" />

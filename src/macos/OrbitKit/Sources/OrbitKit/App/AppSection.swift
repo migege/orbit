@@ -4,13 +4,12 @@ import Foundation
 /// Symbol names are just strings — so it lives in OrbitKit and is unit-tested; the SwiftUI
 /// sidebar renders `visible(isAdmin:)`. Admin is role-gated like the web's route guard.
 public enum AppSection: String, CaseIterable, Sendable, Identifiable {
-    case active, tasks, agents, skills, runners, settings, admin
+    case tasks, agents, skills, runners, settings, admin
 
     public var id: String { rawValue }
 
     public var title: String {
         switch self {
-        case .active:   return "Active"
         case .tasks:    return "Tasks"
         case .agents:   return "Agents"
         case .skills:   return "Skills"
@@ -23,7 +22,6 @@ public enum AppSection: String, CaseIterable, Sendable, Identifiable {
     /// SF Symbol for the sidebar row.
     public var systemImage: String {
         switch self {
-        case .active:   return "bolt.horizontal.circle"
         case .tasks:    return "checklist"
         case .agents:   return "person.2"
         case .skills:   return "wand.and.stars"
@@ -36,15 +34,17 @@ public enum AppSection: String, CaseIterable, Sendable, Identifiable {
     /// Admin-area sections are hidden from non-admins (mirrors the web route guard).
     public var adminOnly: Bool { self == .admin }
 
-    /// Sections to show for a role, in canonical order (Active first).
+    /// Sections to show for a role, in canonical order.
     public static func visible(isAdmin: Bool) -> [AppSection] {
         allCases.filter { !$0.adminOnly || isAdmin }
     }
 
-    /// The section a deep-link / notification `Route` lands in.
+    /// The section a deep-link / notification `Route` lands in. There's no aggregate Active view
+    /// anymore, so "home" (`.active`) and an individual `.session` both land in Agents — the
+    /// session's owning agent is resolved when routing (see `AppModel.route`).
     public static func forRoute(_ route: Route) -> AppSection {
         switch route {
-        case .active, .session: return .active
+        case .active, .session: return .agents
         case .task:             return .tasks
         case .runner:           return .runners
         }
