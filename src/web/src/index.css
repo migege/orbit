@@ -4253,6 +4253,7 @@ body {
 }
 .approval-actions {
   display: flex;
+  align-items: center;
   gap: 10px;
   padding: 10px 14px;
   border-top: 1px solid var(--brand-border);
@@ -4302,6 +4303,7 @@ body {
   border-radius: 4px;
   background: var(--brand-border);
   color: var(--brand-strong);
+  white-space: nowrap;
 }
 .approval-btn:disabled {
   opacity: 0.5;
@@ -4311,6 +4313,23 @@ body {
   margin-left: 8px;
   font-size: 11px;
   opacity: 0.75;
+}
+/* On a phone the three buttons can't share one row: the long "auto-allow future …"
+   label shrinks to a 5-6 line block and drags the others into tall boxes. Stack them
+   full-width instead (the standard phone action-sheet layout). */
+@media (max-width: 600px) {
+  .approval-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .approval-btn {
+    width: 100%;
+    padding: 10px 14px; /* ~40px comfortable tap target on touch */
+  }
+  /* No hardware Enter/⌘ key on touch — the hints are noise and force extra wrapping. */
+  .approval-btn-kbd {
+    display: none;
+  }
 }
 
 /* ---- Task detail panel (slide-in beside the task list) ---- */
