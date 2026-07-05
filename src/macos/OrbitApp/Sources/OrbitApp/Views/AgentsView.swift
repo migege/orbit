@@ -470,10 +470,15 @@ struct AgentFormContent: View {
         }
         .formStyle(.grouped)
         .onAppear(perform: prefill)
-        // "Done" commits the working copy and closes — the iOS-idiomatic sheet flow (swipe-down to
-        // cancel/discard the edits). We only PATCH when something actually changed and the name is
-        // still non-empty, so opening settings to look and closing writes nothing.
+        // Cancel/Done pair (the iOS editing-sheet idiom, e.g. Contacts): "Done" commits the working
+        // copy and closes, "Cancel" discards and closes — a discoverable exit that also works on
+        // macOS, where the sheet has no swipe-to-dismiss (Cancel binds to Esc, Done to Return). Done
+        // only PATCHes when something actually changed and the name is still non-empty, so opening
+        // settings to look and closing writes nothing.
         .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Cancel") { dismiss() }
+            }
             ToolbarItem(placement: .confirmationAction) {
                 Button("Done") { commitAndDismiss() }
             }
