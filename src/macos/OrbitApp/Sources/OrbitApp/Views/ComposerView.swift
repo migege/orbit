@@ -198,6 +198,9 @@ struct ComposerView: View {
                         Button {
                             console.effort = e
                             Task { await console.applyConfig(effort: e.rawValue) }
+                            // Remember this as the account default so the next new session (here or
+                            // on web) starts at it — the cross-device port of web's localStorage write.
+                            app.rememberDefaultEffort(e.rawValue)
                         } label: {
                             menuItemLabel(e.label, selected: e == console.effort)
                         }

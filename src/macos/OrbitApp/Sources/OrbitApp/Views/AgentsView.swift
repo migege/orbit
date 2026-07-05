@@ -213,7 +213,8 @@ struct AgentConsoleDetail: View {
            let id = app.selectedAgentID, let agent = agents.agent(id) {
             // Draft compose state: the same ComposerView a live console uses, but its send creates a
             // new session, after which we open that session's console.
-            NewSessionView(agent: agent, registry: registry) { session in
+            NewSessionView(agent: agent, registry: registry,
+                           defaultEffort: app.user?.preferences?.defaultEffort) { session in
                 app.openCreatedAgentSession(session)
             }
         } else if let sid = app.selectedAgentSessionID, let registry = app.consoleRegistry {
@@ -236,10 +237,16 @@ struct AgentConsoleDetail: View {
 /// model/permission/effort footer — instead of the simplified field it used to carry.
 struct NewSessionView: View {
     let agent: Agent
+    /// The account's synced default reasoning effort (`user.preferences.defaultEffort`), used to
+    /// seed the effort pill so a value picked on web/another device carries here. Optional because
+    /// a restored-token launch primes `user` asynchronously — the seed below reacts to it arriving.
+    let defaultEffort: String?
     @State private var draft: ConsoleModel
 
-    init(agent: Agent, registry: ConsoleRegistry, onCreated: @escaping (Session) -> Void) {
+    init(agent: Agent, registry: ConsoleRegistry, defaultEffort: String? = nil,
+         onCreated: @escaping (Session) -> Void) {
         self.agent = agent
+        self.defaultEffort = defaultEffort
         _draft = State(initialValue: registry.draftModel(for: agent, onCreated: onCreated))
     }
 
@@ -268,6 +275,15 @@ struct NewSessionView: View {
             ComposerView(console: draft, autoFocus: true)
         }
         .task { await draft.prepareDraft() }
+        // Seed the effort pill from the account default. Reactive on `defaultEffort` so a value
+        // that lands after the draft was built (async `user` prime on a restored-token launch) is
+        // still adopted. Guarded on `.default` so it only fills an untouched pill — a manual pick
+        // (or one already seeded) is never clobbered. Mirrors web's me-preference seed effect.
+        .task(id: defaultEffort) {
+            if draft.effort == .default, let raw = defaultEffort, let e = Effort(rawValue: raw) {
+                draft.effort = e
+            }
+        }
     }
 }
 

@@ -43,7 +43,7 @@ import {
 import { useMatch, useNavigate } from 'react-router-dom';
 import { decodeId, encodeId } from '../lib/idCodec';
 import { useIsMobile, useMediaQuery } from '../lib/useMediaQuery';
-import { agentsQuery, sessionQuery, sessionsQuery } from '../lib/queries';
+import { agentsQuery, type Me, meQuery, sessionQuery, sessionsQuery } from '../lib/queries';
 import {
   DEFAULT_MODEL,
   DEFAULT_MODEL_BY_PROVIDER,
@@ -55,6 +55,7 @@ import {
 import { SessionOutputs } from './SessionOutputs';
 import { BackgroundShellsTray } from './BackgroundShellsTray';
 import {
+  api,
   type ApprovalInfo,
   archiveSession,
   cancelQueuedTurn,
@@ -151,9 +152,6 @@ const PERMISSION_TO_MODE: Record<string, string> = Object.fromEntries(
   Object.entries(MODE_TO_PERMISSION).map(([label, value]) => [value, label]),
 );
 const MODE_OPTIONS = Object.keys(MODE_TO_PERMISSION);
-// Last-picked reasoning effort, remembered across reloads so a new session starts
-// at the effort you last chose instead of resetting to Default. ('' = Default.)
-const EFFORT_KEY = 'orbit.effort';
 
 // New-session hotkey hint. The chord itself accepts ⌘/Ctrl on every platform; only the
 // label differs — ⌘ on macOS, Ctrl elsewhere (matches ApprovalPanel's convention). The
@@ -595,6 +593,9 @@ export function AgentView({ runner }: { runner: Runner }) {
   const { message, modal } = AntApp.useApp();
   const qc = useQueryClient();
   const navigate = useNavigate();
+  // The signed-in user, for the account-synced default effort (seeds a new session's Effort
+  // pill; written on change below). Cached/deduped with the nav footer's `me`.
+  const me = useQuery(meQuery());
   // The picked session lives in the URL (/sessions/:id, a base62 public id) so
   // it deep-links and survives a refresh; selecting a session = navigation.
   // Decode once here; everything downstream works with the raw session UUID.
@@ -651,7 +652,9 @@ export function AgentView({ runner }: { runner: Runner }) {
   const prevDraftKey = useRef(draftKey);
   const [mode, setMode] = useState('Default');
   const [model, setModel] = useState(DEFAULT_MODEL);
-  const [effort, setEffort] = useState(() => localStorage.getItem(EFFORT_KEY) ?? '');
+  // Seeded from the account default by the effect below once `me` loads (mirrors how Model/Mode
+  // seed via effects); '' = model default until then.
+  const [effort, setEffort] = useState('');
   // Which slice of the session list to show: active, archived, system, or trash.
   const [view, setView] = useState<'active' | 'archived' | 'deleted' | 'system'>('active');
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null); // session row whose action menu is open
@@ -1113,17 +1116,15 @@ export function AgentView({ runner }: { runner: Runner }) {
     );
   }, [selectedId, pickedAgent?.id, pickedAgent?.model, pickedAgent?.provider]);
 
-  // Effort has no agent-level default, so a fresh session restores the last-picked
-  // effort from localStorage (see EFFORT_KEY) instead. Keeps the pill consistent with
-  // Model/Mode when switching back to compose after viewing a resumed session.
+  // Effort has no agent-level default, so a fresh session restores the last-picked effort from
+  // the account preference (synced across devices — the iOS/macOS clients seed the same value).
+  // Reacts to `me` loading so the pill fills once preferences arrive, matching Model/Mode.
   useEffect(() => {
     if (selectedId) return;
     const provider = pickedAgent?.provider ?? 'claude';
-    const stored = localStorage.getItem(EFFORT_KEY) ?? '';
-    const normalized = normalizeEffortForProvider(provider, stored);
-    if (normalized !== stored) localStorage.setItem(EFFORT_KEY, normalized);
-    setEffort(normalized);
-  }, [selectedId, pickedAgent?.provider]);
+    const stored = me.data?.preferences?.defaultEffort ?? '';
+    setEffort(normalizeEffortForProvider(provider, stored));
+  }, [selectedId, pickedAgent?.provider, me.data?.preferences?.defaultEffort]);
 
   // Likewise seed the Mode pill from the picked agent's configured default. Without
   // this the pill stays at the hardcoded 'Default', so a new session always sends
@@ -3206,7 +3207,16 @@ export function AgentView({ runner }: { runner: Runner }) {
                 value={shownEffort}
                 onChange={(v) => {
                   const normalized = normalizeEffortForProvider(shownProvider, v);
-                  localStorage.setItem(EFFORT_KEY, normalized);
+                  // Remember as the account default (replaces localStorage) so the next new
+                  // session — here or on iOS/macOS — starts at this effort. Optimistically patch
+                  // the cached `me` so the seed effect sees it, then persist best-effort.
+                  qc.setQueryData<Me>(meQuery().queryKey, (prev) =>
+                    prev ? { ...prev, preferences: { ...prev.preferences, defaultEffort: normalized } } : prev,
+                  );
+                  void api('/users/me/preferences', {
+                    method: 'PATCH',
+                    body: { defaultEffort: normalized },
+                  }).catch(() => {});
                   if (live) configMut.mutate({ effort: normalized });
                   else setEffort(normalized);
                 }}

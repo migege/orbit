@@ -384,7 +384,8 @@ private struct AgentComposePush: View {
         Group {
             if let registry = model.consoleRegistry, let agents = model.agents,
                let id = model.selectedAgentID, let agent = agents.agent(id) {
-                NewSessionView(agent: agent, registry: registry) { session in
+                NewSessionView(agent: agent, registry: registry,
+                               defaultEffort: model.user?.preferences?.defaultEffort) { session in
                     model.openCreatedAgentSession(session)
                 }
                 .navigationTitle(agent.name)

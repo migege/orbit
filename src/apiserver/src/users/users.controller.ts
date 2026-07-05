@@ -34,6 +34,7 @@ export class UsersController {
     if (dto.theme !== undefined) merged.theme = dto.theme;
     if (dto.defaultModel !== undefined) merged.defaultModel = dto.defaultModel;
     if (dto.defaultPermissionMode !== undefined) merged.defaultPermissionMode = dto.defaultPermissionMode;
+    if (dto.defaultEffort !== undefined) merged.defaultEffort = dto.defaultEffort;
     return this.prisma.user.update({
       where: { id: user.userId },
       data: { preferences: merged as Prisma.InputJsonValue },

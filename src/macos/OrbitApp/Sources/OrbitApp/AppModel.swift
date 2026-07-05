@@ -112,6 +112,20 @@ final class AppModel {
         catch { errorText = "Couldn't save preferences." }
     }
 
+    /// Persist the composer's last-picked reasoning effort as the account default (synced across
+    /// devices), so the next new session — here or on web/another device — seeds this effort.
+    /// Fire-and-forget and quiet: the local pill already reflects the pick, so a failed sync is
+    /// non-fatal (mirrors web's best-effort preferences write). Skips a no-op re-select, and only
+    /// adopts the refreshed `user` on success so a transient failure never wipes it.
+    func rememberDefaultEffort(_ raw: String) {
+        guard let api, user?.preferences?.defaultEffort != raw else { return }
+        Task {
+            if let updated = try? await api.updatePreferences(UpdatePreferencesRequest(defaultEffort: raw)) {
+                user = updated
+            }
+        }
+    }
+
     /// Returns nil on success, else a message. Wrong current password is a 400 (not a 401, so it
     /// won't bounce the session).
     func changePassword(current: String, new: String) async -> String? {
