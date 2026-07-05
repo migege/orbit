@@ -27,9 +27,16 @@ struct OrbitiOSApp: App {
                     if let route = DeepLink.parse(url) { model.route(to: route) }
                 }
                 .onChange(of: scenePhase) { _, phase in
-                    // iOS can suspend/terminate at will, so checkpoint the moment we leave the
-                    // foreground rather than relying on a clean quit.
-                    if phase != .active { model.consoleRegistry?.persistAll() }
+                    if phase == .active {
+                        // Returning to the foreground: a stream socket suspended in the background may
+                        // be dead but not yet erroring, so kick the open consoles to reconnect promptly
+                        // instead of waiting out URLSession's long read timeout.
+                        model.consoleRegistry?.reconnectAll()
+                    } else {
+                        // iOS can suspend/terminate at will, so checkpoint the moment we leave the
+                        // foreground rather than relying on a clean quit.
+                        model.consoleRegistry?.persistAll()
+                    }
                 }
                 .task { model.bootstrap() }
         }
