@@ -13,9 +13,12 @@ struct WorktreeBar: View {
     @State private var showDiff = false
 
     var body: some View {
-        // The poller (attached below) fetches the detail that decides visibility, so the bar renders
-        // conditionally inside an always-present container rather than gating the container itself.
-        Group {
+        // A CONCRETE container (VStack), not `Group`: the poller `.task` below must attach to a view
+        // that is always present. `Group` applies its modifiers to each *child*, so while the bar is
+        // hidden its only child is `EmptyView` — the `.task` would land on `EmptyView` (no lifecycle)
+        // and never fire, `worktree` would never load, and the bar would never appear. A VStack owns
+        // the modifier itself and is always in the tree, so the poller runs regardless of content.
+        VStack(spacing: 0) {
             let d = console.worktree
             let files = d?.changedFiles ?? []
             switch WorktreeBarLogic.mode(isolationStatus: d?.isolationStatus, branch: d?.branch,
