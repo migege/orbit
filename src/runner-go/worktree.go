@@ -118,43 +118,6 @@ func branchMergedInto(wt *Worktree) bool {
 	return err == nil
 }
 
-// targetUnpushedToOrigin reports whether the repo's default merge target (main, else master) has
-// local commits not yet on origin — i.e. an `origin` remote exists and the local target is ahead
-// of origin/<target> (or origin doesn't carry the target yet). Drives the status bar's "Push"
-// button so a merge that stayed local (no origin at merge time, or an out-of-band merge) can be
-// pushed on demand. False when nothing's isolated, there's no origin to push to, or no target
-// exists — the conservative default that keeps the Push button hidden. Uses local refs only (no
-// fetch), so it's cheap on the heartbeat; the push itself is authoritative if origin has since
-// moved. Mirrors mergeToMain's push gate (originTracks) but for a standalone push.
-func targetUnpushedToOrigin(wt *Worktree) bool {
-	if wt == nil || wt.Branch == "" {
-		return false
-	}
-	repoRoot := wt.RepoDir
-	// No 'origin' remote (e.g. an auto-init'd local repo) → nothing to push to.
-	if _, err := git(repoRoot, "remote", "get-url", "origin"); err != nil {
-		return false
-	}
-	var target string
-	for _, b := range []string{"main", "master"} {
-		if branchExists(repoRoot, b) {
-			target = b
-			break
-		}
-	}
-	if target == "" {
-		return false
-	}
-	remoteRef := "origin/" + target
-	if _, err := git(repoRoot, "rev-parse", "--verify", "--quiet", remoteRef); err != nil {
-		// Origin has no such branch yet → pushing would publish the local target. Unpushed.
-		return true
-	}
-	// origin/<target> exists: unpushed iff the local target has commits origin doesn't (ahead > 0).
-	ahead, err := git(repoRoot, "rev-list", "--count", remoteRef+".."+target)
-	return err == nil && strings.TrimSpace(ahead) != "0"
-}
-
 // defaultGitignore is written into a non-git workDir before its baseline commit (only when
 // the dir has no .gitignore of its own), so auto-init doesn't sweep dependencies, build
 // output, or secrets into version control.
@@ -632,7 +595,6 @@ type mergeOutcome struct {
 //   - otherwise (a release/develop branch, or main when the root is on something else): the
 //     target isn't checked out anywhere, so move its ref directly. Fails cleanly if the target
 //     is checked out in another worktree.
-//
 // A rebase conflict returns a "conflict" outcome (aborted cleanly); any precondition failure
 // returns "error" with an actionable message; the UI keeps a copyable `git merge` fallback. The
 // session branch is never rewritten or deleted. Serialized by mergeLock so concurrent merges
@@ -872,60 +834,6 @@ func branchWorktree(repoRoot, branch string) string {
 		}
 	}
 	return ""
-}
-
-// pushOutcome is what pushToOrigin reports: "pushed" advanced origin/<target> (PushedSha = the
-// pushed tip), "error" means the push was rejected (non-fast-forward — origin moved ahead) or
-// failed (auth/network/other). Message carries git's output for the UI.
-type pushOutcome struct {
-	Status    string
-	PushedSha string
-	Message   string
-}
-
-// pushToOrigin pushes the repo's default merge target (main, else master) to origin — a plain
-// fast-forward push, never a force. For the status bar's "Push" button: a merge that stayed local
-// (no origin at merge time, or an out-of-band merge) leaves the local target ahead of origin, and
-// this catches it up. Resolves the repo root from req.WorkDir; the target need not be checked out
-// (we push the ref by name). A non-fast-forward rejection (origin moved ahead) returns "error"
-// asking the user to reconcile — we never force-push a shared branch. Serialized by mergeLock so a
-// push and a merge (which also pushes) can't race on origin.
-func pushToOrigin(req PushCommand) pushOutcome {
-	mergeLock.Lock()
-	defer mergeLock.Unlock()
-
-	repoRoot, err := git(expandTilde(req.WorkDir), "rev-parse", "--show-toplevel")
-	if err != nil || repoRoot == "" {
-		return pushOutcome{Status: "error", Message: "workDir is not a git repository"}
-	}
-	var target string
-	for _, b := range []string{"main", "master"} {
-		if branchExists(repoRoot, b) {
-			target = b
-			break
-		}
-	}
-	if target == "" {
-		return pushOutcome{Status: "error", Message: "no main or master branch in this repo"}
-	}
-	if _, err := git(repoRoot, "remote", "get-url", "origin"); err != nil {
-		return pushOutcome{Status: "error", Message: "no 'origin' remote to push to"}
-	}
-	// Push the local target ref to origin/<target>. Plain (no --force): if origin moved ahead this
-	// is rejected non-fast-forward and surfaced, rather than clobbering someone else's commits.
-	out, err := git(repoRoot, "push", "origin", target+":refs/heads/"+target)
-	if err != nil {
-		combined := strings.TrimSpace(out + "\n" + gitStderr(err))
-		if isNonFastForward(combined) {
-			return pushOutcome{Status: "error", Message: fmt.Sprintf(
-				"origin/%s has commits you don't have locally — reconcile it first (git fetch && git merge origin/%s), then push",
-				target, target)}
-		}
-		return pushOutcome{Status: "error", Message: clip(fmt.Sprintf("could not push %s to origin: %s", target, combined), 1000)}
-	}
-	sha, _ := git(repoRoot, "rev-parse", target)
-	logln(fmt.Sprintf("pushed %s to origin (%s) for session %s", target, shortSha(sha), req.SessionID))
-	return pushOutcome{Status: "pushed", PushedSha: sha}
 }
 
 // commitOutcome is what commitWorktree reports: "committed" advanced the branch, "nochange"

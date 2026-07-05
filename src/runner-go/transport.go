@@ -171,11 +171,6 @@ func (t *Transport) commitResult(sessionID string, b CommitResultRequest) error 
 	return t.do(nil, "POST", "/runner/sessions/"+sessionID+"/commit-result", b, nil, 15*time.Second)
 }
 
-// pushResult reports the outcome of a heartbeat-delivered PushCommand back to the server.
-func (t *Transport) pushResult(sessionID string, b PushResultRequest) error {
-	return t.do(nil, "POST", "/runner/sessions/"+sessionID+"/push-result", b, nil, 15*time.Second)
-}
-
 func (t *Transport) artifactResult(sessionID string, b ArtifactResultRequest) error {
 	return t.do(nil, "POST", "/runner/sessions/"+sessionID+"/artifacts/result", b, nil, 15*time.Second)
 }

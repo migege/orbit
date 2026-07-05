@@ -351,18 +351,6 @@ model Session {
   commitStatus      String?   @map("commit_status")
   commitError       String?   @map("commit_error")
   commitRequestedAt DateTime? @map("commit_requested_at")
-  // ── "Push" (UI button on the worktree status bar, next to the "✓ In main" chip) ──
-  // targetUnpushed is the runner's `git rev-list origin/<target>..<target>` check: true → the
-  // default merge target (main, else master) has local commits not yet on origin (and an origin
-  // exists), so a merge that stayed local can be pushed. Refreshed alongside branchMerged on each
-  // worktree report. pushStatus drives the button while it runs: 'pending' (queued for the next
-  // heartbeat) → 'pushed' (pushedAt set) | 'error' (pushError carries git's message). All null
-  // until the runner reports / the user clicks push.
-  targetUnpushed    Boolean?  @map("target_unpushed")
-  pushStatus        String?   @map("push_status")
-  pushError         String?   @map("push_error")
-  pushRequestedAt   DateTime? @map("push_requested_at")
-  pushedAt          DateTime? @map("pushed_at")
   // Soft visibility: null = active. archivedAt hides the session into the Archived
   // view, deletedAt into the trash. Both retain all data (transcript, billing) and
   // are reversible — restore clears them. There is no hard delete.

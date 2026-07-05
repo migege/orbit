@@ -649,11 +649,10 @@ func runClaudeSessionProcess(ctx context.Context, shutdownCtx context.Context, t
 				// there's no redelivery to dedup against.
 				liveFiles, livePatches := liveDiff(job.WT)
 				if err := t.diffResult(job.SessionID, DiffResultRequest{
-					ChangedFiles:   liveFiles,
-					ChangedDiff:    livePatches,
-					WorktreeDirty:  worktreeIsDirty(job.WT),
-					BranchMerged:   branchMergedInto(job.WT),
-					TargetUnpushed: targetUnpushedToOrigin(job.WT),
+					ChangedFiles:  liveFiles,
+					ChangedDiff:   livePatches,
+					WorktreeDirty: worktreeIsDirty(job.WT),
+					BranchMerged:  branchMergedInto(job.WT),
 				}); err != nil {
 					logln("diff-result failed for", job.SessionID+":", err)
 				}
@@ -764,7 +763,6 @@ func runClaudeSessionProcess(ctx context.Context, shutdownCtx context.Context, t
 					ChangedDiff:      livePatches,
 					WorktreeDirty:    worktreeIsDirty(job.WT),
 					BranchMerged:     branchMergedInto(job.WT),
-					TargetUnpushed:   targetUnpushedToOrigin(job.WT),
 				}); err != nil {
 					logln("turn-complete failed for", job.SessionID+":", err)
 				}

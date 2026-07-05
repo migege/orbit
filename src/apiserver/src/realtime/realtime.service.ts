@@ -11,7 +11,6 @@ import {
   isLifecycleType,
   MergeCommand,
   NormalizedRunEvent,
-  PushCommand,
   RunEventType,
   RunStatus,
   SessionEndReason,
@@ -434,22 +433,6 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
       select: { id: true, branch: true },
     });
     return sessions.filter((s) => s.branch).map((s) => ({ sessionId: s.id, branch: s.branch! }));
-  }
-
-  /**
-   * Pushes this runner should perform: sessions it ran (assignedRunnerId) that the user asked to
-   * push (pushStatus='pending'). At-least-once — redelivered each heartbeat until the runner
-   * reports an outcome that flips pushStatus off 'pending'. The workDir comes from the session's
-   * agent; the runner resolves the repo root from it and pushes the auto-detected target.
-   */
-  async drainPushRequests(runnerId: string): Promise<PushCommand[]> {
-    const sessions = await this.prisma.session.findMany({
-      where: { assignedRunnerId: runnerId, pushStatus: 'pending', branch: { not: null } },
-      select: { id: true, branch: true, agent: { select: { workDir: true } } },
-    });
-    return sessions
-      .filter((s) => s.branch && s.agent?.workDir)
-      .map((s) => ({ sessionId: s.id, branch: s.branch!, workDir: s.agent!.workDir! }));
   }
 
   async drainArtifactRequests(runnerId: string): Promise<ArtifactCommand[]> {

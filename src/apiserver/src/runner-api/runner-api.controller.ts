@@ -45,7 +45,6 @@ import {
   SessionDiffResultRequest,
   SessionEndReason,
   SessionMergeResultRequest,
-  SessionPushResultRequest,
   TurnAttachment,
   TurnCompleteRequest,
 } from '@orbit/shared';
@@ -307,9 +306,6 @@ export class RunnerApiController {
                 // Whether the branch already landed in main → bar shows "✓ In main", not a
                 // redundant Merge button (older runners omit it → left untouched).
                 ...(s.branchMerged !== undefined ? { branchMerged: s.branchMerged } : {}),
-                // Whether the default merge target is ahead of origin → bar shows a "Push"
-                // button next to "✓ In main" (older runners omit it → left untouched).
-                ...(s.targetUnpushed !== undefined ? { targetUnpushed: s.targetUnpushed } : {}),
               },
             }),
           ),
@@ -321,27 +317,18 @@ export class RunnerApiController {
     let cancelSessionIds: string[] = [];
     let mergeRequests: RunnerHeartbeatResponse['mergeRequests'] = [];
     let commitRequests: RunnerHeartbeatResponse['commitRequests'] = [];
-    let pushRequests: RunnerHeartbeatResponse['pushRequests'] = [];
     let artifactRequests: RunnerHeartbeatResponse['artifactRequests'] = [];
     try {
       cancelSessionIds = await this.realtime.drainCancellations(runner.id);
       mergeRequests = await this.realtime.drainMergeRequests(runner.id);
       commitRequests = await this.realtime.drainCommitRequests(runner.id);
-      pushRequests = await this.realtime.drainPushRequests(runner.id);
       artifactRequests = await this.realtime.drainArtifactRequests(runner.id);
     } catch {
       // A transient DB hiccup shouldn't fail the heartbeat; all arrive next cycle.
     }
     // Hand back the authoritative max-concurrent (the editable DB value) so the runner
     // syncs its self-gate to a UI/API change without needing a restart.
-    return {
-      cancelSessionIds,
-      maxConcurrent: updated.maxConcurrent,
-      mergeRequests,
-      commitRequests,
-      pushRequests,
-      artifactRequests,
-    };
+    return { cancelSessionIds, maxConcurrent: updated.maxConcurrent, mergeRequests, commitRequests, artifactRequests };
   }
 
   // ── Interactive sessions (Route B) ──
@@ -719,9 +706,6 @@ export class RunnerApiController {
           // Whether the branch already landed in main — the turn-end snapshot an idle session
           // shows, so the bar offers "✓ In main" not a redundant Merge (older runners omit it).
           ...(dto.branchMerged !== undefined ? { branchMerged: dto.branchMerged } : {}),
-          // Whether the default merge target is ahead of origin — the turn-end snapshot, so the
-          // bar offers "Push" for an idle session too (older runners omit it → left untouched).
-          ...(dto.targetUnpushed !== undefined ? { targetUnpushed: dto.targetUnpushed } : {}),
           runtimeSessionId: dto.runtimeSessionId ?? undefined,
           lastTurnAt: new Date(),
           numTurns: { increment: turnInc },
@@ -1136,33 +1120,6 @@ export class RunnerApiController {
     return { ok: true };
   }
 
-  /** Outcome of a heartbeat-delivered PushCommand — persist it so the worktree status bar can
-   *  show pushed ✓ / error. On success the target is now on origin (targetUnpushed=false), so the
-   *  Push button hides right away — important for an ended session, which gets no more worktree
-   *  heartbeats to clear it. An error keeps the button (pushError carries git's message). */
-  @UseGuards(RunnerAuthGuard)
-  @Post('sessions/:id/push-result')
-  async pushResult(
-    @CurrentRunner() runner: { id: string },
-    @Param('id') sessionId: string,
-    @Body() dto: SessionPushResultRequest,
-  ) {
-    await this.assertSessionOwnership(sessionId, runner.id);
-    const pushed = dto.status === 'pushed';
-    // Same staleness guard as mergeResult: a resume clears pushStatus to null, and an in-flight
-    // push-result landing afterward must not re-stamp it. No-ops when no longer pending.
-    await this.prisma.session.updateMany({
-      where: { id: sessionId, pushStatus: 'pending' },
-      data: {
-        pushStatus: dto.status,
-        pushError: pushed ? null : (dto.message ?? null),
-        pushedAt: pushed ? new Date() : null,
-        ...(pushed ? { targetUnpushed: false } : {}),
-      },
-    });
-    return { ok: true };
-  }
-
   /** A freshly recomputed live worktree diff, pushed in response to a 'diff' inbox control
    *  turn (the web opened a file whose stored patch lagged). Overwrites the session's
    *  changedFiles and the SessionDiff side-table patches together, so the file list and the
@@ -1187,8 +1144,6 @@ export class RunnerApiController {
         // Recomputed with the diff, so opening the drawer refreshes "✓ In main" for an idle
         // session merged out-of-band (older runners omit it → left untouched).
         ...(dto.branchMerged !== undefined ? { branchMerged: dto.branchMerged } : {}),
-        // Recomputed with the diff, so opening the drawer refreshes the "Push" button.
-        ...(dto.targetUnpushed !== undefined ? { targetUnpushed: dto.targetUnpushed } : {}),
       },
     });
     // Only persist the patches once we've confirmed the session is still live (count > 0);

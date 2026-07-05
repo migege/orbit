@@ -1059,37 +1059,6 @@ export class SessionsService {
   }
 
   /**
-   * Queue a "push this session's default merge target (main, else master) to origin" for the
-   * runner that ran it. Worktree-isolated sessions only, whose `assignedRunnerId` still points at
-   * the machine whose local repo holds the target. For a "Merge to main" that landed locally but
-   * couldn't push (no origin at merge time, or an out-of-band merge) — the runner picks the
-   * request up on its next heartbeat (≤30s), pushes the target ref, and reports the outcome back
-   * into `pushStatus`/`pushError`/`pushedAt`. Idempotent while a push is already pending. Unlike
-   * merge there's no target to choose — the runner auto-detects it (main, else master).
-   */
-  async pushToOrigin(ownerId: string, id: string) {
-    const session = await this.prisma.session.findFirst({ where: { id, ownerId } });
-    if (!session) throw new NotFoundException('session not found');
-    if (session.isolationStatus !== 'worktree' || !session.branch) {
-      throw new BadRequestException('session has no worktree branch to push');
-    }
-    if (!session.assignedRunnerId) {
-      throw new ConflictException('no runner is associated with this session');
-    }
-    if (session.pushStatus === 'pending') return { ok: true };
-    await this.prisma.session.update({
-      where: { id },
-      data: {
-        pushStatus: 'pending',
-        pushRequestedAt: new Date(),
-        pushError: null,
-        pushedAt: null,
-      },
-    });
-    return { ok: true };
-  }
-
-  /**
    * Stop a session and settle it to CANCELLED — unlike {@link end}, which PARKS the
    * session as dormant/resumable. A live session has its claude process torn down
    * (endLive, reason CANCELLED so /complete finalizes CANCELLED not PARKED). A still-
@@ -1274,11 +1243,6 @@ export class SessionsService {
         clear.commitStatus = null;
         clear.commitError = null;
       }
-      if (session.pushStatus && session.pushStatus !== 'pending') {
-        clear.pushStatus = null;
-        clear.pushError = null;
-        clear.pushedAt = null;
-      }
       if (Object.keys(clear).length > 0) {
         await this.prisma.session.update({ where: { id }, data: clear });
       }
@@ -1346,11 +1310,6 @@ export class SessionsService {
         // and a stale 'pending'/'error' would otherwise wedge the bar's Commit button.
         commitStatus: null,
         commitError: null,
-        // And the push state: the revived run re-reports targetUnpushed, so a stale push
-        // outcome would otherwise wedge the bar's Push button.
-        pushStatus: null,
-        pushError: null,
-        pushedAt: null,
         // Re-apply any mode/model/effort changes made while the session was ended;
         // buildSession reads these when the runner re-claims and re-spawns the runtime.
         // Omitted fields keep their prior value (don't clobber to null).

@@ -167,13 +167,6 @@ export class SessionsController {
     return this.sessions.commitWorktree(user.userId, id);
   }
 
-  /** Ask the runner that ran this session to push its default merge target (main, else master)
-   *  to origin — for a merge that landed locally but hasn't been pushed. */
-  @Post(':id/push')
-  pushToOrigin(@CurrentUser() user: AuthUser, @Param('id', Base62UuidPipe) id: string) {
-    return this.sessions.pushToOrigin(user.userId, id);
-  }
-
   /** Enable a public read-only share link for this session (mints/returns its shareToken). */
   @Post(':id/share')
   share(@CurrentUser() user: AuthUser, @Param('id', Base62UuidPipe) id: string) {

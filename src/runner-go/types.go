@@ -77,10 +77,6 @@ type SessionLiveState struct {
 	// master) — the work already landed there. Drives the bar's "✓ In main" chip over a redundant
 	// Merge button. No omitempty (false must be sent so the server can clear a stale true).
 	BranchMerged bool `json:"branchMerged"`
-	// TargetUnpushed: the default merge target has local commits not yet on origin (origin exists
-	// and the local target is ahead of it / not yet on origin). Drives the bar's "Push" button.
-	// No omitempty (false must be sent so the server can clear a stale true).
-	TargetUnpushed bool `json:"targetUnpushed"`
 }
 
 // SlashCommandInfo mirrors @orbit/shared: one `/`-invocable asset (command or skill).
@@ -106,9 +102,6 @@ type HeartbeatResponse struct {
 	// changes onto its branch, then POST the outcome to /commit-result. Omitted by older
 	// control planes (absent → no commits).
 	CommitRequests []CommitCommand `json:"commitRequests,omitempty"`
-	// Pushes the user requested: push each session's default merge target (main, else master)
-	// to origin, then POST the outcome to /push-result. Omitted by older control planes.
-	PushRequests []PushCommand `json:"pushRequests,omitempty"`
 	// Legacy assistant artifacts to upload from this runner's per-session uploads dir.
 	ArtifactRequests []ArtifactCommand `json:"artifactRequests,omitempty"`
 }
@@ -141,23 +134,6 @@ type CommitCommand struct {
 	Branch    string `json:"branch"`
 }
 
-// PushCommand mirrors @orbit/shared: a request to push the session's default merge target
-// (main, else master) to origin. WorkDir is the session agent's dir; the runner resolves the
-// repo root from it. Branch is for logging only.
-type PushCommand struct {
-	SessionID string `json:"sessionId"`
-	Branch    string `json:"branch"`
-	WorkDir   string `json:"workDir"`
-}
-
-// PushResultRequest mirrors @orbit/shared SessionPushResultRequest: the outcome of a
-// PushCommand, POSTed back so the UI status bar can show pushed ✓ / error.
-type PushResultRequest struct {
-	Status    string `json:"status"` // "pushed" | "error"
-	PushedSha string `json:"pushedSha,omitempty"`
-	Message   string `json:"message,omitempty"`
-}
-
 type ArtifactCommand struct {
 	RequestID string `json:"requestId"`
 	SessionID string `json:"sessionId"`
@@ -188,9 +164,6 @@ type DiffResultRequest struct {
 	// BranchMerged: the branch already landed in the default merge target (see SessionLiveState).
 	// Recomputed with the diff, so opening the drawer refreshes it for an idle session.
 	BranchMerged bool `json:"branchMerged"`
-	// TargetUnpushed: the default merge target is ahead of origin (see SessionLiveState).
-	// Recomputed with the diff, so opening the drawer refreshes the "Push" button.
-	TargetUnpushed bool `json:"targetUnpushed"`
 }
 
 type MeResponse struct {
@@ -341,9 +314,6 @@ type TurnCompleteRequest struct {
 	// The turn-end snapshot an idle session shows, so an out-of-band merge is reflected here too.
 	// No omitempty (false must be sent so the server can clear a stale true).
 	BranchMerged bool `json:"branchMerged"`
-	// TargetUnpushed: the default merge target is ahead of origin (see SessionLiveState). The
-	// turn-end snapshot, so the "Push" button appears for an idle session. No omitempty.
-	TargetUnpushed bool `json:"targetUnpushed"`
 }
 
 type RunEvent struct {

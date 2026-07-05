@@ -143,7 +143,6 @@ func runLoop(cfg *RunnerConfig) {
 		var mergeMu sync.Mutex
 		mergingNow := map[string]bool{}
 		committingNow := map[string]bool{}
-		pushingNow := map[string]bool{}
 		artifactNow := map[string]bool{}
 		for {
 			select {
@@ -192,7 +191,6 @@ func runLoop(cfg *RunnerConfig) {
 						WorktreeDirty:   worktreeIsDirty(j.WT),
 						MergeTargets:    mergeTargetsForWT(j.WT),
 						BranchMerged:    branchMergedInto(j.WT),
-						TargetUnpushed:  targetUnpushedToOrigin(j.WT),
 					})
 				}
 				resp, err := t.heartbeat(HeartbeatRequest{
@@ -266,30 +264,6 @@ func runLoop(cfg *RunnerConfig) {
 						delete(committingNow, req.SessionID)
 						mergeMu.Unlock()
 					}(c)
-				}
-				// Honor "push" requests: push each session's default merge target to origin
-				// (guarded against redelivery, in its own goroutine like merge/commit).
-				for _, p := range resp.PushRequests {
-					mergeMu.Lock()
-					busy := pushingNow[p.SessionID]
-					if !busy {
-						pushingNow[p.SessionID] = true
-					}
-					mergeMu.Unlock()
-					if busy {
-						continue
-					}
-					go func(req PushCommand) {
-						res := pushToOrigin(req)
-						if err := t.pushResult(req.SessionID, PushResultRequest{
-							Status: res.Status, PushedSha: res.PushedSha, Message: res.Message,
-						}); err != nil {
-							logln("push-result POST failed for", req.SessionID+":", err)
-						}
-						mergeMu.Lock()
-						delete(pushingNow, req.SessionID)
-						mergeMu.Unlock()
-					}(p)
 				}
 				for _, a := range resp.ArtifactRequests {
 					mergeMu.Lock()
