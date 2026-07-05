@@ -133,7 +133,7 @@ struct AgentPanes: View {
                     }
                     Divider()
                     Button { showSettings = true } label: {
-                        Label("Agent settings", systemImage: "gearshape")
+                        Label("Settings", systemImage: "gearshape")
                     }
                 } label: {
                     Image(systemName: "line.3.horizontal.decrease")
@@ -171,7 +171,7 @@ struct AgentPanes: View {
             }
             ToolbarItem(placement: .primaryAction) {
                 Button { showSettings = true } label: {
-                    Label("Agent settings", systemImage: "gearshape")
+                    Label("Settings", systemImage: "gearshape")
                 }
                 .help("Edit this agent")
             }
