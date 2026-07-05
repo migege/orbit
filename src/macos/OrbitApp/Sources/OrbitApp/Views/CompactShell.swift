@@ -375,19 +375,35 @@ private extension View {
 /// The new-session draft composer, pushed full-screen onto the compact Agents stack. The regular-width
 /// shell renders this same `NewSessionView` inline in the Agents detail pane; the collapsed compact
 /// split can't reach that pane from a boolean, so we push it as its own page here. The system back
-/// button abandons the draft (clearing the `isPresented` binding); sending creates the session and
-/// selects it so its console pushes onto the stack in its place.
+/// button abandons the draft (clearing the `isPresented` binding).
+///
+/// Once the draft creates a session this page swaps the composer for that session's live console **in
+/// place** — it does *not* pop itself and push the detail column. Driving the console off
+/// `selectedAgentSessionID` (the split's detail push) while simultaneously clearing
+/// `composingAgentSession` (this page's `isPresented` push) meant two navigation mechanisms racing on
+/// the one collapsed stack: after enough push/pop churn (opening then closing ~10+ sessions) the
+/// detail intermittently landed with a nil selection, i.e. the "Select a session" empty state. Keeping
+/// the whole transition on this single page removes the race — there's nothing to pop, and the console
+/// never depends on the list selection. The created session is still registered into the agent list so
+/// it's there (selected on tap) once the user backs out to it.
 private struct AgentComposePush: View {
     @Environment(AppModel.self) private var model
+    /// Non-nil once the draft creates a session: the page renders its console instead of the composer.
+    @State private var created: Session?
 
     var body: some View {
         Group {
             if let registry = model.consoleRegistry, let agents = model.agents,
                let id = model.selectedAgentID, let agent = agents.agent(id) {
-                NewSessionView(agent: agent, registry: registry) { session in
-                    model.openCreatedAgentSession(session)
+                if let created {
+                    ConsoleView(sessionID: created.id, agentID: id, registry: registry)
+                } else {
+                    NewSessionView(agent: agent, registry: registry) { session in
+                        model.agents?.registerCreatedSession(session)
+                        created = session
+                    }
+                    .navigationTitle(agent.name)
                 }
-                .navigationTitle(agent.name)
             } else {
                 ContentUnavailableView("Select an agent", systemImage: "person.2")
             }
