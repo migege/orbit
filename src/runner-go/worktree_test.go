@@ -483,7 +483,7 @@ func TestParkCheckpointRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	finalizeWorktree(wt, "wip title", true) // park → checkpoint commit
+	finalizeWorktree(wt, true) // park → checkpoint commit
 	if st, _ := git(repo, "status", "--porcelain"); st != "" {
 		t.Fatalf("checkpoint should commit all work, tree not clean:\n%s", st)
 	}
@@ -516,7 +516,7 @@ func TestPermanentEndNotUndone(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "done.txt"), []byte("done\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	finalizeWorktree(wt, "final", false) // permanent end
+	finalizeWorktree(wt, false) // permanent end
 	endSha := mustGit(t, repo, "rev-parse", "HEAD")
 	if endSha == base {
 		t.Fatal("end commit should advance HEAD past base")
