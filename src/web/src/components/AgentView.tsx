@@ -71,6 +71,7 @@ import {
   type PermissionRule,
   pinSession,
   purgeSession,
+  pushSessionToOrigin,
   getSessionEventPage,
   renameSession,
   restoreSession,
@@ -922,7 +923,9 @@ export function AgentView({ runner }: { runner: Runner }) {
     // reported mid-turn) to appear without waiting for turn_end; and while a "merge to main"
     // or "commit" is pending, for the runner's outcome (≤1 heartbeat away) to land. Idle else.
     refetchInterval: (q) =>
-      q.state.data?.mergeStatus === 'pending' || q.state.data?.commitStatus === 'pending'
+      q.state.data?.mergeStatus === 'pending' ||
+      q.state.data?.commitStatus === 'pending' ||
+      q.state.data?.pushStatus === 'pending'
         ? 3000
         : selectedFromList && !TERMINAL.includes(selectedFromList.status)
           ? 5000
@@ -970,6 +973,26 @@ export function AgentView({ runner }: { runner: Runner }) {
     } else {
       message.error({
         content: `Merge into ${target} failed: ${d.mergeError ?? 'see the status bar for details.'}`,
+        duration: 8,
+      });
+    }
+  }, [detailForSelected, message]);
+  // A push's outcome lands asynchronously (≤1 heartbeat after the click), and the button may
+  // vanish once targetUnpushed clears — so toast the landing (success or the failure reason) the
+  // moment pushStatus flips off 'pending'. Tracked per session id, mirroring the merge toast.
+  const prevPushRef = useRef<{ id: string; status: string | null } | null>(null);
+  useEffect(() => {
+    const d = detailForSelected;
+    if (!d) return;
+    const prev = prevPushRef.current;
+    const was = prev && prev.id === d.id ? prev.status : null;
+    prevPushRef.current = { id: d.id, status: d.pushStatus ?? null };
+    if (was !== 'pending' || !d.pushStatus || d.pushStatus === 'pending') return;
+    if (d.pushStatus === 'pushed') {
+      message.success('Pushed to origin ✓');
+    } else {
+      message.error({
+        content: `Push failed: ${d.pushError ?? 'see the status bar for details.'}`,
         duration: 8,
       });
     }
@@ -1830,6 +1853,17 @@ export function AgentView({ runner }: { runner: Runner }) {
     mutationFn: (id: string) => commitSession(id),
     onSuccess: () => {
       // No success toast: the status bar reflects the pending commit and its outcome.
+      if (selectedId) qc.invalidateQueries({ queryKey: ['session', selectedId] });
+    },
+    onError: (e: Error) => message.error(e.message),
+  });
+  // Push the session's default merge target (main, else master) to origin — for a merge that
+  // landed locally but wasn't pushed. Like merge it runs on the runner (heartbeat round-trip) and
+  // the outcome lands on pushStatus/targetUnpushed; the toast below announces the landing.
+  const pushMut = useMutation({
+    mutationFn: (id: string) => pushSessionToOrigin(id),
+    onSuccess: () => {
+      // No success toast here: the pending→result transition is toasted by the effect below.
       if (selectedId) qc.invalidateQueries({ queryKey: ['session', selectedId] });
     },
     onError: (e: Error) => message.error(e.message),
@@ -2857,6 +2891,12 @@ export function AgentView({ runner }: { runner: Runner }) {
           onCommit={
             selectedId && detailForSelected?.branch
               ? () => commitMut.mutate(selectedId)
+              : undefined
+          }
+          pushing={pushMut.isPending}
+          onPush={
+            selectedId && detailForSelected?.branch
+              ? () => pushMut.mutate(selectedId)
               : undefined
           }
         />

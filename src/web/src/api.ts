@@ -300,6 +300,12 @@ export const mergeSessionToMain = (sessionId: string, targetBranch?: string) =>
 export const commitSession = (sessionId: string) =>
   api(`/sessions/${sessionId}/commit`, { method: 'POST' });
 
+/** Ask the runner that ran this session to push its default merge target (main, else master) to
+ *  origin — for a merge that landed locally but wasn't pushed. Async: the outcome lands on
+ *  SessionDetail.pushStatus / targetUnpushed within a heartbeat (~30s). */
+export const pushSessionToOrigin = (sessionId: string) =>
+  api(`/sessions/${sessionId}/push`, { method: 'POST' });
+
 // Soft visibility actions for ended sessions. Archive hides a session into the
 // Archived view; delete moves it to the trash. Both keep all data; restore (which
 // clears both) brings it back to the active list. Purge is the only hard delete: it
@@ -456,6 +462,14 @@ export interface SessionDetail {
   worktreeDirty?: boolean | null;
   commitStatus?: 'pending' | 'committed' | 'nochange' | 'error' | null;
   commitError?: string | null;
+  // "Push" state (see pushSessionToOrigin). targetUnpushed is the runner's check that the default
+  // merge target (main, else master) has local commits not yet on origin — true → the bar shows a
+  // "Push" button next to the "✓ In main" chip. pushStatus is 'pending' while the runner pushes,
+  // then 'pushed' (pushedAt set) | 'error' (pushError carries why). Null until reported / clicked.
+  targetUnpushed?: boolean | null;
+  pushStatus?: 'pending' | 'pushed' | 'error' | null;
+  pushError?: string | null;
+  pushedAt?: string | null;
   // Public read-only sharing: the unguessable token behind the `/s/<token>` link, or null when
   // not shared. Set/cleared by enable/disableSessionShare; drives the Share dialog's state.
   shareToken?: string | null;

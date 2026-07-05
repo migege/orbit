@@ -55,6 +55,8 @@ export function SessionOutputs({
   resolving,
   onCommit,
   committing,
+  onPush,
+  pushing,
   turnActive,
 }: {
   detail?: SessionDetail | null;
@@ -84,6 +86,10 @@ export function SessionOutputs({
    *  live worktree is dirty. The outcome surfaces via detail.commitStatus/worktreeDirty. */
   onCommit?: () => void;
   committing?: boolean;
+  /** Provided by the parent (owns the mutation); enables the "Push" button shown next to the
+   *  "✓ In main" chip when the target is ahead of origin. Outcome via detail.pushStatus. */
+  onPush?: () => void;
+  pushing?: boolean;
 }) {
   const { message } = AntApp.useApp();
   // The changed file whose diff is shown in the drawer (null = drawer closed). Reset when the
@@ -197,6 +203,11 @@ export function SessionOutputs({
             onMerge={onMergeToMain}
             onResolveInSession={onResolveInSession}
             resolving={resolving}
+            targetUnpushed={detail.targetUnpushed === true}
+            pushStatus={detail.pushStatus}
+            pushError={detail.pushError}
+            onPush={onPush}
+            pushing={pushing}
           />
         )}
         <button
@@ -269,6 +280,11 @@ function MergeButton({
   onMerge,
   onResolveInSession,
   resolving,
+  targetUnpushed,
+  pushStatus,
+  pushError,
+  onPush,
+  pushing,
 }: {
   status?: SessionDetail['mergeStatus'];
   /** Why the last merge failed (for an 'error'); surfaced on the failed button's hover. */
@@ -289,14 +305,39 @@ function MergeButton({
   onMerge?: (target?: string) => void;
   onResolveInSession?: () => void;
   resolving?: boolean;
+  /** The default merge target has local commits not yet on origin (runner's check) — with the
+   *  work already in the target, the bar offers a "Push" button beside the ✓ chip to catch
+   *  origin up. */
+  targetUnpushed?: boolean;
+  pushStatus?: SessionDetail['pushStatus'];
+  /** Why the last push failed (for an 'error'); surfaced on the failed button's hover. */
+  pushError?: string | null;
+  onPush?: () => void;
+  pushing?: boolean;
 }) {
+  // The "Push" affordance shown beside the ✓ chip: while the target is ahead of origin, or while
+  // a push is in flight / just landed / failed (pushStatus keeps it visible after targetUnpushed
+  // flips). Rendered next to both the "✓ Merged" and "✓ In main" chips below.
+  const showPush =
+    !!onPush &&
+    (targetUnpushed === true ||
+      pushStatus === 'pending' ||
+      pushStatus === 'pushed' ||
+      pushStatus === 'error');
+  const pushEl = showPush ? (
+    <PushButton status={pushStatus} pushError={pushError} busy={pushing} onPush={onPush} />
+  ) : null;
+
   if (status === 'merged') {
     // Annotate the target only when it's an unusual one — keep the common main/master merge clean.
     const elsewhere = mergeTarget && mergeTarget !== 'main' && mergeTarget !== 'master';
     return (
-      <span className="wt-merge-done" title={`Merged into ${mergeTarget || 'main'}`}>
-        ✓ Merged{elsewhere ? ` → ${mergeTarget}` : ''}
-      </span>
+      <>
+        <span className="wt-merge-done" title={`Merged into ${mergeTarget || 'main'}`}>
+          ✓ Merged{elsewhere ? ` → ${mergeTarget}` : ''}
+        </span>
+        {pushEl}
+      </>
     );
   }
   // The branch already landed in its target (merged out-of-band — a command-line push, or an
@@ -308,9 +349,12 @@ function MergeButton({
     const landed =
       mergeTarget || (targets.includes('main') ? 'main' : targets.includes('master') ? 'master' : 'main');
     return (
-      <span className="wt-merge-done" title={`This branch is already in ${landed}`}>
-        ✓ In {landed}
-      </span>
+      <>
+        <span className="wt-merge-done" title={`This branch is already in ${landed}`}>
+          ✓ In {landed}
+        </span>
+        {pushEl}
+      </>
     );
   }
   const failed = status === 'conflict' || status === 'error';
@@ -468,6 +512,52 @@ function CommitButton({
       }
     >
       {pending ? 'Committing…' : failed ? 'Retry commit' : 'Commit'}
+    </button>
+  );
+}
+
+/** Compact "Push" control shown beside the "✓ In main" / "✓ Merged" chip when the default merge
+ *  target has local commits not yet on origin (a merge that landed locally but wasn't pushed).
+ *  Pushes the target to origin via the runner (heartbeat round-trip). Drives off pushStatus: idle →
+ *  Push; pending → "Pushing…"; pushed → a quiet "✓ Pushed" chip (until the next heartbeat clears
+ *  targetUnpushed and hides it); error → "Retry push" (pushError on hover). With no driver
+ *  (no onPush) it renders nothing. */
+function PushButton({
+  status,
+  pushError,
+  busy,
+  onPush,
+}: {
+  status?: SessionDetail['pushStatus'];
+  pushError?: string | null;
+  busy?: boolean;
+  onPush?: () => void;
+}) {
+  if (!onPush) return null;
+  // Success settles to a quiet chip: the button vanishes once targetUnpushed clears next heartbeat,
+  // but 'pushed' bridges that lag so it never briefly reads "Push" again after a successful push.
+  if (status === 'pushed') {
+    return (
+      <span className="wt-merge-done" title="Pushed to origin">
+        ✓ Pushed
+      </span>
+    );
+  }
+  const pending = busy || status === 'pending';
+  const failed = status === 'error';
+  return (
+    <button
+      type="button"
+      className={`wt-merge-btn${failed ? ' wt-merge-btn-failed' : ''}`}
+      disabled={pending}
+      onClick={(e) => {
+        // Don't let the click bubble to the row's toggle — pushing shouldn't expand the panel.
+        e.stopPropagation();
+        onPush();
+      }}
+      title={failed ? pushError || 'Push failed — try again' : 'Push this branch’s target to origin'}
+    >
+      {pending ? 'Pushing…' : failed ? 'Retry push' : 'Push'}
     </button>
   );
 }

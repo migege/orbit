@@ -213,6 +213,13 @@ export interface SessionLiveState {
    *  place of a redundant Merge button. Always sent (false when not), so the server can clear a
    *  stale true; absent only from older runners (the bar keeps its mergeStatus behavior). */
   branchMerged?: boolean;
+  /** Whether the repo's default merge target (main, else master) has local commits not yet on
+   *  origin/<target> — i.e. an `origin` remote exists and the local target is ahead of it (or the
+   *  target isn't on origin yet). Drives the "Push" button next to the "✓ In main" chip so a merge
+   *  that stayed local (no origin at merge time, or an out-of-band merge) can be pushed on demand.
+   *  Always sent (false when not) so the server can clear a stale true; absent only from older
+   *  runners (no Push button then). */
+  targetUnpushed?: boolean;
 }
 
 export interface RunnerHeartbeatResponse {
@@ -231,6 +238,10 @@ export interface RunnerHeartbeatResponse {
    *  worktree's uncommitted changes onto its branch, then POST the outcome via
    *  /runner/sessions/:id/commit-result. Absent on older control planes. */
   commitRequests?: CommitCommand[];
+  /** Pushes the user requested from the UI: push the session's default merge target (main, else
+   *  master) to `origin`, then POST the outcome via /runner/sessions/:id/push-result. Absent on
+   *  older control planes (older runners ignore the field → the push stays pending). */
+  pushRequests?: PushCommand[];
   /** Legacy assistant artifacts that were written as runner-local /root/.orbit/uploads paths
    *  before they were persisted as attachments. The runner uploads them back to the control
    *  plane so historical transcript links can download. */
@@ -257,6 +268,17 @@ export interface CommitCommand {
   sessionId: string;
   /** The session's worktree branch, e.g. orbit/<slug>-<hash>. */
   branch: string;
+}
+
+/** Control plane → runner: push the session's default merge target (main, else master) to
+ *  `origin`. The runner resolves the repo root from `workDir` and pushes the local target ref;
+ *  `branch` is for logging only. A plain fast-forward push — never a force. */
+export interface PushCommand {
+  sessionId: string;
+  /** The session's worktree branch, e.g. orbit/<slug>-<hash>; logging only. */
+  branch: string;
+  /** The session agent's workDir; the runner resolves the repo root from it. */
+  workDir: string;
 }
 
 export interface ArtifactCommand {
@@ -479,6 +501,10 @@ export interface TurnCompleteRequest {
    *  turn-end snapshot an idle session shows until its next turn, so a branch merged out-of-band
    *  is reflected here. Always sent (false when not); absent only from older runners. */
   branchMerged?: boolean;
+  /** Whether the default merge target has local commits not yet on origin (see SessionLiveState).
+   *  The turn-end snapshot, so the "Push" button appears for an idle session too. Always sent
+   *  (false when not); absent only from older runners. */
+  targetUnpushed?: boolean;
 }
 
 /** One file changed by a worktree-isolated session, as a compact diff summary the runner
@@ -559,6 +585,18 @@ export interface SessionCommitResultRequest {
 }
 
 /**
+ * Runner → control plane: the outcome of a {@link PushCommand}. `pushed` means origin/<target>
+ * now has the local target's commits (`pushedSha` is the pushed tip); `error` means the push was
+ * rejected or failed (non-fast-forward → origin moved ahead, or an auth/network error). `message`
+ * carries git's stderr / the reason.
+ */
+export interface SessionPushResultRequest {
+  status: 'pushed' | 'error';
+  pushedSha?: string;
+  message?: string;
+}
+
+/**
  * Runner → control plane: a freshly recomputed live worktree diff, pushed in response to a
  * 'diff' inbox control turn (the web opened a file whose stored patch lagged the worktree).
  * Mirrors the live fields of {@link TurnCompleteRequest}: the server overwrites the session's
@@ -572,6 +610,9 @@ export interface SessionDiffResultRequest {
   /** Whether the branch already landed in the default merge target (see SessionLiveState).
    *  Recomputed with the diff, so opening the diff drawer refreshes it for an idle session. */
   branchMerged?: boolean;
+  /** Whether the default merge target has local commits not yet on origin (see SessionLiveState).
+   *  Recomputed with the diff, so opening the drawer refreshes the "Push" button. */
+  targetUnpushed?: boolean;
 }
 
 export interface ArtifactResultRequest {
