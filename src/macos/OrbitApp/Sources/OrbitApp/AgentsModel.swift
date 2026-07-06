@@ -81,12 +81,18 @@ final class AgentsModel {
     /// Load one agent's sessions for a view. The list endpoint filters by view only, so narrow to
     /// the agent client-side (the payload nests `agent.id`), mirroring the web agent console.
     ///
-    /// `reset` distinguishes the first fetch (after an agent/view switch) from a background poll:
-    /// the first fetch clears the stale list and shows "Loading…"; polls refresh silently so a list
-    /// that legitimately has no sessions doesn't flash the spinner every tick.
+    /// Stale-while-revalidate: `reset` asks to blank the list and show "Loading…", but only when the
+    /// rows on screen are for a *different* (agent, view) than the one requested — a genuine scope
+    /// switch or the cold first load. Re-entering the same list (e.g. navigating back from a console)
+    /// keeps the cached rows up and refreshes them in place, so "back" is instant and holds scroll
+    /// position instead of flashing an empty spinner. Background polls pass `reset: false` and never
+    /// blank, so a list that legitimately has no sessions doesn't flash the spinner every tick.
     func loadSessions(agentID: String, view: SessionView, reset: Bool = false) async {
+        // Only the initial (`reset`) fetch of a *different* list blanks; re-entering the same one
+        // revalidates in place. Compare before overwriting `lastSessionQuery` with the new query.
+        let sameList = lastSessionQuery.map { $0.agentID == agentID && $0.view == view } ?? false
         lastSessionQuery = (agentID, view)
-        if reset {
+        if reset && !sameList {
             agentSessions = []
             sessionsLoading = true
         }
