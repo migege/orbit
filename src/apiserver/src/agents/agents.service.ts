@@ -59,7 +59,7 @@ export class AgentsService {
         env: (dto.env ?? Prisma.JsonNull) as Prisma.InputJsonValue,
         enabled: dto.enabled ?? true,
         autoInitGit: dto.autoInitGit ?? false,
-        enableWorktree: dto.enableWorktree ?? true,
+        enableWorktree: dto.enableWorktree ?? false,
       },
     });
   }

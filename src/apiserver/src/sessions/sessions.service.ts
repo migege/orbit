@@ -128,9 +128,9 @@ export class SessionsService {
     // enough to know which machine + project dir to run in.
     let assignedRunnerId: string | undefined = dto.assignedRunnerId;
     let provider = AgentProvider.CLAUDE;
-    // Per-agent worktree toggle: default on (unchanged behavior). An agent with it turned off
+    // Per-agent worktree toggle: default off. An agent with it turned off (the default)
     // makes its sessions run with no branch, so the runner runs them in the shared workDir.
-    let enableWorktree = true;
+    let enableWorktree = false;
     if (!assignedRunnerId && dto.agentId) {
       const agent = await this.prisma.agent.findFirst({
         where: { id: dto.agentId, ownerId, deletedAt: null },

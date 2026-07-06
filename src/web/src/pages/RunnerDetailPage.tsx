@@ -243,7 +243,7 @@ export function RunnerDetailPage() {
   const [fEffort, setFEffort] = useState('');
   const [fAppend, setFAppend] = useState('');
   const [fWorkDir, setFWorkDir] = useState('');
-  const [fEnableWorktree, setFEnableWorktree] = useState(true);
+  const [fEnableWorktree, setFEnableWorktree] = useState(false);
   const [fEnv, setFEnv] = useState<{ key: string; value: string }[]>([]);
 
   // New agents start from the user's saved defaults (Settings → Agent defaults),
@@ -311,7 +311,7 @@ export function RunnerDetailPage() {
     setFEffort('');
     setFAppend('');
     setFWorkDir('');
-    setFEnableWorktree(true);
+    setFEnableWorktree(false);
     setFEnv([]);
     setFormOpen(true);
   };
@@ -324,7 +324,7 @@ export function RunnerDetailPage() {
     setFEffort(a.effort ?? '');
     setFAppend(a.appendSystemPrompt ?? '');
     setFWorkDir(a.workDir ?? '');
-    setFEnableWorktree(a.enableWorktree ?? true);
+    setFEnableWorktree(a.enableWorktree ?? false);
     setFEnv(Object.entries(a.env ?? {}).map(([key, value]) => ({ key, value })));
     setFormOpen(true);
   };
