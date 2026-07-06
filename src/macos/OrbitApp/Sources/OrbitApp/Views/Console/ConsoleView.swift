@@ -17,6 +17,7 @@ struct ConsoleView: View {
     // console header reads `selected` off the cached session list. iOS-only: macOS shows status in
     // the in-transcript `statusBar` instead.
     @Environment(AppModel.self) private var appModel
+    @State private var showShare = false
     #endif
 
     var body: some View {
@@ -68,6 +69,18 @@ struct ConsoleView: View {
             ToolbarItem(placement: .principal) {
                 ConsoleNavTitle(session: appModel.session(id: sessionID),
                                 console: registry.peek(sessionID))
+            }
+            // Public read-only share link (web parity: the "Share…" menu item on the Agent console).
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { showShare = true } label: {
+                    Image(systemName: "square.and.arrow.up")
+                }
+                .accessibilityLabel("Share session")
+            }
+        }
+        .sheet(isPresented: $showShare) {
+            if let baseURL = appModel.baseURL {
+                ShareSheet(sessionID: sessionID, baseURL: baseURL, tokenStore: appModel.tokenStore)
             }
         }
         #endif
