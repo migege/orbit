@@ -108,6 +108,11 @@ public final class APIClient: @unchecked Sendable {
     /// DELETE to clear). After either the caller refetches the list to pick up the new order.
     public func pinSession(_ id: String) async throws { _ = try await postRaw("sessions/\(id)/pin", body: Optional<Empty>.none) }
     public func unpinSession(_ id: String) async throws { try await deleteRaw("sessions/\(id)/pin") }
+    /// Share/unshare: mint (or clear) a public read-only link to this session's transcript, served
+    /// at `<baseURL>/s/<shareToken>` with no auth. `enableShare` is idempotent server-side (returns
+    /// the existing token if already shared); `disableShare` makes any live link 404 immediately.
+    public func enableShare(_ id: String) async throws -> ShareInfo { try await postEmpty("sessions/\(id)/share") }
+    public func disableShare(_ id: String) async throws { try await deleteRaw("sessions/\(id)/share") }
 
     // MARK: approvals
 

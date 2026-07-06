@@ -327,13 +327,17 @@ public struct SessionDetail: Codable, Equatable, Sendable, Identifiable {
     public let commitStatus: String?
     public let commitError: String?
     public let agent: SessionDetailAgent?
+    /// The public read-only share token, or nil when the session isn't shared. The owner GET
+    /// returns it (Prisma `include`, no `select`), so the Share sheet reads it to seed its
+    /// create-vs-revoke state. The shared page lives at `<baseURL>/s/<shareToken>`.
+    public let shareToken: String?
 
     public init(id: String, branch: String? = nil, isolationStatus: String? = nil,
                 changedFiles: [SessionChangedFile]? = nil, worktreeDirty: Bool? = nil,
                 mergeStatus: String? = nil, mergeError: String? = nil, mergeTarget: String? = nil,
                 mergeTargets: [String]? = nil, branchMerged: Bool? = nil,
                 commitStatus: String? = nil, commitError: String? = nil,
-                agent: SessionDetailAgent? = nil) {
+                agent: SessionDetailAgent? = nil, shareToken: String? = nil) {
         self.id = id
         self.branch = branch
         self.isolationStatus = isolationStatus
@@ -347,6 +351,18 @@ public struct SessionDetail: Codable, Equatable, Sendable, Identifiable {
         self.commitStatus = commitStatus
         self.commitError = commitError
         self.agent = agent
+        self.shareToken = shareToken
+    }
+}
+
+/// POST /sessions/:id/share response — the minted (or, idempotently, the already-existing) public
+/// share token. The read-only page it unlocks lives at `<baseURL>/s/<shareToken>`.
+public struct ShareInfo: Codable, Equatable, Sendable {
+    public let shareToken: String
+    public let sharedAt: String
+    public init(shareToken: String, sharedAt: String) {
+        self.shareToken = shareToken
+        self.sharedAt = sharedAt
     }
 }
 
