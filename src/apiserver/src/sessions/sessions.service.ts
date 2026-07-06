@@ -24,7 +24,7 @@ import { QueueService } from '../queue/queue.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { MAX_UPLOAD_BYTES } from '../attachments/attachments.media';
 import { CreateSessionDto, SessionConfigDto, SessionResumeDto, SessionTurnDto } from './dto';
-import { generateNaming } from './naming';
+import { generateNaming, titleFromPrompt } from './naming';
 
 // A single prompt / turn message past this size freezes the web & macOS clients (one giant
 // text node lays out synchronously on the main thread), so reject it here as the server-side
@@ -174,7 +174,7 @@ export class SessionsService {
     // runs claude in its own `git worktree` on this branch when the workDir is a git repo,
     // then commits the work here for a manual merge — harmless for non-git/shared runs.
     const naming = await generateNaming({ prompt: dto.prompt, title: dto.title });
-    const title = dto.title ?? naming.title ?? dto.prompt.slice(0, 80);
+    const title = dto.title ?? naming.title ?? titleFromPrompt(dto.prompt);
     const runtimeSessionId = randomUUID();
     const session = await this.prisma.session.create({
       data: {

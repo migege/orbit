@@ -27,6 +27,17 @@ export function makeBranchName(title: string): string {
   return slug ? `orbit/${slug}-${suffix}` : `orbit/session-${suffix}`;
 }
 
+/**
+ * A display title derived from a raw prompt, for when there's no better source (no explicit
+ * dto.title and DeepSeek is unavailable/failed). Takes the first non-blank line — never the
+ * whole prompt — so a multi-line request doesn't become a multi-line "title" that then leaks
+ * into the session list, the shared page, and its exported HTML's <title>. Capped at 80 chars.
+ */
+export function titleFromPrompt(prompt: string): string {
+  const line = prompt.split('\n').map((l) => l.trim()).find(Boolean) ?? prompt.trim();
+  return line.slice(0, 80);
+}
+
 export interface NamingResult {
   /** A clean human title from DeepSeek. Undefined → the caller keeps its own title. */
   title?: string;

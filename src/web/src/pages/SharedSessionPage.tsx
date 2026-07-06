@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
@@ -8,6 +8,7 @@ import {
   getSharedSession,
 } from '../api';
 import { ArtifactResolverContext, AttachmentResolverContext, Transcript } from '../components/Transcript';
+import { titleFirstLine } from '../lib/title';
 
 /**
  * Public, read-only view of a session shared via its token (`/s/<token>`). No auth, no app
@@ -25,6 +26,19 @@ export function SharedSessionPage() {
   const resolve = useMemo(() => (id: string) => fetchSharedAttachmentObjectUrl(token, id), [token]);
   const resolveArtifact = useMemo(() => (artifactPath: string) => fetchSharedArtifactObjectUrl(token, artifactPath), [token]);
   const [downloading, setDownloading] = useState(false);
+
+  // Reflect the session title in the browser tab (and thus the shared-link preview). The
+  // static index.html ships <title>Orbit</title>, so without this a shared link's tab just
+  // reads "Orbit". Use the first line only — a fallback title can be a multi-line prompt —
+  // and restore the previous title on unmount so leaving the page doesn't strand it.
+  useEffect(() => {
+    if (!data?.title) return;
+    const prev = document.title;
+    document.title = `${titleFirstLine(data.title)} — Orbit`;
+    return () => {
+      document.title = prev;
+    };
+  }, [data?.title]);
 
   // Build the same self-contained HTML the app's export produces, but embed images through
   // the public share route so a logged-out viewer's saved file still shows them.
@@ -68,13 +82,14 @@ export function SharedSessionPage() {
       </div>
     );
   }
+  const displayTitle = titleFirstLine(data.title);
   return (
     <div className="share-page">
       <header className="share-header">
         <div className="share-brand">Orbit</div>
         <div className="share-titlebar">
-          <div className="share-title" title={data.title}>
-            {data.title}
+          <div className="share-title" title={displayTitle}>
+            {displayTitle}
           </div>
           <div className="share-sub">
             {data.agentName && <span>{data.agentName}</span>}
