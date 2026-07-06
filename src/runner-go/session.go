@@ -168,6 +168,13 @@ func runInteractiveSession(t *Transport, job *ClaimedSession, ctx context.Contex
 	// all tails stop when this session run returns.
 	bg := newBgTailer(ctx, emit)
 	defer bg.stopAll()
+	// Claude records background-shell completions in its transcript even while the session is
+	// idle, but only streams them to stdout on the next turn; tail the transcript so a shell
+	// that finishes between turns still clears from the "Background processes" tray. (Claude
+	// only — Codex has no such transcript; the glob would simply never match.)
+	if runtimeProvider(job) == providerClaude {
+		go bg.watchJSONL(job.SessionUUID)
+	}
 
 	logln(fmt.Sprintf("> interactive run %s — %s", job.SessionID, job.Title))
 	status := stCancelled

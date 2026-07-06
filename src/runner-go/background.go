@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -43,14 +46,34 @@ const (
 )
 
 type bgTailer struct {
-	ctx  context.Context // session lifetime; all tails stop when it's cancelled
-	emit emitFn
-	mu   sync.Mutex
-	live map[string]context.CancelFunc // toolUseId → stop its tail
+	ctx    context.Context    // session lifetime; all tails + the transcript watcher stop when cancelled
+	cancel context.CancelFunc // cancels ctx (invoked by stopAll on session teardown)
+	emit   emitFn
+	mu     sync.Mutex
+	live   map[string]context.CancelFunc // toolUseId → stop its tail
+	seen   map[string]bool               // "<toolUseId>\x00<status>" already emitted (dedupe across sources)
 }
 
 func newBgTailer(ctx context.Context, emit emitFn) *bgTailer {
-	return &bgTailer{ctx: ctx, emit: emit, live: map[string]context.CancelFunc{}}
+	// Own a cancellable child so stopAll reliably ends the watcher goroutine even when the
+	// parent context outlives a normally-ended session run.
+	ctx, cancel := context.WithCancel(ctx)
+	return &bgTailer{ctx: ctx, cancel: cancel, emit: emit, live: map[string]context.CancelFunc{}, seen: map[string]bool{}}
+}
+
+// markSeen records a (toolUseId, status) transition, returning true only the first time it's
+// seen. It de-dupes background_task emissions across the two sources that both carry the same
+// <task-notification> — the stdout stream and the transcript tail (watchJSONL) — so a
+// notification observed both ways is emitted once.
+func (b *bgTailer) markSeen(toolUseID, status string) bool {
+	key := toolUseID + "\x00" + status
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.seen[key] {
+		return false
+	}
+	b.seen[key] = true
+	return true
 }
 
 // onToolResult inspects a tool_result's text for the "running in background" confirmation and,
@@ -160,13 +183,16 @@ func (b *bgTailer) stop(toolUseID string) {
 	}
 }
 
-// stopAll ends every tail — called when the session run ends.
+// stopAll ends every tail and the transcript watcher — called when the session run ends.
 func (b *bgTailer) stopAll() {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	for id, cancel := range b.live {
 		cancel()
 		delete(b.live, id)
+	}
+	b.mu.Unlock()
+	if b.cancel != nil {
+		b.cancel() // ends watchJSONL (and anything else bound to b.ctx)
 	}
 }
 
@@ -217,6 +243,11 @@ func bgTaskFromNotification(s string, emit emitFn, bg *bgTailer) bool {
 	}
 	toolUseID := get(bgNotifToolUse)
 	status := get(bgNotifStatus)
+	// Skip a notification we've already turned into an event (the same <task-notification>
+	// reaches us via both the stdout stream and the transcript tail — see watchJSONL).
+	if bg != nil && toolUseID != "" && !bg.markSeen(toolUseID, status) {
+		return true
+	}
 	emit(evBackgroundTask, map[string]interface{}{
 		"shellId":    get(bgNotifTaskID),
 		"toolUseId":  toolUseID,
@@ -236,4 +267,131 @@ func bgTaskFromNotification(s string, emit emitFn, bg *bgTailer) bool {
 func asString(v interface{}) string {
 	s, _ := v.(string)
 	return s
+}
+
+// watchJSONL tails Claude's own session transcript for <task-notification> user messages and
+// turns each into a background_task event — the reliable "this background process finished"
+// signal for agent Bash(run_in_background) shells (and sub-agents).
+//
+// Why the stdout stream isn't enough: when a background shell finishes, Claude records the
+// notification in its transcript (~/.claude/projects/<cwd>/<sessionUUID>.jsonl) promptly — even
+// while the session sits idle between turns — but it only *streams* that notification to stdout
+// when it's consumed at the start of the next turn. So a shell that completes while the user is
+// away is written here yet never reaches the runner's stdout reader, leaving Session.runningBgShells
+// (and the "Background processes" tray) stuck at "N running" until the next turn, which may never
+// come. Reading the transcript closes that gap. Emissions are de-duped against the stdout path via
+// the shared seen set, so a notification delivered both ways produces one event.
+//
+// The first pass reads the whole file (self-healing any shell already stale from a prior runner);
+// later passes read only what was appended. Bound to the session context — it stops with the run.
+func (b *bgTailer) watchJSONL(sessionUUID string) {
+	if sessionUUID == "" {
+		return
+	}
+	tk := time.NewTicker(bgPollInterval)
+	defer tk.Stop()
+	var path string
+	var offset int64
+	for {
+		if path == "" {
+			path = findClaudeTranscript(sessionUUID) // may not exist until the first turn writes it
+		}
+		if path != "" {
+			offset = b.scanTranscript(path, offset)
+		}
+		select {
+		case <-b.ctx.Done():
+			return
+		case <-tk.C:
+		}
+	}
+}
+
+// scanTranscript reads newline-terminated JSONL entries from offset to EOF, emitting a
+// background_task for each new <task-notification>, and returns the offset past the last complete
+// line (a partial trailing line is left to be re-read on the next tick). A shrunken file (rotated
+// or truncated on resume) is rescanned from the start.
+func (b *bgTailer) scanTranscript(path string, offset int64) int64 {
+	f, err := os.Open(path)
+	if err != nil {
+		return offset
+	}
+	defer f.Close()
+	if fi, err := f.Stat(); err == nil && fi.Size() < offset {
+		offset = 0
+	}
+	if _, err := f.Seek(offset, io.SeekStart); err != nil {
+		return offset
+	}
+	r := bufio.NewReader(f)
+	for {
+		line, err := r.ReadString('\n')
+		if err != nil {
+			break // EOF: `line` is a partial trailing entry — leave offset before it for next tick
+		}
+		offset += int64(len(line))
+		b.notificationFromLine(line)
+	}
+	return offset
+}
+
+// notificationFromLine emits a background_task if the JSONL entry is a user message carrying a
+// <task-notification> (de-duped via bgTaskFromNotification's shared seen set).
+func (b *bgTailer) notificationFromLine(line string) {
+	if !strings.Contains(line, "task-notification") {
+		return // cheap pre-filter before the JSON parse
+	}
+	if txt := userTextFromJSONL(line); strings.Contains(txt, "<task-notification>") {
+		bgTaskFromNotification(txt, b.emit, b)
+	}
+}
+
+// userTextFromJSONL pulls the text of a transcript entry's `message.content`, which Claude writes
+// either as a plain string or as an array of content blocks.
+func userTextFromJSONL(line string) string {
+	var entry struct {
+		Message struct {
+			Content json.RawMessage `json:"content"`
+		} `json:"message"`
+	}
+	if json.Unmarshal([]byte(line), &entry) != nil {
+		return ""
+	}
+	var s string
+	if json.Unmarshal(entry.Message.Content, &s) == nil {
+		return s
+	}
+	var blocks []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(entry.Message.Content, &blocks) == nil {
+		var sb strings.Builder
+		for _, bl := range blocks {
+			if bl.Type == "text" {
+				sb.WriteString(bl.Text)
+				sb.WriteByte('\n')
+			}
+		}
+		return sb.String()
+	}
+	return ""
+}
+
+// findClaudeTranscript resolves the transcript path for a Claude session by its UUID. Globbing
+// on the filename avoids reproducing Claude's cwd→directory escaping; the UUID is unique.
+func findClaudeTranscript(sessionUUID string) string {
+	base := os.Getenv("CLAUDE_CONFIG_DIR")
+	if base == "" {
+		home, err := os.UserHomeDir()
+		if err != nil || home == "" {
+			return ""
+		}
+		base = filepath.Join(home, ".claude")
+	}
+	matches, _ := filepath.Glob(filepath.Join(base, "projects", "*", sessionUUID+".jsonl"))
+	if len(matches) > 0 {
+		return matches[0]
+	}
+	return ""
 }
