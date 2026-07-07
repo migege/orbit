@@ -56,12 +56,19 @@ export class PushService {
       const tokens = await this.prisma.deviceToken.findMany({ where: { userId: session.ownerId } });
       if (tokens.length === 0) return;
 
+      // App-icon badge = the owner's total pending approvals across all their sessions, so it stays
+      // accurate even when several sessions need a reply. iOS sets it from the push automatically.
+      const badge = await this.prisma.approval.count({
+        where: { status: 'PENDING', session: { ownerId: session.ownerId } },
+      });
+
       const auth = this.authToken();
       if (!auth) return;
       const body = JSON.stringify({
         aps: {
           alert: { title: session.title || 'Orbit', body: `Needs your reply · ${toolName}` },
           sound: 'default',
+          badge,
           category: 'ORBIT_APPROVAL', // matches OrbitKit Notifications.approvalCategory
           'thread-id': sessionId,
         },

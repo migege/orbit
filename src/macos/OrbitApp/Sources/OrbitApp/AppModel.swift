@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import OrbitKit
+import UserNotifications
 #if os(macOS)
 import AppKit
 #elseif os(iOS)
@@ -675,8 +676,11 @@ final class AppModel {
     private func updateDockBadge(_ badge: String?) {
         #if os(macOS)
         NSApp.dockTile.badgeLabel = badge
+        #elseif os(iOS)
+        // Reconcile the app-icon badge with the current "needs you" count on every poll while the
+        // app is foreground (the APNs payload sets it while backgrounded). `badge` is the count as a
+        // string, or nil when nothing needs a reply → clear to 0.
+        UNUserNotificationCenter.current().setBadgeCount(Int(badge ?? "") ?? 0)
         #endif
-        // iOS: the app-icon badge is set by the push payload once APNs lands (Phase E); a
-        // foreground SSE session doesn't drive it, so this is a no-op there for now.
     }
 }
