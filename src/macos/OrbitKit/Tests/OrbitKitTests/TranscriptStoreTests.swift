@@ -81,6 +81,42 @@ final class TranscriptStoreTests: XCTestCase {
         XCTAssertEqual(restored.state.items.last?.asAssistant?.displayText, "hello")
     }
 
+    /// A pending queued send (held out of `items`) is part of the snapshot, so switching sessions /
+    /// backgrounding doesn't lose the visible queue.
+    func testQueuedSendSurvivesRoundTrip() throws {
+        var a = TranscriptReducer()
+        for ev in turnOne() { a.apply(ev) }
+        a.addOptimisticUser(clientTurnId: "cq", text: "run this after", queued: true)
+        let b = try roundTrip(a)
+        XCTAssertEqual(a.state, b.state)
+        XCTAssertEqual(b.state.queued.map(\.text), ["run this after"])
+        XCTAssertEqual(b.state.queued.first?.pending, true)
+    }
+
+    /// Migration safety: a snapshot written before `queued` existed lacks the key entirely. It must
+    /// default to empty rather than fail the whole decode (which would discard the cached session).
+    func testStateDecodesSnapshotWithoutQueuedKey() throws {
+        let json = #"{"items":[],"pendingApprovals":[],"background":[],"status":"AWAITING_INPUT","maxSeq":6}"#
+        let s = try JSONDecoder().decode(TranscriptState.self, from: Data(json.utf8))
+        XCTAssertEqual(s.queued, [])
+        XCTAssertEqual(s.maxSeq, 6)
+        XCTAssertEqual(s.status, .awaitingInput)
+        // Same tolerance for the (newer) history-window cursor: paging is simply off.
+        XCTAssertNil(s.oldestSeq)
+        XCTAssertFalse(s.hasMoreOlder)
+    }
+
+    /// The scroll-up paging cursor is part of the snapshot — a restored session must know where
+    /// its loaded window starts (and whether older pages remain) without re-fetching the tail.
+    func testHistoryWindowSurvivesRoundTrip() throws {
+        var a = TranscriptReducer()
+        a.applyTailPage(EventPage(events: turnOne(), hasMore: true))
+        let b = try roundTrip(a)
+        XCTAssertEqual(a.state, b.state)
+        XCTAssertEqual(b.state.oldestSeq, 2)
+        XCTAssertTrue(b.state.hasMoreOlder)
+    }
+
     // MARK: - FileTranscriptStore
 
     private func tempDir() -> URL {
@@ -108,6 +144,26 @@ final class TranscriptStoreTests: XCTestCase {
         let dir = tempDir(); defer { try? FileManager.default.removeItem(at: dir) }
         let store = FileTranscriptStore(directory: dir)
         XCTAssertNil(store.load(sessionID: "never-saved"))
+    }
+
+    /// The version gate: a snapshot from a previous schema (here v1, which predates the
+    /// history-window cursor) decodes to nil — the session re-fetches its tail page — rather than
+    /// rehydrating a window whose scroll-up paging would be permanently dead.
+    func testFileStoreDiscardsPreviousSchemaVersion() throws {
+        let dir = tempDir(); defer { try? FileManager.default.removeItem(at: dir) }
+        let store = FileTranscriptStore(directory: dir)
+        var r = TranscriptReducer()
+        for ev in turnOne() { r.apply(ev) }
+        store.save(sessionID: "sess-A", reducer: r)
+
+        // Rewind the stored envelope to the previous schema version.
+        let url = dir.appendingPathComponent("sess-A.json")
+        let text = try String(contentsOf: url, encoding: .utf8)
+        let downgraded = text.replacingOccurrences(of: #""version":2"#, with: #""version":1"#)
+        XCTAssertNotEqual(downgraded, text, "expected a v2 envelope to rewrite")
+        try downgraded.write(to: url, atomically: true, encoding: .utf8)
+
+        XCTAssertNil(store.load(sessionID: "sess-A"))
     }
 
     func testFileStorePrunesOldestBeyondCap() throws {

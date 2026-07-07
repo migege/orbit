@@ -18,6 +18,7 @@ import {
   Modal,
   Select,
   Spin,
+  Switch,
   Tag,
   type MenuProps,
 } from 'antd';
@@ -36,6 +37,7 @@ import {
   MODE_OPTIONS,
   PROVIDER_OPTIONS,
   modelOptionsForProvider,
+  effortOptionsForProvider,
 } from '../lib/agentDefaults';
 
 interface Agent {
@@ -45,10 +47,12 @@ interface Agent {
   provider?: string;
   model?: string;
   permissionMode?: string;
+  effort?: string | null;
   workDir?: string | null;
   env?: Record<string, string> | null;
   runnerId?: string | null;
   enabled?: boolean;
+  enableWorktree?: boolean;
 }
 
 const fmtTime = (d?: string | null): string =>
@@ -236,8 +240,10 @@ export function RunnerDetailPage() {
   const [fProvider, setFProvider] = useState('claude');
   const [fModel, setFModel] = useState(DEFAULT_MODEL);
   const [fMode, setFMode] = useState('auto');
+  const [fEffort, setFEffort] = useState('');
   const [fAppend, setFAppend] = useState('');
   const [fWorkDir, setFWorkDir] = useState('');
+  const [fEnableWorktree, setFEnableWorktree] = useState(false);
   const [fEnv, setFEnv] = useState<{ key: string; value: string }[]>([]);
 
   // New agents start from the user's saved defaults (Settings → Agent defaults),
@@ -258,6 +264,9 @@ export function RunnerDetailPage() {
     const nextModel = DEFAULT_MODEL_BY_PROVIDER[provider] ?? DEFAULT_MODEL;
     setFModel(nextModel);
     if (fMode === 'auto' && !AUTO_CAPABLE_MODELS.has(nextModel)) setFMode('default');
+    // Effort levels differ per provider (codex has 'minimal', not 'max'); reset to Default so the
+    // Select never shows a value absent from the new provider's options.
+    setFEffort('');
   };
 
   const saveMut = useMutation({
@@ -267,8 +276,11 @@ export function RunnerDetailPage() {
         provider: fProvider,
         model: fModel,
         permissionMode: fMode,
+        // Sent even when '' (Default) so picking Default clears a previously-set effort.
+        effort: fEffort,
         appendSystemPrompt: fAppend.trim() || undefined,
         workDir: fWorkDir.trim() || undefined,
+        enableWorktree: fEnableWorktree,
         env: Object.fromEntries(
           fEnv.map((r) => [r.key.trim(), r.value]).filter(([k]) => k),
         ),
@@ -296,8 +308,10 @@ export function RunnerDetailPage() {
     setFProvider('claude');
     setFModel(prefModel);
     setFMode(prefMode);
+    setFEffort('');
     setFAppend('');
     setFWorkDir('');
+    setFEnableWorktree(false);
     setFEnv([]);
     setFormOpen(true);
   };
@@ -307,8 +321,10 @@ export function RunnerDetailPage() {
     setFProvider(a.provider ?? 'claude');
     setFModel(a.model ?? DEFAULT_MODEL_BY_PROVIDER[a.provider ?? 'claude'] ?? DEFAULT_MODEL);
     setFMode(a.permissionMode ?? 'dontAsk');
+    setFEffort(a.effort ?? '');
     setFAppend(a.appendSystemPrompt ?? '');
     setFWorkDir(a.workDir ?? '');
+    setFEnableWorktree(a.enableWorktree ?? false);
     setFEnv(Object.entries(a.env ?? {}).map(([key, value]) => ({ key, value })));
     setFormOpen(true);
   };
@@ -367,12 +383,31 @@ export function RunnerDetailPage() {
           />
         </div>
         <div className="rd-form-field">
+          <div className="rd-form-label">Reasoning effort</div>
+          <Select
+            value={fEffort}
+            onChange={setFEffort}
+            options={effortOptionsForProvider(fProvider)}
+            style={{ width: '100%' }}
+          />
+        </div>
+        <div className="rd-form-field">
           <div className="rd-form-label">Working directory</div>
           <Input
             value={fWorkDir}
             onChange={(e) => setFWorkDir(e.target.value)}
             placeholder="/path/to/project on the runner (optional)"
           />
+        </div>
+      </div>
+      <div className="rd-form-field">
+        <div className="rd-form-label">Worktree isolation</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Switch checked={fEnableWorktree} onChange={setFEnableWorktree} />
+          <span style={{ fontSize: 12, opacity: 0.65 }}>
+            Run each session in its own git worktree. Off → sessions run directly in the working
+            directory with no isolation.
+          </span>
         </div>
       </div>
       <div className="rd-form-field">
@@ -482,7 +517,7 @@ export function RunnerDetailPage() {
                 modal.confirm({
                   title: `Delete agent “${a.name}”?`,
                   content:
-                    'This removes the agent and unlinks its sessions and tasks. This can’t be undone.',
+                    'This removes the agent from your list. Its sessions and tasks are kept and stay linked to it.',
                   okText: 'Delete',
                   okButtonProps: { danger: true },
                   cancelText: 'Cancel',

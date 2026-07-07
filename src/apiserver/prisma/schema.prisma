@@ -194,6 +194,9 @@ model Agent {
   allowedTools       Json     @default("[]") @map("allowed_tools")
   disallowedTools    Json     @default("[]") @map("disallowed_tools")
   permissionMode     String   @default("dontAsk") @map("permission_mode")
+  // Default reasoning effort a new session inherits when its create request omits one
+  // ('' / null = the model's default). Claude: low|medium|high|xhigh|max; codex adds minimal.
+  effort             String?  @map("effort")
   maxTurns           Int?     @map("max_turns")
   maxBudgetUsd       Float?   @map("max_budget_usd")
   mcpConfig          Json?    @map("mcp_config")
@@ -214,6 +217,12 @@ model Agent {
   // baseline commit) on the next claim so its sessions can be worktree-isolated. Opt-in
   // per agent — the web "Enable isolation" action on a non-git run flips this on.
   autoInitGit        Boolean  @default(false) @map("auto_init_git")
+  // Whether this agent's sessions each run in their own per-session git worktree. Default off, so a
+  // new agent's sessions run directly in workDir with no isolation unless the user opts in. Off → a
+  // session gets no `branch` and the runner runs it directly in workDir with no worktree (the agent's
+  // concurrent sessions then share one working tree); the merge/commit/diff machinery is skipped
+  // since there's no isolated branch.
+  enableWorktree     Boolean  @default(false) @map("enable_worktree")
   // The branch this agent's sessions merge into by default, remembered from the last time the
   // user switched targets in the status bar's merge dropdown. Null → the runner's auto-detect
   // (main, else master). Agent-scoped so a chosen target sticks across all the agent's sessions.
@@ -221,6 +230,11 @@ model Agent {
   ownerId            String   @map("owner_id") @db.Uuid
   owner              User     @relation(fields: [ownerId], references: [id])
   createdAt          DateTime @default(now()) @map("created_at")
+  // Soft delete: deleting an agent stamps this instead of removing the row, so its
+  // sessions/tasks stay linked (no orphaning) and it can be restored. NULL = live;
+  // every user-facing listing filters on `deletedAt: null`. Runtime lookups by a live
+  // session's agentId intentionally don't filter, so in-flight sessions keep running.
+  deletedAt          DateTime? @map("deleted_at")
   // Sidebar display order set by drag-to-reorder; NULL sorts last (after positioned
   // agents, by createdAt) so existing/new agents stay oldest-first until reordered.
   position           Int?     @map("position")
@@ -309,6 +323,13 @@ model Session {
   // Added on launch, removed on completion, cleared on (re)spawn/complete. Lets the list +
   // header show "Background running" without scanning events. Only meaningful while live.
   runningBgShells   String[]  @map("running_bg_shells")
+  // Denormalized set of the agent's still-running sub-agents (Task/Agent tool): the tool_use
+  // ids of sub-agent launches that haven't yet reported a terminal `<task-notification>`
+  // (background_task). Added on launch, removed on completion, cleared on (re)spawn. The Agent
+  // tool is async — its launch tool_result lands immediately and the parent then streams its
+  // own top-scope system progress events, so lastToolUse can't carry this. Lets the list show
+  // "Running Agent…" while a sub-agent is in flight. Only meaningful while live.
+  runningSubagents  String[]  @map("running_subagents")
   // ── Per-session git worktree isolation ──────────────────────────────────────
   // When the agent's workDir is a git repo, the runner runs this session in its own
   // git worktree on `branch`, forked from `baseSha` (the workDir HEAD at claim time).
@@ -340,11 +361,13 @@ model Session {
   // minus Orbit's own orbit/* session branches), populating the dropdown. Refreshed each
   // heartbeat while live and at completion; empty for older runners (dropdown hidden).
   mergeTargets      String[]  @default([]) @map("merge_targets")
-  // branchMerged is the runner's `git merge-base --is-ancestor branch <default target>` result,
-  // refreshed alongside worktreeDirty on each worktree report: true → this branch is already in
-  // main (e.g. merged out-of-band on the command line), so the bar shows a "✓ In main" chip
-  // instead of a redundant Merge button. Null = the runner hasn't reported it (older runner /
-  // not yet recomputed) → the bar keeps its mergeStatus-driven behavior.
+  // branchMerged is the runner's verdict that this branch's work is already in the default target
+  // (main, else master): the branch tip is an ancestor of it (fast-forward / command-line push), or
+  // every post-fork commit has a patch-equivalent there (a squash/rebase merge under new SHAs, e.g.
+  // Orbit's own rebase-based "Merge to main"). Refreshed alongside worktreeDirty on each worktree
+  // report: true → the bar shows a "✓ In main" chip instead of a redundant Merge button. Null = the
+  // runner hasn't reported it (older runner / not yet recomputed) → the bar keeps its
+  // mergeStatus-driven behavior.
   branchMerged      Boolean?  @map("branch_merged")
   // ── "Commit" (UI button on the worktree status bar, for a live session) ─────
   // worktreeDirty is the runner's last-reported `git status` for the live worktree: true

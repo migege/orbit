@@ -39,6 +39,17 @@ struct ComposerView: View {
     @State private var pickedPhotos: [PhotosPickerItem] = []
     #endif
 
+    // The composer bar is pinned to the screen bottom, so iOS opens this Menu upward and presents
+    // its items in reverse. Feed the list reversed on iOS so it reads top-to-bottom (Fable → Haiku)
+    // exactly like the web composer. macOS drops the menu down, so keep the source order there.
+    private var modelMenuItems: [ModelOption] {
+        #if os(iOS)
+        Array(AgentDefaults.models.reversed())
+        #else
+        AgentDefaults.models
+        #endif
+    }
+
     // Show the `/` hint menu while the cursor sits on a `/token` that hasn't been Escape-dismissed.
     private var showSlash: Bool {
         guard let t = console.slashToken else { return false }
@@ -56,7 +67,7 @@ struct ComposerView: View {
                     Image(systemName: "bubble.left.and.bubble.right.fill").foregroundStyle(.blue)
                     Text(reply.question.isEmpty ? "Replying to Claude’s question"
                                                 : "Replying to Claude’s question: \(reply.question)")
-                        .font(.caption).lineLimit(1)
+                        .font(.orbitLabel).lineLimit(1)
                     Spacer()
                     Button { console.cancelChatReply() } label: { Image(systemName: "xmark.circle.fill") }
                         .buttonStyle(.plain).foregroundStyle(.secondary)
@@ -82,7 +93,7 @@ struct ComposerView: View {
 
                 TextField(placeholder, text: $console.composerText, axis: .vertical)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 14))
+                    .font(.orbitControl)
                     .lineLimit(1...6)
                     // Fill the available width; vertical centering comes from the HStack's .center
                     // alignment, so the placeholder, the + and the send button all sit on one
@@ -118,16 +129,23 @@ struct ComposerView: View {
                         }
                     }
 
-                if console.state.status == .running {
+                // Show the stop button off the session's AUTHORITATIVE status (the live control-plane
+                // record the nav-bar title reads), NOT the stream-derived `console.state.status`:
+                // opening an already-running session never replays a "running" event into the
+                // reducer, so the stream status stays stale and the button would never appear. Web
+                // parity — its `showStop` keys off `selected?.status === 'RUNNING'`.
+                if ComposerLogic.showsInterrupt(session: app.session(id: console.sessionID)?.status,
+                                                stream: console.state.status) {
                     Button { Task { await console.interrupt() } } label: {
                         Image(systemName: "stop.fill")
+                            .font(sendGlyphFont)
                     }
                     .buttonStyle(.plain)
                     .help("Interrupt the current turn")
                 }
                 Button { Task { await console.send() } } label: {
                     Image(systemName: "arrow.up.circle.fill")
-                        .font(.title2)
+                        .font(sendGlyphFont)
                         .foregroundStyle(console.canSend ? Color.accentColor : Color.secondary)
                 }
                 .buttonStyle(.plain)
@@ -173,11 +191,6 @@ struct ComposerView: View {
                 }
                 .borderlessMenuStyle().menuIndicator(.hidden).fixedSize()
 
-                if console.availability == .queue {
-                    Label("Will queue", systemImage: "tray.and.arrow.down")
-                        .foregroundStyle(.secondary)
-                }
-
                 Spacer()
 
                 if let name = console.agentName {
@@ -185,7 +198,7 @@ struct ComposerView: View {
                 }
 
                 Menu {
-                    ForEach(AgentDefaults.models) { m in
+                    ForEach(modelMenuItems) { m in
                         Button {
                             console.modelID = m.id
                             Task { await console.applyConfig(model: m.id) }
@@ -203,6 +216,9 @@ struct ComposerView: View {
                         Button {
                             console.effort = e
                             Task { await console.applyConfig(effort: e.rawValue) }
+                            // Remember this as the account default so the next new session (here or
+                            // on web) starts at it — the cross-device port of web's localStorage write.
+                            app.rememberDefaultEffort(e.rawValue)
                         } label: {
                             menuItemLabel(e.label, selected: e == console.effort)
                         }
@@ -216,7 +232,9 @@ struct ComposerView: View {
                     PlanUsageIndicator(usage: usage)
                 }
             }
-            .font(.caption)
+            // Footer pickers are tappable controls, not metadata — list-subtitle size on iOS (15pt)
+            // for comfortable targets; macOS keeps the dense web-parity caption.
+            .font(.orbitListSubtitle)
         }
         .padding(10)
         .background(.bar)
@@ -286,8 +304,17 @@ struct ComposerView: View {
             } label: { Label("Upload file", systemImage: "paperclip") }
         } label: {
             Image(systemName: "plus")
-                .font(.system(size: 15))
+                .font(.orbitGlyph)
                 .foregroundStyle(.secondary)
+                #if os(iOS)
+                // The bare 15pt glyph gives a tap target far under the 44pt HIG minimum, and the
+                // Menu's `.fixedSize()` hugs it. On touch, widen the hit area and make the whole
+                // rect tappable — glyph stays leading so it doesn't visually shift; height matches
+                // the send glyph's row so the composer box doesn't grow taller. macOS (pointer
+                // input) keeps the tight glyph.
+                .frame(width: 30, height: 34, alignment: .leading)
+                .contentShape(Rectangle())
+                #endif
         }
         .borderlessMenuStyle()
         .menuIndicator(.hidden)
@@ -315,7 +342,7 @@ struct ComposerView: View {
         HStack(spacing: 3) {
             Text(text).lineLimit(1)
             Image(systemName: "chevron.up.chevron.down")
-                .font(.system(size: 8))
+                .font(.orbitMeta)
                 .foregroundStyle(.tertiary)
         }
         .foregroundStyle(.secondary)
@@ -341,10 +368,17 @@ struct ComposerView: View {
                 .frame(width: 48, height: 48)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(.primary.opacity(0.08)) }
+                // iOS: tap the staged thumbnail to open the full-screen viewer before sending
+                // (the tiny 48² chip is hard to read otherwise). Preview the full-resolution bytes
+                // seeded in the shared store at attach time — the same source the sent bubble uses —
+                // not the downsampled `previewImageData`, so the viewer looks identical to the bubble.
+                // The remove button is overlaid *after* this, so it stays on top and its taps aren't
+                // captured by the preview.
+                .modifier(ComposerImageTap(image: console.attachments.image(for: att.id) ?? image))
                 .overlay(alignment: .topTrailing) {
                     Button { console.removeAttachment(att) } label: {
                         Image(systemName: "xmark.circle.fill")
-                            .font(.caption2)
+                            .font(.orbitMeta)
                             .foregroundStyle(.white, .black.opacity(0.55))
                     }
                     .buttonStyle(.plain)
@@ -363,7 +397,7 @@ struct ComposerView: View {
                 .buttonStyle(.plain)
                 .help("Remove file")
             }
-            .font(.caption)
+            .font(.orbitLabel)
             .padding(.vertical, 4).padding(.horizontal, 8)
             .frame(maxWidth: 220, alignment: .leading)
             .background(.gray.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
@@ -389,9 +423,9 @@ struct ComposerView: View {
                     HStack(spacing: 6) {
                         Text("/\(item.name)").font(.callout.monospaced())
                         Text(item.type == "skill" ? "skill" : "cmd")
-                            .font(.caption2).foregroundStyle(.secondary)
+                            .font(.orbitMeta).foregroundStyle(.secondary)
                         if let d = item.description, !d.isEmpty {
-                            Text(d).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            Text(d).font(.orbitLabel).foregroundStyle(.secondary).lineLimit(1)
                         }
                         Spacer(minLength: 0)
                     }
@@ -467,8 +501,29 @@ struct ComposerView: View {
     #endif
 }
 
+/// iOS: make a staged composer image thumbnail tappable to open the shared full-screen viewer
+/// (`FullScreenImageView` from ConsoleView) — parity with the sent-message thumbnails and web's
+/// tap-to-preview. macOS: no-op, matching the transcript thumbnails there.
+private struct ComposerImageTap: ViewModifier {
+    let image: PlatformImage
+    #if os(iOS)
+    @State private var preview = false
+    #endif
+
+    func body(content: Content) -> some View {
+        #if os(iOS)
+        content
+            .contentShape(Rectangle())
+            .onTapGesture { preview = true }
+            .fullScreenCover(isPresented: $preview) { FullScreenImageView(image: image) }
+        #else
+        content
+        #endif
+    }
+}
+
 /// Compact plan-usage pill for the composer footer (mirrors web's PlanUsageIndicator): a mini
-/// 5-hour bar + percent; tapping opens a popover with every subscription window, like `/usage`.
+/// 5-hour bar + percent; tapping opens the per-window detail, like `/usage`.
 private struct PlanUsageIndicator: View {
     let usage: PlanUsageSnapshot
     @State private var showDetail = false
@@ -483,26 +538,75 @@ private struct PlanUsageIndicator: View {
             }
             .buttonStyle(.plain)
             .help("Plan usage \(pct)%")
-            .popover(isPresented: $showDetail, arrowEdge: .top) {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Plan usage").font(.headline)
-                    ForEach(usage.rows) { row in
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                Text(row.label)
-                                Spacer()
-                                Text("\(row.percent)%").foregroundStyle(.secondary)
-                            }
-                            .font(.caption)
-                            UsageBar(percent: row.percent).frame(height: 5)
-                            if let reset = row.window.resetsAt.flatMap(formatReset) {
-                                Text("Resets \(reset)").font(.caption2).foregroundStyle(.tertiary)
-                            }
-                        }
+            .modifier(PlanUsageDetailPresentation(isPresented: $showDetail, usage: usage))
+        }
+    }
+}
+
+/// Presents the plan-usage detail per platform. macOS gets a tight anchored popover sized to its
+/// content. iOS gets a fitted bottom sheet — a bare `.popover` there auto-promotes to a full-screen
+/// modal that strands two short rows mid-screen, so we show a proper sheet: a grabber, a top-anchored
+/// title with Done, and a detent sized to the row count so there's no wasted space.
+private struct PlanUsageDetailPresentation: ViewModifier {
+    @Binding var isPresented: Bool
+    let usage: PlanUsageSnapshot
+
+    func body(content: Content) -> some View {
+        #if os(macOS)
+        content.popover(isPresented: $isPresented, arrowEdge: .top) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Plan usage").font(.headline)
+                PlanUsageDetailRows(rows: usage.rows, compact: true)
+            }
+            .padding(14)
+            .frame(width: 260)
+        }
+        #else
+        content.sheet(isPresented: $isPresented) {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack {
+                    Text("Plan usage").font(.title3.weight(.semibold))
+                    Spacer()
+                    Button("Done") { isPresented = false }
+                }
+                .padding(.bottom, 16)
+                PlanUsageDetailRows(rows: usage.rows)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 24)
+            .padding(.bottom, 20)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .presentationDetents([.height(CGFloat(120 + usage.rows.count * 66))])
+            .presentationDragIndicator(.visible)
+        }
+        #endif
+    }
+}
+
+/// The per-window rows shared by the macOS popover and the iOS sheet. `compact` shrinks the type and
+/// bar for the tight popover; the iOS sheet uses the roomier, touch-friendly sizing.
+private struct PlanUsageDetailRows: View {
+    let rows: [PlanUsageRow]
+    var compact: Bool = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: compact ? 12 : 18) {
+            ForEach(rows) { row in
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text(row.label)
+                        Spacer()
+                        Text("\(row.percent)%").foregroundStyle(.secondary)
+                    }
+                    .font(compact ? .caption : .subheadline)
+                    UsageBar(percent: row.percent).frame(height: compact ? 5 : 8)
+                    if let reset = row.window.resetsAt.flatMap(formatReset) {
+                        Text("Resets \(reset)")
+                            .font(compact ? .caption2 : .caption)
+                            .foregroundStyle(.tertiary)
                     }
                 }
-                .padding(14)
-                .frame(width: 260)
             }
         }
     }
@@ -538,3 +642,11 @@ private func formatReset(_ iso: String) -> String? {
     out.dateFormat = "MMM d, h:mm a"
     return out.string(from: date)
 }
+
+// The send/stop glyph is the composer's primary action, so on iOS it's sized up to read as the CTA
+// against the smaller, secondary `+`. macOS keeps the tighter `.title2` — the desktop bar stays compact.
+#if os(iOS)
+private let sendGlyphFont: Font = .title
+#else
+private let sendGlyphFont: Font = .title2
+#endif

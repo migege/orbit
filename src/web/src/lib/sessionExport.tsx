@@ -9,6 +9,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { ExportCtx, Transcript, type RunEvent } from '../components/Transcript';
 import { fetchAttachmentDataUrl } from '../api';
+import { titleFirstLine } from './title';
 // Vite `?raw`: pull the real CSS text into the bundle. index.css carries the design tokens
 // (:root light + dark) and every .chat-*/.md/.diff-* rule; github.css is the light-theme
 // highlight.js palette the transcript imports separately (dark is overridden in index.css).
@@ -109,7 +110,7 @@ export function buildSessionHtml(
   images: Map<string, string>,
   theme: string,
 ): string {
-  const title = (session.title || 'Session').trim();
+  const title = titleFirstLine(session.title || 'Session');
   const agentName = session.agent?.name?.trim();
   const started = fmtDate(session.startedAt ?? session.createdAt);
   const meta = [agentName, session.status?.toLowerCase(), started && `started ${started}`]

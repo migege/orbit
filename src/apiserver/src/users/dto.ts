@@ -37,6 +37,15 @@ export class UpdatePreferencesDto {
   @IsOptional()
   @IsEnum(PermissionMode)
   defaultPermissionMode?: PermissionMode;
+
+  /**
+   * Default reasoning effort for a new session's composer, remembered account-wide
+   * (last-picked-wins). '' = model default; otherwise a Claude/Codex effort level.
+   * Kept as a free string (not an enum) so provider-specific levels round-trip.
+   */
+  @IsOptional()
+  @IsString()
+  defaultEffort?: string;
 }
 
 /** Set a user's access role (admin area). */

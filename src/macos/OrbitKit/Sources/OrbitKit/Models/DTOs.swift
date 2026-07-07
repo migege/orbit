@@ -38,6 +38,9 @@ public struct Agent: Codable, Equatable, Sendable, Identifiable {
     public let provider: String?
     public let model: String?
     public let permissionMode: String?
+    /// The agent's default reasoning effort ('' = model default, else low/medium/high/xhigh/max).
+    /// A new session seeds its effort from this (like model/permissionMode) — see the composer.
+    public let effort: String?
     public let workDir: String?
     // The rest back the detail / edit form; all optional so a list payload (which may omit
     // them) still decodes. Mirrors the columns in the Prisma Agent model / `UpdateAgentDto`.
@@ -84,6 +87,15 @@ public struct Session: Codable, Equatable, Sendable, Identifiable {
     public let pendingApprovals: Int?
     public let branch: String?
     public let updatedAt: String?
+    /// When the session was created / last had a turn (ISO-8601 strings). These drive the Agent
+    /// console's ordering — most-recent activity first, falling back to `createdAt` for a
+    /// never-run (queued) session — mirroring web's client-side sort. See `SessionFilter`.
+    public let createdAt: String?
+    public let lastTurnAt: String?
+    /// When this session was pinned to the top of its list (ISO-8601 string), or nil if unpinned.
+    /// The list payload already sorts pinned sessions first; the row draws a leading accent bar to
+    /// mark the state at rest, mirroring web's `.session-row.pinned`.
+    public let pinnedAt: String?
     /// The session's stored config. A LIVE session's composer shows these (the server's
     /// choice); before the session exists the pills reflect local picks instead.
     public let model: String?
@@ -98,6 +110,11 @@ public struct Session: Codable, Equatable, Sendable, Identifiable {
     public let lastAssistantText: String?
     public let lastToolUse: String?
     public let runningBgCount: Int?
+    /// Terminal-state detail the status glyph needs (mirrors web `StatusIcon`): `error` tells a
+    /// runner-offline disconnect apart from a real crash; `endReason` tells a benign recycle
+    /// (idle / task-done / user-ended — shown as dormant) apart from a hard cancel/orphan.
+    public let error: String?
+    public let endReason: String?
     /// The owning agent, nested by the list/detail payloads (the flat `agentId` is NOT sent
     /// there, so per-agent grouping reads `agent.id`).
     public let agent: SessionAgentRef?
@@ -107,7 +124,9 @@ public struct Session: Codable, Equatable, Sendable, Identifiable {
                 pendingApprovals: Int?, branch: String?,
                 updatedAt: String?, model: String? = nil, permissionMode: String? = nil,
                 effort: String? = nil, source: String? = nil, lastAssistantText: String? = nil,
-                lastToolUse: String? = nil, runningBgCount: Int? = nil, agent: SessionAgentRef? = nil) {
+                lastToolUse: String? = nil, runningBgCount: Int? = nil,
+                error: String? = nil, endReason: String? = nil, agent: SessionAgentRef? = nil,
+                pinnedAt: String? = nil, createdAt: String? = nil, lastTurnAt: String? = nil) {
         self.id = id
         self.title = title
         self.status = status
@@ -124,7 +143,12 @@ public struct Session: Codable, Equatable, Sendable, Identifiable {
         self.lastAssistantText = lastAssistantText
         self.lastToolUse = lastToolUse
         self.runningBgCount = runningBgCount
+        self.error = error
+        self.endReason = endReason
         self.agent = agent
+        self.pinnedAt = pinnedAt
+        self.createdAt = createdAt
+        self.lastTurnAt = lastTurnAt
     }
 }
 
@@ -242,6 +266,106 @@ public struct SessionDiff: Codable, Equatable, Sendable {
     public let patches: [FilePatch]
 }
 
+/// One file changed by a worktree-isolated session — the compact diff summary the runner computes
+/// (`git diff base..branch`). `status` is the git name-status letter (A/M/D/R/…); `additions` /
+/// `deletions` are -1 for a binary file. Mirrors `ChangedFile` in src/shared/src/dto.ts (web's
+/// `SessionChangedFile`) and rides on the `SessionDetail` payload, not the `/diff` side-table.
+public struct SessionChangedFile: Codable, Equatable, Sendable, Identifiable {
+    public let path: String
+    public let additions: Int
+    public let deletions: Int
+    public let status: String
+    public var id: String { path }
+    public init(path: String, additions: Int, deletions: Int, status: String) {
+        self.path = path
+        self.additions = additions
+        self.deletions = deletions
+        self.status = status
+    }
+}
+
+/// The agent nested on a session detail, as the worktree bar reads it: the id plus the agent's
+/// remembered default merge target (set when the user last switched targets in the merge dropdown;
+/// nil = the runner's auto-detected default). Distinct from `SessionAgentRef` (list rows), which
+/// carries name/model instead of the merge target.
+public struct SessionDetailAgent: Codable, Equatable, Sendable {
+    public let id: String
+    public let defaultMergeTarget: String?
+    public init(id: String, defaultMergeTarget: String? = nil) {
+        self.id = id
+        self.defaultMergeTarget = defaultMergeTarget
+    }
+}
+
+/// GET /sessions/:id — a single session's detail. Only the worktree-status-bar fields are typed
+/// (Codable ignores the rest of the payload); they mirror the same-named fields on web's
+/// `SessionDetail` and drive `WorktreeBarLogic`. The runner reports the live state each heartbeat
+/// (mid-turn diff / `worktreeDirty`) and the settled state at completion; merge/commit outcomes
+/// land on `mergeStatus` / `commitStatus` a heartbeat after the user acts. Optional throughout:
+/// older runners omit fields, and they're all null before the first worktree report.
+public struct SessionDetail: Codable, Equatable, Sendable, Identifiable {
+    public let id: String
+    /// The isolated branch this session's work lives on (`orbit/<slug>-<hash>`), or nil pre-isolation.
+    public let branch: String?
+    /// What the runner did: "worktree" (isolated) | "shared-nogit" (no git → the shared workDir).
+    public let isolationStatus: String?
+    /// Per-file diff summary of the worktree vs its base; empty when nothing changed.
+    public let changedFiles: [SessionChangedFile]?
+    /// True while the worktree has uncommitted changes (drives Commit vs Merge). Nil = not reported.
+    public let worktreeDirty: Bool?
+    /// "Merge to main" outcome: pending | merged | conflict | error. Nil until the user merges.
+    public let mergeStatus: String?
+    public let mergeError: String?
+    /// The branch the last merge targeted (nil = the runner's auto-detected default).
+    public let mergeTarget: String?
+    /// Candidate target branches for the "Merge to…" dropdown (empty/nil for older runners).
+    public let mergeTargets: [String]?
+    /// True when the branch tip already landed in the default target — the bar shows a "✓ In main"
+    /// chip instead of a redundant Merge button.
+    public let branchMerged: Bool?
+    /// Commit outcome: pending | committed | nochange | error. Nil until the user commits.
+    public let commitStatus: String?
+    public let commitError: String?
+    public let agent: SessionDetailAgent?
+    /// The public read-only share token, or nil when the session isn't shared. The owner GET
+    /// returns it (Prisma `include`, no `select`), so the Share sheet reads it to seed its
+    /// create-vs-revoke state. The shared page lives at `<baseURL>/s/<shareToken>`.
+    public let shareToken: String?
+
+    public init(id: String, branch: String? = nil, isolationStatus: String? = nil,
+                changedFiles: [SessionChangedFile]? = nil, worktreeDirty: Bool? = nil,
+                mergeStatus: String? = nil, mergeError: String? = nil, mergeTarget: String? = nil,
+                mergeTargets: [String]? = nil, branchMerged: Bool? = nil,
+                commitStatus: String? = nil, commitError: String? = nil,
+                agent: SessionDetailAgent? = nil, shareToken: String? = nil) {
+        self.id = id
+        self.branch = branch
+        self.isolationStatus = isolationStatus
+        self.changedFiles = changedFiles
+        self.worktreeDirty = worktreeDirty
+        self.mergeStatus = mergeStatus
+        self.mergeError = mergeError
+        self.mergeTarget = mergeTarget
+        self.mergeTargets = mergeTargets
+        self.branchMerged = branchMerged
+        self.commitStatus = commitStatus
+        self.commitError = commitError
+        self.agent = agent
+        self.shareToken = shareToken
+    }
+}
+
+/// POST /sessions/:id/share response — the minted (or, idempotently, the already-existing) public
+/// share token. The read-only page it unlocks lives at `<baseURL>/s/<shareToken>`.
+public struct ShareInfo: Codable, Equatable, Sendable {
+    public let shareToken: String
+    public let sharedAt: String
+    public init(shareToken: String, sharedAt: String) {
+        self.shareToken = shareToken
+        self.sharedAt = sharedAt
+    }
+}
+
 public struct AttachmentRef: Codable, Sendable {
     public let id: String
 }
@@ -254,14 +378,21 @@ public struct ResumeRequest: Codable, Sendable {
     public let model: String?
     public let permissionMode: String?
     public let effort: String?
+    /// Ids of pre-uploaded image attachments (already scoped to this session) to link to the
+    /// reviving turn. nil omits the field (text-only resume). Without this a resume of a dormant
+    /// session drops staged images — the durable `user` event then reconciles the optimistic
+    /// bubble away, so the image vanishes and the runner never receives it.
+    public let attachmentIds: [String]?
     public init(clientTurnId: String, content: String, kind: String? = nil,
-                model: String? = nil, permissionMode: String? = nil, effort: String? = nil) {
+                model: String? = nil, permissionMode: String? = nil, effort: String? = nil,
+                attachmentIds: [String]? = nil) {
         self.clientTurnId = clientTurnId
         self.content = content
         self.kind = kind
         self.model = model
         self.permissionMode = permissionMode
         self.effort = effort
+        self.attachmentIds = attachmentIds
     }
 }
 

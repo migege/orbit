@@ -39,6 +39,9 @@ export interface UserPreferences {
   theme?: 'system' | 'light' | 'dark';
   defaultModel?: string;
   defaultPermissionMode?: string;
+  /** Account-wide default reasoning effort for a new session (last-picked-wins). '' = model
+   *  default. Synced so the value carries to the iOS/macOS clients (replaces localStorage). */
+  defaultEffort?: string;
 }
 
 export interface Me {

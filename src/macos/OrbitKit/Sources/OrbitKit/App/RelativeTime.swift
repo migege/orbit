@@ -19,7 +19,8 @@ public enum RelativeTime {
     }
 
     /// ISO-8601 from the runner — try with then without fractional seconds (some payloads omit it).
-    private static func parse(_ iso: String) -> Date? {
+    /// Internal (not private) so recency sorting (`RecentsLogic`) parses timestamps the same way.
+    static func parse(_ iso: String) -> Date? {
         let parser = ISO8601DateFormatter()
         parser.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         if let d = parser.date(from: iso) { return d }

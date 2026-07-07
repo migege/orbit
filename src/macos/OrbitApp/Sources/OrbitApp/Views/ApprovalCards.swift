@@ -5,18 +5,40 @@ import OrbitKit
 /// by kind (tool permission / AskUserQuestion form / ExitPlanMode).
 struct ApprovalsView: View {
     let console: ConsoleModel
+    // Height ceiling for the stacked cards, passed from ConsoleView (≈half the console). The panel
+    // lives in a fixed, non-scrolling slot above the composer — unlike web, where the cards render
+    // inside the transcript's own scroll — so it has to bound and scroll itself. The default covers
+    // previews / any call site that doesn't measure.
+    var maxHeight: CGFloat = 380
+    // Natural height of the cards, measured so the panel hugs a short form yet caps a tall one.
+    @State private var contentHeight: CGFloat = 0
 
     var body: some View {
         if !console.state.pendingApprovals.isEmpty {
-            VStack(spacing: 8) {
-                ForEach(console.state.pendingApprovals) { approval in
-                    switch approval.kind {
-                    case .question: QuestionCard(console: console, approval: approval)
-                    case .plan:     PlanCard(console: console, approval: approval)
-                    case .tool:     ToolApprovalCard(console: console, approval: approval)
+            // Give the cards their own scroll: in the surrounding VStack a tall AskUserQuestion form
+            // (several questions, long option text) is vertically starved and collapses every line to
+            // a single ellipsized row — the reported "can't see the content". Inside a ScrollView the
+            // content gets unbounded height, so each line wraps in full; the frame caps the panel at
+            // `maxHeight` (it scrolls past that) and hugs the content below it, so a small card leaves
+            // no empty box and the transcript/composer keep their room.
+            ScrollView {
+                VStack(spacing: 8) {
+                    ForEach(console.state.pendingApprovals) { approval in
+                        switch approval.kind {
+                        case .question: QuestionCard(console: console, approval: approval)
+                        case .plan:     PlanCard(console: console, approval: approval)
+                        case .tool:     ToolApprovalCard(console: console, approval: approval)
+                        }
                     }
                 }
+                .background(
+                    GeometryReader { g in
+                        Color.clear.onChange(of: g.size.height, initial: true) { _, h in contentHeight = h }
+                    }
+                )
             }
+            .frame(height: min(contentHeight > 0 ? contentHeight : maxHeight, maxHeight))
+            .scrollBounceBehavior(.basedOnSize)   // solid when it fits; bounces (signals scroll) when capped
             .padding(.horizontal, 10)
             .padding(.top, 8)
         }
@@ -37,9 +59,9 @@ struct ToolApprovalCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Label(approval.toolName ?? "Tool", systemImage: "hand.raised.fill")
-                .foregroundStyle(.orange).font(.callout.bold())
+                .foregroundStyle(.orange).font(.orbitProse.bold())
             if let summary {
-                Text(summary).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(3)
+                Text(summary).font(.orbitMono).foregroundStyle(.secondary).lineLimit(3)
             }
             HStack {
                 Button("Allow") { Task { await console.decide(approval, behavior: .allow) } }
@@ -76,9 +98,9 @@ struct QuestionCard: View {
             ForEach(questions) { q in
                 VStack(alignment: .leading, spacing: 6) {
                     if let header = q.header {
-                        Text(header).font(.caption.bold()).foregroundStyle(.secondary)
+                        Text(header).font(.orbitLabel.bold()).foregroundStyle(.secondary)
                     }
-                    Text(q.question).font(.callout.bold())
+                    Text(q.question).font(.orbitProse.bold())
                     ForEach(q.options) { opt in
                         Button { toggle(q, opt.label) } label: {
                             HStack(alignment: .top, spacing: 8) {
@@ -87,7 +109,7 @@ struct QuestionCard: View {
                                 VStack(alignment: .leading, spacing: 1) {
                                     Text(opt.label)
                                     if let d = opt.description {
-                                        Text(d).font(.caption).foregroundStyle(.secondary)
+                                        Text(d).font(.orbitLabel).foregroundStyle(.secondary)
                                     }
                                 }
                                 Spacer()
@@ -97,9 +119,9 @@ struct QuestionCard: View {
                     }
                     // claude's AskUserQuestion always allows a free-typed answer, not just a listed option.
                     TextField("Or type your own answer…", text: customBinding(q))
-                        .textFieldStyle(.roundedBorder).font(.callout)
+                        .textFieldStyle(.roundedBorder).font(.orbitControl)
                     if q.multiSelect {
-                        Text("multi-select").font(.caption2).foregroundStyle(.secondary)
+                        Text("multi-select").font(.orbitMeta).foregroundStyle(.secondary)
                     }
                 }
             }
@@ -162,8 +184,8 @@ struct PlanCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label("Plan", systemImage: "list.bullet.clipboard").font(.callout.bold())
-            MarkdownView(source: plan).font(.callout).textSelection(.enabled)
+            Label("Plan", systemImage: "list.bullet.clipboard").font(.orbitProse.bold())
+            MarkdownView(source: plan).font(.orbitProse).textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
             HStack {
                 Button("Approve") { Task { await console.decide(approval, behavior: .allow) } }

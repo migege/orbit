@@ -21,13 +21,31 @@ struct OrbitiOSApp: App {
         WindowGroup {
             RootView()
                 .environment(model)
+                // The type ramp (Views/Typography.swift) tracks Dynamic Type; cap it at the first
+                // accessibility sizes so a dense console layout (tool cards, diffs, the composer
+                // footer) degrades gracefully instead of exploding at AX5. Larger needs are better
+                // served by system zoom until the layout is audited per-surface.
+                .dynamicTypeSize(...DynamicTypeSize.accessibility2)
+                // Tap anywhere outside a text field to lower the keyboard (installed once on the
+                // window). The transcript's `List` swallows a SwiftUI tap gesture, so this is done
+                // with a window-level UIKit recognizer instead.
+                .dismissesKeyboardOnBackgroundTap()
                 .onOpenURL { url in
                     if let route = DeepLink.parse(url) { model.route(to: route) }
                 }
                 .onChange(of: scenePhase) { _, phase in
-                    // iOS can suspend/terminate at will, so checkpoint the moment we leave the
-                    // foreground rather than relying on a clean quit.
-                    if phase != .active { model.consoleRegistry?.persistAll() }
+                    if phase == .active {
+                        // Returning to the foreground: a stream socket suspended in the background may
+                        // be dead but not yet erroring, so kick the open consoles to reconnect promptly
+                        // instead of waiting out URLSession's long read timeout.
+                        model.consoleRegistry?.reconnectAll()
+                        // Same for the user-level control-plane stream that keeps the lists fresh.
+                        model.kickControlPlane()
+                    } else {
+                        // iOS can suspend/terminate at will, so checkpoint the moment we leave the
+                        // foreground rather than relying on a clean quit.
+                        model.consoleRegistry?.persistAll()
+                    }
                 }
                 .task { model.bootstrap() }
         }
@@ -35,8 +53,8 @@ struct OrbitiOSApp: App {
 }
 
 /// Sign-in gate. Defined here (not shared) because the macOS `RootView` lives in the excluded
-/// `OrbitApp.swift`. Once signed in, the shell adapts to width: iPhone (compact) gets a tab bar
-/// (`CompactShell`), iPad (regular) keeps `MainView`'s three-column split.
+/// `OrbitApp.swift`. Once signed in, the shell adapts to width: iPhone (compact) gets a left-drawer
+/// shell (`CompactShell`), iPad (regular) keeps `MainView`'s three-column split.
 private struct RootView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.horizontalSizeClass) private var hSize

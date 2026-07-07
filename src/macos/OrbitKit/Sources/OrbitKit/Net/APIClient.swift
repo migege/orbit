@@ -22,7 +22,7 @@ public final class APIClient: @unchecked Sendable {
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
 
-    public init(baseURL: URL, tokenStore: TokenStore, session: URLSession = .shared) {
+    public init(baseURL: URL, tokenStore: TokenStore, session: URLSession = .orbitREST) {
         self.baseURL = baseURL
         self.tokenStore = tokenStore
         self.session = session
@@ -80,6 +80,24 @@ public final class APIClient: @unchecked Sendable {
 
     public func session(_ id: String) async throws -> Session { try await get("sessions/\(id)") }
 
+    /// GET /sessions/:id decoded to the worktree-status-bar detail (branch, changedFiles, merge /
+    /// commit status, targets). Same endpoint as `session(_:)`, but decodes the richer worktree
+    /// fields the list-shaped `Session` drops.
+    public func sessionDetail(_ id: String) async throws -> SessionDetail { try await get("sessions/\(id)") }
+
+    /// A page of a session's persisted events for tail-first loading (web parity): `tail=N` returns
+    /// the newest N (initial paint — open a long session at the latest message instead of replaying
+    /// its whole history over SSE), `before=<seq>&limit=N` the N events just older than a seq
+    /// (scroll-up). Events come back chronological (seq ascending).
+    public func eventPage(sessionID: String, tail: Int? = nil,
+                          before: Int? = nil, limit: Int? = nil) async throws -> EventPage {
+        var q: [URLQueryItem] = []
+        if let tail { q.append(URLQueryItem(name: "tail", value: String(tail))) }
+        if let before { q.append(URLQueryItem(name: "before", value: String(before))) }
+        if let limit { q.append(URLQueryItem(name: "limit", value: String(limit))) }
+        return try await get("sessions/\(sessionID)/events/page", query: q)
+    }
+
     public func createSession(_ req: CreateSessionRequest) async throws -> Session {
         try await post("sessions", body: req)
     }
@@ -98,6 +116,15 @@ public final class APIClient: @unchecked Sendable {
     public func archiveSession(_ id: String) async throws { _ = try await postRaw("sessions/\(id)/archive", body: Optional<Empty>.none) }
     public func restoreSession(_ id: String) async throws { _ = try await postRaw("sessions/\(id)/restore", body: Optional<Empty>.none) }
     public func deleteSession(_ id: String) async throws { try await deleteRaw("sessions/\(id)") }
+    /// Pin/unpin: personal ordering that floats the session to the top of every list (POST to set,
+    /// DELETE to clear). After either the caller refetches the list to pick up the new order.
+    public func pinSession(_ id: String) async throws { _ = try await postRaw("sessions/\(id)/pin", body: Optional<Empty>.none) }
+    public func unpinSession(_ id: String) async throws { try await deleteRaw("sessions/\(id)/pin") }
+    /// Share/unshare: mint (or clear) a public read-only link to this session's transcript, served
+    /// at `<baseURL>/s/<shareToken>` with no auth. `enableShare` is idempotent server-side (returns
+    /// the existing token if already shared); `disableShare` makes any live link 404 immediately.
+    public func enableShare(_ id: String) async throws -> ShareInfo { try await postEmpty("sessions/\(id)/share") }
+    public func disableShare(_ id: String) async throws { try await deleteRaw("sessions/\(id)/share") }
 
     // MARK: approvals
 

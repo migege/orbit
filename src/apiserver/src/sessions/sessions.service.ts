@@ -24,7 +24,7 @@ import { QueueService } from '../queue/queue.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { MAX_UPLOAD_BYTES } from '../attachments/attachments.media';
 import { CreateSessionDto, SessionConfigDto, SessionResumeDto, SessionTurnDto } from './dto';
-import { generateNaming } from './naming';
+import { generateNaming, titleFromPrompt } from './naming';
 
 // A single prompt / turn message past this size freezes the web & macOS clients (one giant
 // text node lays out synchronously on the main thread), so reject it here as the server-side
@@ -106,7 +106,7 @@ export class SessionsService {
     }
     if (refs.agentId) {
       const agent = await this.prisma.agent.findFirst({
-        where: { id: refs.agentId, ownerId },
+        where: { id: refs.agentId, ownerId, deletedAt: null },
         select: { id: true },
       });
       if (!agent) throw new ForbiddenException('agent not found');
@@ -128,21 +128,26 @@ export class SessionsService {
     // enough to know which machine + project dir to run in.
     let assignedRunnerId: string | undefined = dto.assignedRunnerId;
     let provider = AgentProvider.CLAUDE;
+    // Per-agent worktree toggle: default off. An agent with it turned off (the default)
+    // makes its sessions run with no branch, so the runner runs them in the shared workDir.
+    let enableWorktree = false;
     if (!assignedRunnerId && dto.agentId) {
       const agent = await this.prisma.agent.findFirst({
-        where: { id: dto.agentId, ownerId },
-        select: { runnerId: true, provider: true },
+        where: { id: dto.agentId, ownerId, deletedAt: null },
+        select: { runnerId: true, provider: true, enableWorktree: true },
       });
       if (!agent) throw new ForbiddenException('agent not found');
       assignedRunnerId = agent.runnerId ?? undefined;
       provider = agentProvider(agent.provider);
+      enableWorktree = agent.enableWorktree;
     } else if (dto.agentId) {
       const agent = await this.prisma.agent.findFirst({
-        where: { id: dto.agentId, ownerId },
-        select: { provider: true },
+        where: { id: dto.agentId, ownerId, deletedAt: null },
+        select: { provider: true, enableWorktree: true },
       });
       if (!agent) throw new ForbiddenException('agent not found');
       provider = agentProvider(agent.provider);
+      enableWorktree = agent.enableWorktree;
     }
     if (!assignedRunnerId) {
       throw new BadRequestException('pick an agent bound to a runner, or pass assignedRunnerId');
@@ -169,12 +174,12 @@ export class SessionsService {
     // runs claude in its own `git worktree` on this branch when the workDir is a git repo,
     // then commits the work here for a manual merge — harmless for non-git/shared runs.
     const naming = await generateNaming({ prompt: dto.prompt, title: dto.title });
-    const title = dto.title ?? naming.title ?? dto.prompt.slice(0, 80);
+    const title = dto.title ?? naming.title ?? titleFromPrompt(dto.prompt);
     const runtimeSessionId = randomUUID();
     const session = await this.prisma.session.create({
       data: {
         title,
-        branch: naming.branch,
+        branch: enableWorktree ? naming.branch : null,
         prompt: dto.prompt,
         status: RunStatus.PENDING,
         provider,
@@ -216,6 +221,9 @@ export class SessionsService {
       });
     }
     this.queue.notifySessionQueued();
+    // Push the new session to the owner's control-plane stream (GET /api/events) so other
+    // clients see it appear without polling.
+    this.realtime.publishSessionCreated(session.id);
     return session;
   }
 
@@ -264,6 +272,7 @@ export class SessionsService {
       mergeStatus: string | null;
       pinnedAt: Date | null;
       runningBgCount: number;
+      runningSubagentCount: number;
       agentId: string | null;
       agentName: string | null;
       agentModel: string | null;
@@ -290,6 +299,7 @@ export class SessionsService {
         s.merge_status    AS "mergeStatus",
         s.pinned_at       AS "pinnedAt",
         cardinality(s.running_bg_shells)::int AS "runningBgCount",
+        cardinality(s.running_subagents)::int AS "runningSubagentCount",
         a.id    AS "agentId",
         a.name  AS "agentName",
         a.model AS "agentModel",
@@ -328,6 +338,7 @@ export class SessionsService {
       mergeStatus: r.mergeStatus,
       pinnedAt: r.pinnedAt,
       runningBgCount: r.runningBgCount,
+      runningSubagentCount: r.runningSubagentCount,
       agent: r.agentId ? { id: r.agentId, name: r.agentName, model: r.agentModel } : null,
       assignedRunner: r.runnerId ? { id: r.runnerId, name: r.runnerName } : null,
       taskId: r.taskId,
@@ -417,6 +428,50 @@ export class SessionsService {
       status: session.status,
       createdAt: session.createdAt,
       events: events.map((e) => ({
+        seq: e.seq,
+        type: e.type,
+        payload: e.payload,
+        turnId: e.turnId ?? null,
+        ts: e.createdAt,
+      })),
+    };
+  }
+
+  /**
+   * A page of a session's persisted events for tail-first lazy loading. `tail` returns the
+   * newest N events (initial paint); `before`+`limit` return the N events immediately older
+   * than a seq (scroll-up). Both share one newest-first query that takes one extra row to
+   * report `hasMore`, then returns the page in chronological (seq asc) order.
+   */
+  async getEventPage(
+    userId: string,
+    id: string,
+    opts: { tail?: number; before?: number; limit?: number },
+  ): Promise<{
+    events: { seq: number; type: string; payload: unknown; turnId: string | null; ts: Date }[];
+    hasMore: boolean;
+  }> {
+    const session = await this.prisma.session.findFirst({
+      where: { id, ownerId: userId },
+      select: { id: true },
+    });
+    if (!session) throw new NotFoundException('session not found');
+    const take = Math.min(Math.max(Math.trunc(opts.limit ?? opts.tail ?? 200), 1), 500);
+    const where: { sessionId: string; seq?: { lt: number } } = { sessionId: id };
+    if (typeof opts.before === 'number' && Number.isFinite(opts.before)) {
+      where.seq = { lt: opts.before };
+    }
+    const rows = await this.prisma.runEvent.findMany({
+      where,
+      orderBy: { seq: 'desc' },
+      take: take + 1, // one extra row: its presence means older events remain
+      select: { seq: true, type: true, payload: true, turnId: true, createdAt: true },
+    });
+    const hasMore = rows.length > take;
+    const page = (hasMore ? rows.slice(0, take) : rows).reverse(); // back to seq asc
+    return {
+      hasMore,
+      events: page.map((e) => ({
         seq: e.seq,
         type: e.type,
         payload: e.payload,
@@ -1291,6 +1346,9 @@ export class SessionsService {
       await this.endLive(session, SessionEndReason.COMPLETED);
     }
     await this.prisma.session.update({ where: { id: session.id }, data: { archivedAt: new Date() } });
+    // Archive is a list-membership change with no STATUS event — signal the control plane so
+    // other clients drop the row without polling.
+    this.realtime.publishSessionEnded(session.id, session.status, SessionEndReason.COMPLETED);
     return { ok: true };
   }
 
@@ -1375,6 +1433,8 @@ export class SessionsService {
       await this.endLive(session, SessionEndReason.DELETED);
     }
     await this.prisma.session.update({ where: { id: session.id }, data: { deletedAt: new Date() } });
+    // Soft-delete is a list-membership change with no STATUS event — signal the control plane.
+    this.realtime.publishSessionEnded(session.id, session.status, SessionEndReason.DELETED);
     return { ok: true };
   }
 
@@ -1385,6 +1445,9 @@ export class SessionsService {
       where: { id },
       data: { archivedAt: null, deletedAt: null },
     });
+    // Back in the active list — same signal as a brand-new session (the control plane's
+    // session.created carries a full summary either way).
+    this.realtime.publishSessionCreated(id);
     return { ok: true };
   }
 

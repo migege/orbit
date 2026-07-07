@@ -34,3 +34,15 @@ public struct RunEvent: Codable, Equatable, Sendable {
         self.payload = (try? c.decodeIfPresent(JSONValue.self, forKey: .payload)) ?? .null
     }
 }
+
+/// One page of a session's persisted events (tail-first pagination — see `APIClient.eventPage`).
+/// `events` are chronological (seq ascending); `hasMore` is true when older events remain before
+/// this page. Mirrors the web `EventPage` (src/web/src/api.ts) and the server `/events/page`.
+public struct EventPage: Decodable, Sendable {
+    public let events: [RunEvent]
+    public let hasMore: Bool
+    public init(events: [RunEvent], hasMore: Bool) {
+        self.events = events
+        self.hasMore = hasMore
+    }
+}

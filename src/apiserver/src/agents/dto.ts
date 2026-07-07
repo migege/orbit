@@ -26,6 +26,9 @@ export class CreateAgentDto {
   @IsOptional() @IsArray() @IsString({ each: true }) allowedTools?: string[];
   @IsOptional() @IsArray() @IsString({ each: true }) disallowedTools?: string[];
   @IsOptional() @IsIn(PERMISSION_MODES) permissionMode?: string;
+  // Default reasoning effort a new session inherits ('' = model default). Kept a plain string
+  // (like the session DTO) so provider-specific values pass — codex adds 'minimal'.
+  @IsOptional() @IsString() effort?: string;
   @IsOptional() @IsNumber() maxTurns?: number;
   @IsOptional() @IsNumber() maxBudgetUsd?: number;
   @IsOptional() @IsObject() mcpConfig?: Record<string, unknown>;
@@ -38,6 +41,7 @@ export class CreateAgentDto {
   @IsOptional() @IsObject() env?: Record<string, string>;
   @IsOptional() @IsBoolean() enabled?: boolean;
   @IsOptional() @IsBoolean() autoInitGit?: boolean;
+  @IsOptional() @IsBoolean() enableWorktree?: boolean;
 }
 
 export class UpdateAgentDto {
@@ -50,6 +54,7 @@ export class UpdateAgentDto {
   @IsOptional() @IsArray() @IsString({ each: true }) allowedTools?: string[];
   @IsOptional() @IsArray() @IsString({ each: true }) disallowedTools?: string[];
   @IsOptional() @IsIn(PERMISSION_MODES) permissionMode?: string;
+  @IsOptional() @IsString() effort?: string;
   @IsOptional() @IsNumber() maxTurns?: number;
   @IsOptional() @IsNumber() maxBudgetUsd?: number;
   @IsOptional() @IsObject() mcpConfig?: Record<string, unknown>;
@@ -60,6 +65,7 @@ export class UpdateAgentDto {
   @IsOptional() @IsObject() env?: Record<string, string>;
   @IsOptional() @IsBoolean() enabled?: boolean;
   @IsOptional() @IsBoolean() autoInitGit?: boolean;
+  @IsOptional() @IsBoolean() enableWorktree?: boolean;
 }
 
 // The full agent list in the desired sidebar order; each id's index becomes its position.

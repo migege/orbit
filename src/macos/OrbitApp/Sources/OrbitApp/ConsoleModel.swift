@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import UniformTypeIdentifiers
+import Network
 import OrbitKit
 #if os(macOS)
 import AppKit
@@ -25,10 +26,14 @@ struct QuestionReply: Equatable, Sendable {
     let question: String
 }
 
+// One connection attempt's outcome is OrbitKit's `StreamOutcome`; the wait/stop decision after
+// each attempt is the unit-tested `ReconnectPolicy` (see `run()`).
+
 /// Drives one open session: the reconnecting SSE consume loop (folded through the verified
-/// `TranscriptReducer`) plus the interactive actions — send/queue/interrupt, tool approvals,
-/// and worktree commit/merge. All decision logic lives in OrbitKit (ComposerLogic / Approvals);
-/// this is the orchestration + UI-facing state.
+/// `TranscriptReducer`) plus the interactive actions — send/queue/interrupt and tool approvals.
+/// The worktree status bar's state + actions live in the owned `WorktreeModel` (`worktree`). All
+/// decision logic lives in OrbitKit (ComposerLogic / Approvals); this is the orchestration +
+/// UI-facing state.
 @MainActor
 @Observable
 final class ConsoleModel {
@@ -43,7 +48,19 @@ final class ConsoleModel {
     /// Draft only: fired with the freshly created session so the caller can open its live console.
     var onSessionCreated: ((Session) -> Void)?
     private(set) var state = TranscriptState()
+    /// Bumped once per published `state` snapshot. Views that only need "the transcript changed"
+    /// (auto-scroll, sticky-header recompute) observe this O(1) counter instead of an
+    /// `onChange(of: state.items)` that Equatable-compares the whole item array every publish.
+    private(set) var stateRevision = 0
     private(set) var connected = false
+
+    // Reconnect-loop state (see `run()`). `reconnectPolicy` decides wait-vs-stop and ramps the
+    // backoff (pure OrbitKit, unit-tested); `kickRequested` is set by `reconnectNow()` — the network
+    // monitor / app foregrounding — to cut a stalled read or a backoff wait short; `netWasSatisfied`
+    // debounces the path monitor so only a genuine down→up transition kicks.
+    private var reconnectPolicy = ReconnectPolicy()
+    private var kickRequested = false
+    private var netWasSatisfied = true
 
     // The session's lifecycle status per the server (REST). The SSE stream can't redeliver the
     // terminal transition (its event is broadcast live-only, never in the replayed log), so the
@@ -72,11 +89,16 @@ final class ConsoleModel {
     private(set) var slashItems: [SlashCommandInfo] = []
     var slashScope: String?   // nil = both kinds; "command"/"skill" when opened from the + menu
 
-    // worktree
-    private(set) var diff: [FilePatch] = []
-    private(set) var worktreeBusy = false
+    /// The worktree status bar's own model (detail snapshot + diffs + commit/merge actions) —
+    /// see `WorktreeModel`. Wired back to this console for the live status + the status line.
+    let worktree: WorktreeModel
 
     var statusMessage: String?
+
+    /// Newest persisted events pulled for the initial paint (web parity — `TAIL_PAGE`). See `run()`.
+    private static let tailPage = 200
+    /// Page size for scroll-up history fetches (web parity — `OLDER_PAGE`). See `loadOlder()`.
+    private static let olderPage = 200
 
     private var reducer = TranscriptReducer()
     private let stream: EventStreaming
@@ -91,7 +113,9 @@ final class ConsoleModel {
         self.agentID = agentID
         self.draftAgent = nil
         self.attachments = attachments
-        self.api = APIClient(baseURL: baseURL, tokenStore: tokenStore)
+        let api = APIClient(baseURL: baseURL, tokenStore: tokenStore)
+        self.api = api
+        self.worktree = WorktreeModel(sessionID: sessionID, api: api)
         // Live SSE transport on both macOS and iOS — `URLSessionEventStream` is available on both
         // (see EventStream's `#if os(macOS) || os(iOS)` guard). A draft console never starts its
         // stream, so the value there is inert.
@@ -100,6 +124,7 @@ final class ConsoleModel {
             self.reducer = reducer
             self.state = reducer.state   // render the persisted transcript instantly, before SSE connects
         }
+        wireWorktree()
     }
 
     /// Draft (pre-session) console backing the "new session" composer. There's no session yet, so it
@@ -112,7 +137,11 @@ final class ConsoleModel {
         self.agentID = agent.id
         self.draftAgent = agent
         self.attachments = attachments
-        self.api = APIClient(baseURL: baseURL, tokenStore: tokenStore)
+        let api = APIClient(baseURL: baseURL, tokenStore: tokenStore)
+        self.api = api
+        // Inert for a draft (its guards see the empty sessionID); real work starts once the created
+        // session's live console replaces this one.
+        self.worktree = WorktreeModel(sessionID: "", api: api)
         // Live SSE transport on both macOS and iOS — `URLSessionEventStream` is available on both
         // (see EventStream's `#if os(macOS) || os(iOS)` guard). A draft console never starts its
         // stream, so the value there is inert.
@@ -122,6 +151,18 @@ final class ConsoleModel {
         let m = agent.model ?? AgentDefaults.defaultModelID
         self.modelID = AgentDefaults.models.contains { $0.id == m } ? m : AgentDefaults.defaultModelID
         self.permissionMode = PermissionMode(rawValue: agent.permissionMode ?? "dontAsk") ?? .dontAsk
+        // Seed the effort pill from the agent's default too (web parity), so a new session shows —
+        // and starts at — the agent's configured effort unless the user overrides it.
+        if let ef = agent.effort, let e = Effort(rawValue: ef) { self.effort = e }
+        wireWorktree()
+    }
+
+    /// Hand the worktree sub-model the two bits of host context it needs: the live status (its poll
+    /// cadence) and the console status line (its action failures). Weak — it must not retain the
+    /// console it's owned by.
+    private func wireWorktree() {
+        worktree.isSessionLive = { [weak self] in self?.sessionStatus.isLive ?? false }
+        worktree.onStatus = { [weak self] msg in self?.statusMessage = msg }
     }
 
     /// Snapshot the full reducer (state + dedup/cursor internals) for the local store. Restoring
@@ -129,6 +170,27 @@ final class ConsoleModel {
     func snapshotReducer() -> TranscriptReducer { reducer }
 
     // MARK: live stream
+
+    /// The running `run()` loop, owned here rather than by the view's `.task`, so the registry can
+    /// start/stop it from the app's focus STATE instead of relying on SwiftUI to tear a `ConsoleView`
+    /// down. That guarantees the SSE connection is dropped the moment a session stops being focused —
+    /// even if SwiftUI keeps the off-screen console view cached — so streams can't quietly pile up in
+    /// the connection pool.
+    private var streamTask: Task<Void, Never>?
+
+    /// Begin the live SSE loop if it isn't already running. Idempotent (re-focusing the same session
+    /// is a no-op) and inert for a draft/session-less console.
+    func startStreaming() {
+        guard streamTask == nil, !isDraft, !sessionID.isEmpty else { return }
+        streamTask = Task { [weak self] in await self?.run() }
+    }
+
+    /// Cancel the live SSE loop and drop its connection. The reducer state stays cached, so a later
+    /// `startStreaming()` resumes from `maxSeq` (no full replay). Safe when not streaming.
+    func stopStreaming() {
+        streamTask?.cancel()
+        streamTask = nil
+    }
 
     func run() async {
         Task { await loadSlashItems() }   // one-shot; concurrent with the stream connect
@@ -138,52 +200,135 @@ final class ConsoleModel {
         // AskUserQuestion awaiting an answer) surfaces. Decoupled from the stream; cancels with run().
         let approvalsSeed = Task { [weak self] in await self?.refreshApprovals() }
         defer { approvalsSeed.cancel() }
-        var attempt = 0
-        while !Task.isCancelled {
-            do {
-                connected = true
-                for try await ev in stream.events(sessionID: sessionID, sinceSeq: reducer.state.maxSeq) {
-                    reducer.apply(ev)
-                    scheduleStatePublish()
-                    attempt = 0
-                }
-                connected = false
+
+        // Kick a reconnect the moment the network path is restored. This both cuts a pending backoff
+        // wait short AND tears down a read left stalled on a silently-dropped socket — the server
+        // sends no SSE heartbeat, so a dead connection would otherwise hang on URLSession's long
+        // timeout. `noteNetworkPath` debounces to a genuine down→up transition.
+        netWasSatisfied = true
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { [weak self] path in
+            let satisfied = path.status == .satisfied
+            Task { @MainActor in self?.noteNetworkPath(satisfied: satisfied) }
+        }
+        monitor.start(queue: DispatchQueue(label: "io.orbitd.console.netpath"))
+        defer { monitor.cancel() }
+
+        // Tail-first initial paint (web parity — commit 34f2d97, "open at the latest message
+        // first"). Rather than replaying the whole history over SSE — which on a long session is
+        // hundreds of KB read byte-by-byte, so the latest reply takes many seconds to surface, or
+        // never in practice — fetch just the newest page over HTTP, fold it in, then stream live
+        // from its max seq. Cold open only: a restored reducer already carries its transcript and
+        // maxSeq, so it skips straight to the SSE resume below (which streams seq > maxSeq).
+        if reducer.state.maxSeq == 0, !sessionID.isEmpty {
+            if let page = try? await api.eventPage(sessionID: sessionID, tail: Self.tailPage) {
+                reducer.applyTailPage(page)   // also records the scroll-up window cursor (hasMoreOlder)
                 publishStateNow()
-                // The stream closed — if the session ended during the drop, the terminal
-                // status broadcast was missed and won't be replayed, so refresh it from REST.
-                await refreshServerStatus()
-                try? await Task.sleep(nanoseconds: 300_000_000)
-            } catch is CancellationError {
-                publishStateNow()
-                return
-            } catch {
-                connected = false
-                attempt += 1
-                if attempt > 12 { return }
-                let ms = min(15_000, 500 * (1 << min(attempt, 5)))
-                try? await Task.sleep(nanoseconds: UInt64(ms) * 1_000_000)
             }
+        }
+
+        reconnectPolicy = ReconnectPolicy()
+        var isReconnect = false          // the first connect is seeded by `approvalsSeed` above
+        while !Task.isCancelled {
+            kickRequested = false
+            // On a reconnect (foregrounded / network back / dropped stream), re-fetch the durable
+            // approvals. A card resolved elsewhere — e.g. answered on the web client — while this
+            // socket was suspended won't replay, since its `approval_resolved` rides seq 0 (live-only),
+            // so without this the stale card lingers. iOS suspends sockets on background, making this
+            // the common path there. Kicked concurrently so it doesn't delay the reconnect.
+            if isReconnect { Task { [weak self] in await self?.refreshApprovals() } }
+            isReconnect = true
+            let outcome = await withTaskGroup(of: StreamOutcome.self) { group in
+                // The live read, on the main actor (folds into the shared reducer). Ends on a clean
+                // close, throws on a drop, or is cancelled by the kick watcher / view teardown.
+                group.addTask { @MainActor [self] in
+                    do {
+                        connected = true
+                        for try await ev in stream.events(sessionID: sessionID, sinceSeq: reducer.state.maxSeq) {
+                            reducer.apply(ev)
+                            scheduleStatePublish()
+                            reconnectPolicy.noteHealthy()   // a healthy connection resets the backoff ramp
+                        }
+                        return .ended
+                    } catch is CancellationError {
+                        return .cancelled
+                    } catch {
+                        return .failed
+                    }
+                }
+                // Kick watcher: when `reconnectNow()` fires (network back / app foregrounded), win the
+                // race so the group cancels the read above and the loop reconnects immediately.
+                group.addTask { @MainActor [self] in
+                    while !Task.isCancelled {
+                        if kickRequested { return .kicked }
+                        try? await Task.sleep(nanoseconds: 200_000_000)
+                    }
+                    return .cancelled
+                }
+                let first = await group.next() ?? .cancelled
+                group.cancelAll()
+                return first
+            }
+
+            connected = false
+            // Orchestration side effects stay here; the wait/stop decision (backoff ramp, kick
+            // reset, retry-forever) is the unit-tested `ReconnectPolicy`. A clean close can mean
+            // the session ended during the drop — that terminal broadcast is never replayed, so
+            // refresh the status from REST before reconnecting.
+            if outcome == .ended || outcome == .cancelled { publishStateNow() }
+            if outcome == .ended { await refreshServerStatus() }
+            switch reconnectPolicy.next(after: outcome) {
+            case .stop:
+                return
+            case .reconnect(let ms):
+                if ms > 0 { await backoffSleep(ms: ms) }
+            }
+        }
+    }
+
+    /// Force the live stream to reconnect immediately: abandons a stalled read or a backoff wait and
+    /// loops again with the backoff reset. Fed by the network monitor and app foregrounding; a no-op
+    /// when the loop isn't running. Idempotent — the flag is cleared at the top of each attempt.
+    func reconnectNow() { kickRequested = true }
+
+    /// Path-monitor callback: kick a reconnect only on a genuine down→up transition, so a stable
+    /// network (which reports `.satisfied` once at startup) doesn't churn the live connection.
+    private func noteNetworkPath(satisfied: Bool) {
+        if satisfied && !netWasSatisfied { reconnectNow() }
+        netWasSatisfied = satisfied
+    }
+
+    /// Backoff sleep that returns early on a reconnect kick or task cancellation, so a restored
+    /// connection doesn't wait out the full exponential backoff. Sliced fine enough to feel instant.
+    private func backoffSleep(ms: Int) async {
+        var remaining = ms
+        while remaining > 0, !Task.isCancelled, !kickRequested {
+            let slice = min(remaining, 200)
+            try? await Task.sleep(nanoseconds: UInt64(slice) * 1_000_000)
+            remaining -= slice
         }
     }
 
     // Coalesce transcript publishes. A busy replay or live stream would otherwise copy the full
     // state and re-render the whole transcript PER event (≈ O(N²) over the session), pegging the
     // main actor — opening a busy session froze the app near 100% CPU. Events still fold into the
-    // reducer eagerly; the rendered snapshot is pushed to the view at most ~20×/sec.
+    // reducer eagerly; the rendered snapshot is pushed to the view at most ~5×/sec. (Was ~20×/sec:
+    // every publish re-lays-out the streaming row and re-runs the List diff, and on iPhone that
+    // cadence alone kept the CPU pegged for a whole watched turn — a top battery/heat hotspot.
+    // 200ms still reads as live typing.)
     private var publishScheduled = false
     private func scheduleStatePublish() {
         guard !publishScheduled else { return }
         publishScheduled = true
         Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 50_000_000)
+            try? await Task.sleep(nanoseconds: 200_000_000)
             guard let self else { return }
-            self.publishScheduled = false
-            self.state = self.reducer.state
-            self.reconcileReplyContext()
+            self.publishStateNow()
         }
     }
     private func publishStateNow() {
         publishScheduled = false
+        stateRevision &+= 1
         state = reducer.state
         reconcileReplyContext()
     }
@@ -194,6 +339,41 @@ final class ConsoleModel {
         if let r = replyContext, !state.pendingApprovals.contains(where: { $0.id == r.approvalID }) {
             replyContext = nil
         }
+    }
+
+    // MARK: - scroll-up history paging (web parity: AgentView's loadOlder)
+
+    /// True while an older-history fetch is in flight — the single-flight guard.
+    private(set) var loadingOlder = false
+    /// One-shot scroll anchor: set on each successful prepend to the id of the row that was the
+    /// window's first BEFORE older rows grew above it. The transcript consumes it on the next
+    /// `stateRevision` bump and re-pins that row, holding what the user was reading steady (web
+    /// keeps `scrollTop` constant in a layout effect; SwiftUI's List needs an explicit scrollTo).
+    private var prependAnchorID: String?
+
+    /// Consume the pending prepend anchor (nil when the last publish wasn't a prepend).
+    func takePrependAnchor() -> String? {
+        defer { prependAnchorID = nil }
+        return prependAnchorID
+    }
+
+    /// Pull the next older history page and graft it above the loaded window. Triggered by the
+    /// transcript's load-earlier row scrolling into view; no-op while a fetch is already in
+    /// flight, when the whole history is loaded (`hasMoreOlder` false), or before a window
+    /// cursor exists. A failed fetch is silent — scrolling re-triggers it.
+    func loadOlder() async {
+        guard !loadingOlder, !sessionID.isEmpty,
+              state.hasMoreOlder, let before = state.oldestSeq else { return }
+        loadingOlder = true
+        defer { loadingOlder = false }
+        guard let page = try? await api.eventPage(sessionID: sessionID,
+                                                  before: before, limit: Self.olderPage) else { return }
+        let anchor = reducer.state.items.first?.id
+        reducer.prependOlder(page)
+        // Re-pin only when rows actually grew above the old first row (id unchanged ⇒ nothing
+        // prepended — e.g. the cursor hit the start — and yanking the scroll would be wrong).
+        if let anchor, reducer.state.items.first?.id != anchor { prependAnchorID = anchor }
+        publishStateNow()
     }
 
     // MARK: composer
@@ -220,18 +400,26 @@ final class ConsoleModel {
     // re-spawns claude (see SessionsService.updateConfig). So we only push genuine user edits.
     private var syncedConfig: (model: String, permissionMode: String, effort: String)?
 
-    /// Load the footer context once: the owning agent's name + the runner's plan usage, and —
-    /// for a LIVE session — adopt its stored model/permission/effort so the pills show the
-    /// server's choice (matching web). A terminal session keeps the local picks for resume.
+    /// Load the footer context once: the owning agent's name + the runner's plan usage, and
+    /// adopt the session's stored model/permission/effort so the pills show its real settings
+    /// (matching web — see AgentView's seed effects). This runs for terminal sessions too: a
+    /// resumable session's pills seed its next resume, and without it the Mode pill would stick
+    /// at the hardcoded `.default` instead of the mode the session actually uses.
     private func loadContext() async {
         guard let s = try? await api.session(sessionID) else { return }
         serverStatus = s.status
         agentName = s.agent?.name
         provider = s.provider ?? s.agent?.provider ?? "claude"
+        if let m = s.model { modelID = m }
+        // A stored mode is adopted verbatim; a session with no stored mode falls back to
+        // `dontAsk` (web's `permissionMode ?? 'dontAsk'`), never the hardcoded `.default`.
+        if let pm = s.permissionMode { permissionMode = PermissionMode(rawValue: pm) ?? .default }
+        else { permissionMode = .dontAsk }
+        if let ef = s.effort, let e = Effort(rawValue: ef) { effort = e }
+        // A LIVE session pushes later pill edits to the server (PATCH /config); record the
+        // adopted values so `applyConfig` can distinguish a real user edit from this adopt.
+        // A terminal session isn't live, so its pills stay local until the next resume.
         if ComposerLogic.isLive(status: s.status) {
-            if let m = s.model { modelID = m }
-            if let pm = s.permissionMode, let mode = PermissionMode(rawValue: pm) { permissionMode = mode }
-            if let ef = s.effort, let e = Effort(rawValue: ef) { effort = e }
             syncedConfig = (modelID, permissionMode.rawValue, effort.rawValue)
         }
         // Plan usage rides the GET /runners list (there's no per-runner detail endpoint —
@@ -342,7 +530,7 @@ final class ConsoleModel {
         // tagged below once POST returns — the runner echoes turnId, not clientTurnId).
         reducer.addOptimisticUser(clientTurnId: clientTurnId, text: text, attachments: turnAttachments,
                                   queued: willQueue)
-        state = reducer.state
+        publishStateNow()   // revision bump → the transcript auto-scrolls the new bubble into view
         composerText = ""
         pendingAttachments = []
 
@@ -355,7 +543,8 @@ final class ConsoleModel {
                                          ResumeRequest(clientTurnId: clientTurnId, content: text,
                                                        kind: shell ? "shell" : "message",
                                                        model: modelID, permissionMode: permissionMode.rawValue,
-                                                       effort: effort.wire))
+                                                       effort: effort.wire,
+                                                       attachmentIds: attachmentIds.isEmpty ? nil : attachmentIds))
                 // The session is revived (back to PENDING/RUNNING); drop the stale terminal
                 // snapshot so the stream drives status again and a quick follow-up doesn't
                 // re-resume a session that hasn't re-claimed yet.
@@ -370,7 +559,7 @@ final class ConsoleModel {
             // clientTurnId). The POST response always precedes that event — see setOptimisticTurnId.
             if let tid = accepted.turnId {
                 reducer.setOptimisticTurnId(clientTurnId: clientTurnId, turnId: tid)
-                state = reducer.state
+                publishStateNow()
             }
         } catch {
             statusMessage = "Send failed — \(error)"
@@ -393,8 +582,11 @@ final class ConsoleModel {
         defer { sending = false }
         do {
             let session = try await api.createSession(CreateSessionRequest(
+                // Send the raw effort — "" (Default) included — not `.wire` (which omits Default):
+                // the pill is seeded from the agent's default, so an explicit Default must stick
+                // rather than fall back to the agent's effort server-side. Web parity (AgentView).
                 prompt: text, agentId: agent.id, model: modelID,
-                permissionMode: permissionMode.rawValue, effort: effort.wire,
+                permissionMode: permissionMode.rawValue, effort: effort.rawValue,
                 shell: shell ? true : nil,
                 attachmentIds: attachmentIds.isEmpty ? nil : attachmentIds))
             composerText = ""
@@ -514,40 +706,22 @@ final class ConsoleModel {
         }
     }
 
-    /// Fetch durable pending approvals (the REST source of truth) and fold them in. Without this
-    /// a prompt that predates the stream — or whose seq-0 nudge landed during a reconnect gap —
-    /// never surfaces, since those nudges aren't replayed.
+    /// Fetch durable pending approvals (the REST source of truth) and reconcile them into the
+    /// reducer. This both *surfaces* a prompt that predates the stream (or whose seq-0 nudge landed
+    /// during a reconnect gap — those nudges aren't replayed) and *clears* a card resolved elsewhere
+    /// (e.g. answered on the web client) while this socket was suspended, whose `approval_resolved`
+    /// we likewise never received. The `knownBefore` snapshot is captured before the await so a live
+    /// nudge that folds in during the fetch isn't mistaken for a stale card and dropped.
     private func refreshApprovals() async {
+        let knownBefore = Set(reducer.state.pendingApprovals.map(\.id))
         guard let infos = try? await api.approvals(sessionID: sessionID) else { return }
-        reducer.seedApprovals(infos.map {
+        reducer.reconcileApprovals(infos.map {
             PendingApproval(id: $0.id, kind: Approvals.kind(toolName: $0.toolName),
                             toolName: $0.toolName, input: $0.input)
-        })
+        }, knownBefore: knownBefore)
         publishStateNow()
     }
 
-    // MARK: worktree
-
-    func loadDiff() async {
-        worktreeBusy = true
-        defer { worktreeBusy = false }
-        do { diff = try await api.diff(sessionID: sessionID).patches }
-        catch { /* keep last */ }
-    }
-
-    func commit() async {
-        worktreeBusy = true
-        defer { worktreeBusy = false }
-        do { try await api.commit(sessionID: sessionID); statusMessage = "Commit requested" }
-        catch { statusMessage = "Commit failed" }
-    }
-
-    func merge(target: String?) async {
-        worktreeBusy = true
-        defer { worktreeBusy = false }
-        do { try await api.merge(sessionID: sessionID, targetBranch: target); statusMessage = "Merge requested" }
-        catch { statusMessage = "Merge failed" }
-    }
 }
 
 /// Downsample an image to a small PNG for the composer's thumbnail chip. Done once at attach time

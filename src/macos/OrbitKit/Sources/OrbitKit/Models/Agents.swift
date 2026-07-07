@@ -16,6 +16,7 @@ public struct CreateAgentRequest: Encodable, Sendable {
     public let allowedTools: [String]?
     public let disallowedTools: [String]?
     public let permissionMode: String?
+    public let effort: String?
     public let maxTurns: Int?
     public let maxBudgetUsd: Double?
     public let targetRunnerId: String?
@@ -29,7 +30,8 @@ public struct CreateAgentRequest: Encodable, Sendable {
     public init(name: String, description: String? = nil, model: String? = nil,
                 appendSystemPrompt: String? = nil, systemPrompt: String? = nil,
                 allowedTools: [String]? = nil, disallowedTools: [String]? = nil,
-                permissionMode: String? = nil, maxTurns: Int? = nil, maxBudgetUsd: Double? = nil,
+                permissionMode: String? = nil, effort: String? = nil,
+                maxTurns: Int? = nil, maxBudgetUsd: Double? = nil,
                 targetRunnerId: String? = nil, targetLabels: [String]? = nil,
                 runnerId: String? = nil, workDir: String? = nil, env: [String: String]? = nil,
                 enabled: Bool? = nil, autoInitGit: Bool? = nil) {
@@ -41,6 +43,7 @@ public struct CreateAgentRequest: Encodable, Sendable {
         self.allowedTools = allowedTools
         self.disallowedTools = disallowedTools
         self.permissionMode = permissionMode
+        self.effort = effort
         self.maxTurns = maxTurns
         self.maxBudgetUsd = maxBudgetUsd
         self.targetRunnerId = targetRunnerId
@@ -63,6 +66,7 @@ public struct UpdateAgentRequest: Encodable, Sendable {
     public var allowedTools: [String]?
     public var disallowedTools: [String]?
     public var permissionMode: String?
+    public var effort: String?
     public var maxTurns: Int?
     public var maxBudgetUsd: Double?
     public var targetRunnerId: String?
@@ -76,7 +80,8 @@ public struct UpdateAgentRequest: Encodable, Sendable {
     public init(name: String? = nil, description: String? = nil, model: String? = nil,
                 appendSystemPrompt: String? = nil, systemPrompt: String? = nil,
                 allowedTools: [String]? = nil, disallowedTools: [String]? = nil,
-                permissionMode: String? = nil, maxTurns: Int? = nil, maxBudgetUsd: Double? = nil,
+                permissionMode: String? = nil, effort: String? = nil,
+                maxTurns: Int? = nil, maxBudgetUsd: Double? = nil,
                 targetRunnerId: String? = nil, targetLabels: [String]? = nil,
                 runnerId: String? = nil, workDir: String? = nil, env: [String: String]? = nil,
                 enabled: Bool? = nil, autoInitGit: Bool? = nil) {
@@ -88,6 +93,7 @@ public struct UpdateAgentRequest: Encodable, Sendable {
         self.allowedTools = allowedTools
         self.disallowedTools = disallowedTools
         self.permissionMode = permissionMode
+        self.effort = effort
         self.maxTurns = maxTurns
         self.maxBudgetUsd = maxBudgetUsd
         self.targetRunnerId = targetRunnerId

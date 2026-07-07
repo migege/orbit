@@ -81,12 +81,15 @@ func mergeTargetsForWT(wt *Worktree) []string {
 	return listMergeTargets(wt.RepoDir)
 }
 
-// branchMergedInto reports whether the worktree's branch tip is already an ancestor of the repo's
-// default merge target (main, else master) — i.e. the work already landed there, e.g. via an
-// out-of-band command-line merge. The status bar shows a "✓ In main" chip instead of a redundant
-// Merge button when true. Mirrors mergeToMain's auto-detected default (it judges the same target
-// the plain "Merge to main" button would use). False when nothing's isolated, no target exists,
-// or git can't decide — a conservative default that keeps the actionable Merge button.
+// branchMergedInto reports whether the worktree's branch has already landed in the repo's default
+// merge target (main, else master), so the status bar shows a "✓ In main" chip instead of a
+// redundant Merge button. Two ways it can already be there: the branch tip is an ancestor of the
+// target (a fast-forward or a command-line push), OR every commit since the fork has an equivalent
+// patch in the target (a squash/rebase merge — including Orbit's own "Merge to main", which rebases
+// the branch onto the target and so replays its commits under fresh SHAs that is-ancestor can't
+// match). Mirrors mergeToMain's auto-detected default (it judges the same target the plain "Merge
+// to main" button would use). False when nothing's isolated, no target exists, the branch is the
+// target, or git can't decide — a conservative default that keeps the actionable Merge button.
 func branchMergedInto(wt *Worktree) bool {
 	if wt == nil || wt.Branch == "" {
 		return false
@@ -101,10 +104,48 @@ func branchMergedInto(wt *Worktree) bool {
 	if target == "" || target == wt.Branch {
 		return false
 	}
-	// `merge-base --is-ancestor A B` exits 0 when A is contained in B, 1 when not, 128 on error;
-	// git() returns a non-nil error for any non-zero exit, so err == nil ⇔ already merged.
-	_, err := git(wt.RepoDir, "merge-base", "--is-ancestor", wt.Branch, target)
-	return err == nil
+	// A branch that never committed past its fork point still has its tip sitting at BaseSha,
+	// which is by construction already in main's history — so is-ancestor would trivially say
+	// "merged" for a session that did no work. Require ≥1 commit past the fork before claiming
+	// the work landed; otherwise there was nothing to merge. (Genuinely merged branches keep
+	// their commits ahead of the old fork point, so they still count as ahead here.)
+	if wt.BaseSha != "" {
+		ahead, err := git(wt.RepoDir, "rev-list", "--count", wt.BaseSha+".."+wt.Branch)
+		if err == nil && strings.TrimSpace(ahead) == "0" {
+			return false
+		}
+	}
+	// Fast path — the branch tip is literally contained in the target (a fast-forward, or a
+	// command-line `push origin HEAD:main`). `merge-base --is-ancestor A B` exits 0 when A is an
+	// ancestor of B, non-zero otherwise; git() returns a non-nil error for any non-zero exit, so
+	// err == nil ⇔ already merged.
+	if _, err := git(wt.RepoDir, "merge-base", "--is-ancestor", wt.Branch, target); err == nil {
+		return true
+	}
+	// Slow path — the branch's work landed in the target under NEW commit hashes, so is-ancestor
+	// can't see it: a squash-merge, a rebase, or Orbit's own "Merge to main" (which rebases the
+	// branch onto the target, replaying its commits with fresh SHAs). Fall back to patch-id
+	// equivalence: `git cherry <target> <branch>` lists each of the branch's post-fork commits,
+	// prefixed '-' when an equivalent patch already exists in the target, '+' when it doesn't. Every
+	// commit accounted for ('-', none '+') ⇒ the work is in the target under a different identity —
+	// still merged. Any '+' (or a git error / empty output) stays conservatively false, keeping the
+	// actionable Merge button.
+	out, err := git(wt.RepoDir, "cherry", target, wt.Branch)
+	if err != nil {
+		return false
+	}
+	merged := false
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "+") {
+			return false // a post-fork commit has no equivalent in the target yet
+		}
+		merged = true // a '-' line: this commit's patch already exists in the target
+	}
+	return merged
 }
 
 // defaultGitignore is written into a non-git workDir before its baseline commit (only when
@@ -268,18 +309,26 @@ const parkCheckpointTrailer = "Orbit-Park-Checkpoint"
 // terminal completion, before /complete, so the work is captured on the branch even though
 // the checkout dir may then be removed. `checkpoint` tags the commit as an undo-on-resume park
 // checkpoint (see parkCheckpointTrailer) rather than a permanent end commit.
-func finalizeWorktree(wt *Worktree, title string, checkpoint bool) ([]ChangedFile, []FilePatch) {
+//
+// The commit subject is derived from the diff, never the session title/prompt: a permanent end
+// gets an LLM-summarized Conventional-Commits message (diffstat fallback, same as the manual
+// Commit button), while a transient park checkpoint gets only the cheap deterministic diffstat
+// (no LLM call on the frequent park path). This keeps a raw first prompt out of git history when
+// session-naming produced no clean title.
+func finalizeWorktree(wt *Worktree, checkpoint bool) ([]ChangedFile, []FilePatch) {
 	if _, err := git(wt.Path, "add", "-A"); err != nil {
 		logln("worktree add failed for", wt.Session+":", err)
 	}
 	// `diff --cached --quiet` exits non-zero when something is staged → there's work to commit.
 	if _, err := git(wt.Path, "diff", "--cached", "--quiet"); err != nil {
-		msg := strings.TrimSpace(title)
-		if msg == "" {
-			msg = "orbit session " + wt.Session
-		}
+		var msg string
 		if checkpoint {
-			msg += "\n\n" + parkCheckpointTrailer + ": " + wt.Session
+			// Transient snapshot, undone on resume — keep it cheap and deterministic.
+			msg = diffstatFallbackMessage(wt.Path, wt.Branch) + "\n\n" + parkCheckpointTrailer + ": " + wt.Session
+		} else {
+			// Permanent commit that stays on the branch and may merge to main — summarize the
+			// diff into a real message, never the raw session title/prompt.
+			msg = generateCommitMessage(wt.Path, diffstatFallbackMessage(wt.Path, wt.Branch))
 		}
 		// Inline identity so the commit never fails on a runner with no git user.* set;
 		// --no-verify so a repo's pre-commit hook can't block finalization.

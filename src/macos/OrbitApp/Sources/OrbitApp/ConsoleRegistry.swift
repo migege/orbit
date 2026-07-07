@@ -24,6 +24,9 @@ final class ConsoleRegistry {
     let attachments: AttachmentImageStore
 
     private var models: [String: ConsoleModel] = [:]
+    /// The one session whose SSE stream is currently running (at most one), or nil when no console is
+    /// focused. Driven by `focus(_:agentID:)` off the app's focus state.
+    private var streamingSessionID: String?
     private var lru: LRUOrder
     /// `maxSeq` last written to disk per session — lets `persist` skip no-op saves.
     private var savedSeq: [String: Int] = [:]
@@ -72,6 +75,20 @@ final class ConsoleRegistry {
     /// spinner.
     func peek(_ sessionID: String) -> ConsoleModel? { models[sessionID] }
 
+    /// Make `sessionID` the single streaming console: start its live SSE loop and stop whichever one
+    /// was streaming before. Pass nil (leaving a console for its list) to stop all streams. Idempotent
+    /// — re-focusing the streaming session is a no-op. Driven by the app's focus STATE (see
+    /// `AppModel.syncConsoleFocus`), NOT SwiftUI view lifecycle, so a console view SwiftUI happens to
+    /// keep cached still has its stream stopped the moment it stops being focused — the connection
+    /// can't linger. Mutates the cache; call from an event handler, never a view `body`.
+    func focus(_ sessionID: String?, agentID: String? = nil) {
+        guard sessionID != streamingSessionID else { return }
+        if let prev = streamingSessionID { models[prev]?.stopStreaming() }
+        streamingSessionID = sessionID
+        guard let sessionID else { return }
+        model(for: sessionID, agentID: agentID).startStreaming()   // hydrate + mark MRU, then stream
+    }
+
     /// Persist a session's transcript if it advanced since the last write. Called for the focused
     /// session on the poll cadence (so a crash loses at most a few seconds) and when leaving it.
     func flush(_ sessionID: String?) {
@@ -84,10 +101,20 @@ final class ConsoleRegistry {
         for (id, model) in models { persist(id, model) }
     }
 
+    /// Nudge every cached console to reconnect its live stream now — called when the app returns to
+    /// the foreground, where a socket suspended in the background can be dead but not yet erroring.
+    /// Only the focused console has a running stream loop; for the rest this sets a flag that's
+    /// cleared the next time they run, so it's a harmless no-op.
+    func reconnectAll() {
+        for model in models.values { model.reconnectNow() }
+    }
+
     /// Drop all in-memory consoles after persisting them (sign-out). Disk snapshots remain for the
     /// next sign-in.
     func reset() {
         persistAll()
+        for model in models.values { model.stopStreaming() }
+        streamingSessionID = nil
         models.removeAll()
         savedSeq.removeAll()
         lru = LRUOrder(capacity: lru.capacity)
@@ -110,7 +137,8 @@ final class ConsoleRegistry {
     }
 
     private func evict(_ sessionID: String) {
-        if let model = models[sessionID] { persist(sessionID, model) }
+        if let model = models[sessionID] { persist(sessionID, model); model.stopStreaming() }
+        if streamingSessionID == sessionID { streamingSessionID = nil }
         models[sessionID] = nil
     }
 }

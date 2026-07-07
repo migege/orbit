@@ -295,6 +295,70 @@ func TestBranchMergedInto(t *testing.T) {
 	}
 }
 
+// TestBranchMergedInto_ZeroCommitsPastFork: a session whose branch never committed anything
+// still has its tip sitting at the fork point, which is already in main's history — so a naive
+// is-ancestor check would falsely report "✓ In main" for a session that did no work. With a
+// known BaseSha we require ≥1 commit past the fork before claiming the work landed.
+func TestBranchMergedInto_ZeroCommitsPastFork(t *testing.T) {
+	repo := initRepo(t) // main + base commit
+	base := mustGit(t, repo, "rev-parse", "HEAD")
+
+	// Fork a branch at main's HEAD but never commit on it — tip == base == in main.
+	mustGit(t, repo, "checkout", "-b", "orbit/empty")
+	empty := &Worktree{Branch: "orbit/empty", BaseSha: base, RepoDir: repo}
+	if branchMergedInto(empty) {
+		t.Error("a branch with zero commits past its fork must report not-merged, not '✓ In main'")
+	}
+
+	// Once it has a commit and is ff-merged into main, it must report merged even with BaseSha set.
+	commitFile(t, repo, "feat.txt", "feature\n", "feat work")
+	mustGit(t, repo, "checkout", "main")
+	mustGit(t, repo, "merge", "--ff-only", "orbit/empty")
+	if !branchMergedInto(empty) {
+		t.Error("a branch with real commits already in main must report merged")
+	}
+}
+
+// TestBranchMergedInto_PatchEquivalent: a branch whose commit landed in the target under a
+// DIFFERENT sha — a squash/rebase merge, or Orbit's own rebase-based "Merge to main" — is still
+// merged even though is-ancestor can't see it. This is the false-positive Merge button the
+// patch-id fallback fixes.
+func TestBranchMergedInto_PatchEquivalent(t *testing.T) {
+	repo := initRepo(t) // main + base commit
+	base := mustGit(t, repo, "rev-parse", "HEAD")
+
+	// Fork a branch and commit real work on it.
+	mustGit(t, repo, "checkout", "-b", "orbit/feat")
+	commitFile(t, repo, "feat.txt", "feature\n", "feat work")
+	tip := mustGit(t, repo, "rev-parse", "HEAD")
+	feat := &Worktree{Branch: "orbit/feat", BaseSha: base, RepoDir: repo}
+
+	// Advance main on its own first, then replay the branch's patch on top: a different parent (and
+	// tree) forces a NEW sha — the real "branch forked, main moved on, the work landed ahead under a
+	// fresh hash" shape a squash/rebase merge (and Orbit's "Merge to main") produces. A bare
+	// cherry-pick onto the same base could reuse the identical sha and defeat the point.
+	mustGit(t, repo, "checkout", "main")
+	commitFile(t, repo, "unrelated.txt", "unrelated\n", "unrelated main work")
+	mustGit(t, repo, "cherry-pick", tip)
+
+	// Precondition: is-ancestor no longer sees it (main's copy carries a different sha).
+	if _, err := git(repo, "merge-base", "--is-ancestor", "orbit/feat", "main"); err == nil {
+		t.Fatal("precondition: a re-hashed merge must leave the branch tip NOT an ancestor of main")
+	}
+	if !branchMergedInto(feat) {
+		t.Error("a branch whose patch already landed in main (different sha) must report merged")
+	}
+
+	// A branch with work genuinely absent from main still reports not-merged via the same fallback
+	// (cherry marks its commit '+'), so the actionable Merge button stays.
+	mustGit(t, repo, "checkout", "-b", "orbit/other")
+	commitFile(t, repo, "other.txt", "other\n", "other work")
+	other := &Worktree{Branch: "orbit/other", BaseSha: base, RepoDir: repo}
+	if branchMergedInto(other) {
+		t.Error("a branch with work not in main must report not-merged")
+	}
+}
+
 // addOriginBare wires a throwaway bare repo as 'origin' and pushes repo's main to it, so
 // origin/<branch> remote-tracking refs exist for the merge-sync tests.
 func addOriginBare(t *testing.T, repo string) string {
@@ -483,7 +547,7 @@ func TestParkCheckpointRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	finalizeWorktree(wt, "wip title", true) // park → checkpoint commit
+	finalizeWorktree(wt, true) // park → checkpoint commit
 	if st, _ := git(repo, "status", "--porcelain"); st != "" {
 		t.Fatalf("checkpoint should commit all work, tree not clean:\n%s", st)
 	}
@@ -516,7 +580,7 @@ func TestPermanentEndNotUndone(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "done.txt"), []byte("done\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	finalizeWorktree(wt, "final", false) // permanent end
+	finalizeWorktree(wt, false) // permanent end
 	endSha := mustGit(t, repo, "rev-parse", "HEAD")
 	if endSha == base {
 		t.Fatal("end commit should advance HEAD past base")

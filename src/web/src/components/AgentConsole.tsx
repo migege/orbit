@@ -60,8 +60,8 @@ export function AgentConsole() {
             title="Session not found"
             subTitle="This session doesn't exist or has been deleted."
             extra={
-              <Button type="primary" onClick={() => navigate('/active')}>
-                Go to Active
+              <Button type="primary" onClick={() => navigate('/')}>
+                Go home
               </Button>
             }
           />

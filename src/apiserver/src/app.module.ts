@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { PrismaModule } from './prisma/prisma.module';
 import { RealtimeModule } from './realtime/realtime.module';
+import { EventsModule } from './events/events.module';
 import { QueueModule } from './queue/queue.module';
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
@@ -20,6 +21,7 @@ import { PushModule } from './push/push.module';
     ConfigModule.forRoot({ isGlobal: true }),
     PrismaModule,
     RealtimeModule,
+    EventsModule,
     QueueModule,
     AuthModule,
     UsersModule,

@@ -30,7 +30,9 @@ import {
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { App as AntApp, Button, Dropdown, Image, Input, type MenuProps, Popover, Segmented, Select, Tooltip } from 'antd';
 import {
+  type DragEvent as ReactDragEvent,
   type MouseEvent as ReactMouseEvent,
+  type TouchEvent as ReactTouchEvent,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -41,7 +43,7 @@ import {
 import { useMatch, useNavigate } from 'react-router-dom';
 import { decodeId, encodeId } from '../lib/idCodec';
 import { useIsMobile, useMediaQuery } from '../lib/useMediaQuery';
-import { agentsQuery, sessionQuery, sessionsQuery } from '../lib/queries';
+import { agentsQuery, type Me, meQuery, sessionQuery, sessionsQuery } from '../lib/queries';
 import {
   DEFAULT_MODEL,
   DEFAULT_MODEL_BY_PROVIDER,
@@ -53,6 +55,7 @@ import {
 import { SessionOutputs } from './SessionOutputs';
 import { BackgroundShellsTray } from './BackgroundShellsTray';
 import {
+  api,
   type ApprovalInfo,
   archiveSession,
   cancelQueuedTurn,
@@ -68,6 +71,7 @@ import {
   type PermissionRule,
   pinSession,
   purgeSession,
+  getSessionEventPage,
   renameSession,
   restoreSession,
   resumeSession,
@@ -148,9 +152,6 @@ const PERMISSION_TO_MODE: Record<string, string> = Object.fromEntries(
   Object.entries(MODE_TO_PERMISSION).map(([label, value]) => [value, label]),
 );
 const MODE_OPTIONS = Object.keys(MODE_TO_PERMISSION);
-// Last-picked reasoning effort, remembered across reloads so a new session starts
-// at the effort you last chose instead of resetting to Default. ('' = Default.)
-const EFFORT_KEY = 'orbit.effort';
 
 // New-session hotkey hint. The chord itself accepts ⌘/Ctrl on every platform; only the
 // label differs — ⌘ on macOS, Ctrl elsewhere (matches ApprovalPanel's convention). The
@@ -273,6 +274,20 @@ const SWITCH_DEBOUNCE_MS = 150;
 // Cap on cached transcripts (mount-scoped), so a long browsing session can't grow
 // the cache without bound. Least-recently-selected entries are evicted first.
 const TRANSCRIPT_CACHE_MAX = 20;
+// Tail-first lazy loading: open a fresh transcript with only its newest page (so a long
+// session lands straight at the latest message instead of replaying its whole history), then
+// prepend older pages as the user scrolls up. TAIL_PAGE is deliberately large enough to fill
+// any viewport in one shot, so no auto-load fires until the user actually scrolls up.
+const TAIL_PAGE = 200;
+const OLDER_PAGE = 200;
+// Distance from the top (px) at which scrolling up pulls in the next older page.
+const LOAD_OLDER_AT = 400;
+
+interface TranscriptCacheEntry {
+  events: RunEvent[];
+  oldestSeq: number | null; // seq of the earliest loaded event (null = nothing loaded)
+  hasMoreOlder: boolean; // older events exist before oldestSeq on the server
+}
 
 // Shell-style composer history, kept per-session in localStorage so the Up/Down arrows
 // recall only this session's recently sent prompts (never another session's). Stored
@@ -348,6 +363,23 @@ const fmtTool = (name: string): string => name.replace(/^mcp__[^_]+__/, '');
 const bgRunningLabel = (n: number): string =>
   n > 1 ? `${n} background processes running` : 'Background process running';
 
+// "Running Agent" / "Running N agents" — shown while a session is working and has a sub-agent
+// (Task/Agent tool) in flight (server-tracked runningSubagentCount, from Session.runningSubagents).
+// The async Agent tool_result lands at once, so lastToolUse can't carry this on its own.
+const subagentRunningLabel = (n: number): string =>
+  n > 1 ? `Running ${n} agents` : 'Running Agent';
+
+// Live background work that outlives a parked (AWAITING_INPUT) turn — an async sub-agent
+// (Task/Agent) and/or background shells. Returns the label to surface (sub-agent wins), or
+// null when the session is genuinely idle. Shared by the list line, status glyph and header
+// so all three agree a parked-but-still-working session isn't "waiting for your reply".
+const parkedWorkLabel = (s: any): string | null =>
+  (s.runningSubagentCount ?? 0) > 0
+    ? subagentRunningLabel(s.runningSubagentCount)
+    : (s.runningBgCount ?? 0) > 0
+      ? bgRunningLabel(s.runningBgCount)
+      : null;
+
 // The line shown under a session title. For a LIVE (openable) session that's working we
 // surface its current state — the tool in flight, that it's blocked on you, or a bare
 // "Running…" — so the row never collapses to just a title with no sign of progress.
@@ -358,13 +390,21 @@ const sessionLine = (s: any, live: boolean): SessionLine | null => {
   if (live && s.status === 'RUNNING') {
     if ((s.pendingApprovals ?? 0) > 0) return { text: 'Waiting for approval', tone: 'approval' };
     if (s.lastToolUse) return { text: `Running ${fmtTool(s.lastToolUse)}…`, tone: 'running' };
+    // A sub-agent in flight: lastToolUse is already cleared (the async Agent tool_result +
+    // the parent's own system progress events), so surface it explicitly instead of falling
+    // through to the muted last-reply preview, which reads as idle.
+    if ((s.runningSubagentCount ?? 0) > 0)
+      return { text: `${subagentRunningLabel(s.runningSubagentCount)}…`, tone: 'running' };
     if (s.lastAssistantText) return { text: plainPreview(s.lastAssistantText), tone: 'preview' };
     return { text: 'Running…', tone: 'running' };
   }
   if (live && s.status === 'PENDING') return { text: 'Queued', tone: 'queued' };
-  // Parked (AWAITING_INPUT) but a background process is still running — not idle.
-  if (live && (s.runningBgCount ?? 0) > 0)
-    return { text: `${bgRunningLabel(s.runningBgCount)}…`, tone: 'running' };
+  // Parked (AWAITING_INPUT) but still doing background work — a sub-agent and/or background
+  // shells that outlive the turn — so it doesn't read as idle. A spawned sub-agent parks the
+  // parent at AWAITING_INPUT while it runs, so this (not the RUNNING branch) is what usually
+  // surfaces "Running Agent…".
+  const parked = live ? parkedWorkLabel(s) : null;
+  if (parked) return { text: `${parked}…`, tone: 'running' };
   if (s.lastAssistantText) return { text: plainPreview(s.lastAssistantText), tone: 'preview' };
   return null;
 };
@@ -377,10 +417,7 @@ function statusLabel(session: any): string {
   const status: string = session.status;
   if (status === 'RUNNING')
     return (session.pendingApprovals ?? 0) > 0 ? 'Waiting for approval' : 'Running';
-  if (status === 'AWAITING_INPUT')
-    return (session.runningBgCount ?? 0) > 0
-      ? bgRunningLabel(session.runningBgCount)
-      : 'Waiting for your reply';
+  if (status === 'AWAITING_INPUT') return parkedWorkLabel(session) ?? 'Waiting for your reply';
   if (status === 'SUCCEEDED') return 'Completed';
   if (status === 'FAILED') {
     const err: string = typeof session.error === 'string' ? session.error : '';
@@ -439,9 +476,10 @@ function StatusIcon({ session, completed }: { session: any; completed?: boolean 
       </Tooltip>
     );
   }
-  if (status === 'AWAITING_INPUT')
-    return (session.runningBgCount ?? 0) > 0 ? (
-      <Tooltip title={bgRunningLabel(session.runningBgCount)}>
+  if (status === 'AWAITING_INPUT') {
+    const work = parkedWorkLabel(session);
+    return work ? (
+      <Tooltip title={work}>
         <LoadingOutlined spin style={{ color: 'var(--brand)', fontSize }} />
       </Tooltip>
     ) : (
@@ -449,6 +487,7 @@ function StatusIcon({ session, completed }: { session: any; completed?: boolean 
         <MessageOutlined style={{ color: 'var(--text-3)', fontSize }} />
       </Tooltip>
     );
+  }
   if (status === 'SUCCEEDED')
     return (
       <Tooltip title="Completed">
@@ -554,10 +593,18 @@ export function AgentView({ runner }: { runner: Runner }) {
   const { message, modal } = AntApp.useApp();
   const qc = useQueryClient();
   const navigate = useNavigate();
+  // The signed-in user, for the account-synced default effort (seeds a new session's Effort
+  // pill; written on change below). Cached/deduped with the nav footer's `me`.
+  const me = useQuery(meQuery());
   // The picked session lives in the URL (/sessions/:id, a base62 public id) so
   // it deep-links and survives a refresh; selecting a session = navigation.
   // Decode once here; everything downstream works with the raw session UUID.
   const selectedId = decodeId(useMatch('/sessions/:id')?.params.id);
+  // Latest selectedId, readable from async callbacks (loadOlder) to bail if the user has
+  // switched sessions since the request was issued — so a late page never lands in the wrong
+  // transcript. Assigning during render is safe for a "current value" ref.
+  const selectedIdRef = useRef(selectedId);
+  selectedIdRef.current = selectedId;
   // Inline header-title rename: double-click swaps the title for an input. `editingTitle`
   // gates the editor, `titleDraft` holds the in-progress text, `cancelTitleEdit` lets
   // Escape skip the blur-commit. Switching sessions closes any open editor (effect below).
@@ -583,6 +630,11 @@ export function AgentView({ runner }: { runner: Runner }) {
   // Installed-PWA / standalone is the only mode where ⌘N actually reaches the page
   // (a normal tab hands it to the browser). Gate the on-button shortcut hint on it.
   const isStandalone = useMediaQuery('(display-mode: standalone)');
+  // Touch devices have no hover, so a tap that shows a Tooltip never gets the mouseleave
+  // that dismisses it — the bubble lingers on screen (e.g. an "Unpin" tip stuck after a
+  // pin tap, or a composer pill's tip stacked over the Select it just opened). Suppress
+  // these tooltips where hover is unavailable; every gated control already labels itself.
+  const hoverTipOpen = useMediaQuery('(hover: hover)') ? undefined : false;
   const [text, setText] = useState('');
   // Composer history cursor: -1 = editing the live draft; otherwise an index into the
   // session's stored history. `histDraft` stashes what was typed before recall started,
@@ -600,10 +652,28 @@ export function AgentView({ runner }: { runner: Runner }) {
   const prevDraftKey = useRef(draftKey);
   const [mode, setMode] = useState('Default');
   const [model, setModel] = useState(DEFAULT_MODEL);
-  const [effort, setEffort] = useState(() => localStorage.getItem(EFFORT_KEY) ?? '');
+  // Seeded from the account default by the effect below once `me` loads (mirrors how Model/Mode
+  // seed via effects); '' = model default until then.
+  const [effort, setEffort] = useState('');
   // Which slice of the session list to show: active, archived, system, or trash.
   const [view, setView] = useState<'active' | 'archived' | 'deleted' | 'system'>('active');
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null); // session row whose action menu is open
+  // Touch swipe-to-reveal for session rows: hover has no touch equivalent, so on mobile the
+  // row's actions (pin/complete, or the ⋯ menu) hide behind a leftward swipe instead.
+  const [swipeOpenId, setSwipeOpenId] = useState<string | null>(null); // row held open by a swipe
+  const [swipeDragId, setSwipeDragId] = useState<string | null>(null); // row currently under a finger drag
+  const [swipeDx, setSwipeDx] = useState(0); // live drag offset (px; negative = leftward)
+  // mx (live horizontal delta) and wasOpen live on the ref so touchend reads them synchronously:
+  // React defers continuous touchmove state, so swipeDx state can be stale when discrete touchend fires.
+  const swipeRef = useRef<{
+    id: string;
+    x: number;
+    y: number;
+    axis: '' | 'h' | 'v';
+    mx: number;
+    wasOpen: boolean;
+  } | null>(null);
+  const swipeClickGuard = useRef(false); // eat the click that trails a horizontal swipe
   const [shareOpen, setShareOpen] = useState(false); // share dialog for the open session
   const [agentId, setAgentId] = useState<string | undefined>(undefined);
   const [events, setEvents] = useState<RunEvent[]>([]);
@@ -624,16 +694,85 @@ export function AgentView({ runner }: { runner: Runner }) {
   const seen = useRef<Set<number>>(new Set());
   // Per-session transcript cache (mount-scoped): switching seeds events from here for
   // an instant paint and resumes the SSE just past the cached seq, instead of replaying
-  // each session's full history from seq 0 on every visit.
-  const transcriptCache = useRef<Map<string, RunEvent[]>>(new Map());
+  // each session's full history from seq 0 on every visit. Stores the older-pagination
+  // boundary too, so a reopened session keeps its "load earlier" state.
+  const transcriptCache = useRef<Map<string, TranscriptCacheEntry>>(new Map());
+  // Live mirror of `events`, so the SSE handler (append) and loadOlder (prepend) both mutate
+  // one source of truth without racing stale closures — see the load effect below.
+  const accRef = useRef<RunEvent[]>([]);
+  // Tail-first lazy loading state for the open session. Refs drive the (deps-free) scroll
+  // handler; loadingOlder (state) drives the top "loading earlier" spinner.
+  const oldestSeqRef = useRef<number | null>(null); // earliest loaded seq
+  const hasMoreOlderRef = useRef(false); // older events exist before oldestSeq on the server
+  const loadingOlderRef = useRef(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  // Set by loadOlder just before it prepends a page; a layout effect reads it to compensate
+  // scrollTop so the viewport stays put instead of jumping when older content grows above.
+  const prependAnchorRef = useRef<{ prevHeight: number; prevTop: number } | null>(null);
   // Re-opens the transcript SSE after a `final` event paused it and the session was
   // resumed in place (set by the SSE effect, called by the liveness watcher below).
   const resumeStreamRef = useRef<(() => void) | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null); // the left session-list column, for arrow-key scrolling
+
+  // How far a row slides to expose its actions. The active tab shows two chips (pin + ✓),
+  // every other tab a single ⋯, so it needs less room.
+  const swipeReveal = view === 'active' ? 72 : 44;
+  const onRowTouchStart = (e: ReactTouchEvent, id: string): void => {
+    if (!isMobile) return;
+    const t = e.touches[0];
+    // Clear any guard left set by a prior swipe that fired no trailing click, so the next
+    // genuine tap isn't swallowed.
+    swipeClickGuard.current = false;
+    swipeRef.current = { id, x: t.clientX, y: t.clientY, axis: '', mx: 0, wasOpen: swipeOpenId === id };
+  };
+  const onRowTouchMove = (e: ReactTouchEvent): void => {
+    const st = swipeRef.current;
+    if (!st) return;
+    const t = e.touches[0];
+    const mx = t.clientX - st.x;
+    const my = t.clientY - st.y;
+    // Lock the axis once the finger clears a small deadzone; a vertical intent yields to the
+    // list's own scroll and never drags the row.
+    if (st.axis === '') {
+      if (Math.abs(mx) < 8 && Math.abs(my) < 8) return;
+      st.axis = Math.abs(mx) > Math.abs(my) ? 'h' : 'v';
+      if (st.axis === 'h') {
+        setSwipeDragId(st.id);
+        setSwipeOpenId((cur) => (cur && cur !== st.id ? null : cur)); // starting a swipe shuts any other open row
+      }
+    }
+    if (st.axis !== 'h') return;
+    st.mx = mx; // synchronous truth for the touchend decision
+    const base = st.wasOpen ? -swipeReveal : 0;
+    setSwipeDx(Math.max(-swipeReveal - 20, Math.min(0, base + mx))); // clamp with a little left-side rubber-band
+  };
+  const onRowTouchEnd = (): void => {
+    const st = swipeRef.current;
+    swipeRef.current = null;
+    if (!st || st.axis !== 'h') {
+      setSwipeDragId(null);
+      return;
+    }
+    swipeClickGuard.current = true; // the trailing click (if any) must not navigate
+    // Decide by gesture direction, not absolute position: a deliberate left drag opens a closed
+    // row; any clear right drag dismisses an open one. Reading st.mx (a ref) avoids the stale
+    // swipeDx state that React's deferred touchmove updates would otherwise leave at touchend.
+    const open = st.wasOpen ? st.mx <= 16 : st.mx < -swipeReveal / 2;
+    setSwipeOpenId(open ? st.id : null);
+    setSwipeDragId(null);
+    setSwipeDx(0);
+  };
+  // An OS-interrupted gesture (system swipe, incoming call) fires touchcancel, not touchend —
+  // drop the drag and let the row settle back to its committed open/closed state.
+  const onRowTouchCancel = (): void => {
+    swipeRef.current = null;
+    setSwipeDragId(null);
+    setSwipeDx(0);
+  };
   // The user's prompt for the turn currently in view, surfaced as a sticky bar when a long
   // answer has pushed that bubble off the top — so what was asked stays findable. null hides it.
-  const [stuck, setStuck] = useState<{ seq: string | null; text: string } | null>(null);
+  const [stuck, setStuck] = useState<{ seq: string | null; text: string; loading?: boolean } | null>(null);
   // Smart auto-scroll: only keep pinned to the bottom when the user is already there, so
   // reading history (or jumping to the sticky prompt) isn't yanked back by streaming updates.
   const atBottomRef = useRef(true);
@@ -643,6 +782,40 @@ export function AgentView({ runner }: { runner: Runner }) {
   // Last observed scrollTop, so the scroll handler can tell a genuine user scroll-up from a
   // programmatic re-pin or a late scroll event fired after streaming grew the container.
   const lastTopRef = useRef(0);
+  // Tail-first lazy loading: pull in the next older page when the user scrolls near the top.
+  // Guarded to one request in flight; prepends the page and stamps prependAnchorRef so the
+  // layout effect below holds the viewport steady while older content grows above it.
+  const loadOlder = useCallback(() => {
+    if (!selectedId || loadingOlderRef.current || !hasMoreOlderRef.current) return;
+    const before = oldestSeqRef.current;
+    if (before == null) return;
+    loadingOlderRef.current = true;
+    setLoadingOlder(true);
+    getSessionEventPage(selectedId, { before, limit: OLDER_PAGE })
+      .then((page) => {
+        if (selectedIdRef.current !== selectedId) return; // user switched sessions mid-fetch
+        const fresh = page.events.filter((e) => !seen.current.has(e.seq));
+        for (const e of fresh) if (typeof e.seq === 'number') seen.current.add(e.seq);
+        if (fresh.length) {
+          const el = scrollRef.current;
+          if (el) prependAnchorRef.current = { prevHeight: el.scrollHeight, prevTop: el.scrollTop };
+          accRef.current = [...fresh, ...accRef.current];
+          setEvents(accRef.current);
+        }
+        oldestSeqRef.current = page.events.length ? page.events[0].seq : before;
+        hasMoreOlderRef.current = page.hasMore;
+        transcriptCache.current.set(selectedId, {
+          events: accRef.current,
+          oldestSeq: oldestSeqRef.current,
+          hasMoreOlder: page.hasMore,
+        });
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        loadingOlderRef.current = false;
+        setLoadingOlder(false);
+      });
+  }, [selectedId]);
   // Recompute, on scroll and after content changes: are we at the bottom, and which top-level
   // user bubble (if any) has scrolled above the viewport top (= the prompt to surface)?
   const measure = useCallback(() => {
@@ -661,6 +834,8 @@ export function AgentView({ runner }: { runner: Runner }) {
     else if (top < lastTopRef.current - 1) atBottomRef.current = false;
     lastTopRef.current = top;
     setAtBottom(atBottomRef.current); // React bails out when unchanged, so no per-scroll re-render
+    // Near the top with older history still on the server → pull in the next page.
+    if (top < LOAD_OLDER_AT) loadOlder();
     const topY = el.getBoundingClientRect().top;
     const bubbles = Array.from(
       el.querySelectorAll<HTMLElement>('.chat-user:not(.chat-queued)'),
@@ -670,8 +845,19 @@ export function AgentView({ runner }: { runner: Runner }) {
       if (b.getBoundingClientRect().bottom <= topY + 1) cur = b;
       else break;
     }
-    setStuck(cur ? { seq: cur.getAttribute('data-seq'), text: cur.textContent || '' } : null);
-  }, []);
+    if (cur) {
+      setStuck({ seq: cur.getAttribute('data-seq'), text: cur.textContent || '' });
+    } else if (hasMoreOlderRef.current) {
+      // No loaded user prompt sits above the viewport, but older pages remain: the prompt for
+      // the content now in view is in an unloaded page. Don't blank the bar — show a loading
+      // state and pull the earlier page in (no-op if one is already in flight), so measure
+      // re-runs after the prepend and resolves the real question.
+      setStuck({ seq: null, text: '', loading: true });
+      loadOlder();
+    } else {
+      setStuck(null);
+    }
+  }, [loadOlder]);
   // Snap back to the live tail; the scroll events it fires re-pin atBottomRef via measure().
   const scrollToBottom = useCallback(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
@@ -751,6 +937,9 @@ export function AgentView({ runner }: { runner: Runner }) {
     return {
       ...d,
       runningBgCount: Array.isArray(d.runningBgShells) ? d.runningBgShells.length : (d.runningBgCount ?? 0),
+      runningSubagentCount: Array.isArray(d.runningSubagents)
+        ? d.runningSubagents.length
+        : (d.runningSubagentCount ?? 0),
       pendingApprovals: d.pendingApprovals ?? 0,
     };
   }, [detailForSelected]);
@@ -927,17 +1116,17 @@ export function AgentView({ runner }: { runner: Runner }) {
     );
   }, [selectedId, pickedAgent?.id, pickedAgent?.model, pickedAgent?.provider]);
 
-  // Effort has no agent-level default, so a fresh session restores the last-picked
-  // effort from localStorage (see EFFORT_KEY) instead. Keeps the pill consistent with
-  // Model/Mode when switching back to compose after viewing a resumed session.
+  // A fresh session seeds its effort with the most specific default available: the picked agent's
+  // own effort (set on the Runner page) first, else the account-level default-effort preference
+  // (synced across devices — the iOS/macOS clients seed the same fallback). `??` treats only
+  // null/undefined as "unset", so an agent explicitly set to Default ('') stays Default rather than
+  // falling through. Reacts to `me` loading so the pill fills once preferences arrive.
   useEffect(() => {
     if (selectedId) return;
     const provider = pickedAgent?.provider ?? 'claude';
-    const stored = localStorage.getItem(EFFORT_KEY) ?? '';
-    const normalized = normalizeEffortForProvider(provider, stored);
-    if (normalized !== stored) localStorage.setItem(EFFORT_KEY, normalized);
-    setEffort(normalized);
-  }, [selectedId, pickedAgent?.provider]);
+    const candidate = pickedAgent?.effort ?? me.data?.preferences?.defaultEffort ?? '';
+    setEffort(normalizeEffortForProvider(provider, candidate));
+  }, [selectedId, pickedAgent?.provider, pickedAgent?.effort, me.data?.preferences?.defaultEffort]);
 
   // Likewise seed the Mode pill from the picked agent's configured default. Without
   // this the pill stays at the hardcoded 'Default', so a new session always sends
@@ -999,21 +1188,36 @@ export function AgentView({ runner }: { runner: Runner }) {
     atBottomRef.current = true; // a freshly opened/switched session starts pinned to the latest
     lastTopRef.current = 0;
     setAtBottom(true); // hide the jump-to-bottom button until the new session reports otherwise
+    // Reset tail-first lazy-loading state for the session being opened.
+    prependAnchorRef.current = null;
+    loadingOlderRef.current = false;
+    setLoadingOlder(false);
     if (!selectedId) {
+      accRef.current = [];
       setEvents([]);
       seen.current = new Set();
+      oldestSeqRef.current = null;
+      hasMoreOlderRef.current = false;
       return;
     }
-    // Seed from cache for an instant paint; touch the entry so it's most-recently-used.
-    const cache = transcriptCache.current;
-    const cached = cache.get(selectedId) ?? [];
-    cache.delete(selectedId);
-    cache.set(selectedId, cached);
-    let acc = cached;
-    setEvents(acc);
     const isSeq = (s: unknown): s is number =>
       typeof s === 'number' && s !== Number.MAX_SAFE_INTEGER;
+    // Seed from cache for an instant paint; touch the entry so it's most-recently-used. On a
+    // cache miss the transcript stays empty until boot() fetches the newest page below (no more
+    // replaying the whole history over SSE — that's what caused a long session to "fast-forward"
+    // on open). The older-pagination boundary is restored from cache, or established by boot().
+    const cache = transcriptCache.current;
+    const entry = cache.get(selectedId);
+    const cached = entry?.events ?? [];
+    if (entry) {
+      cache.delete(selectedId);
+      cache.set(selectedId, entry);
+    }
+    accRef.current = cached;
+    setEvents(cached);
     seen.current = new Set(cached.map((e) => e.seq).filter(isSeq));
+    oldestSeqRef.current = entry ? entry.oldestSeq : null;
+    hasMoreOlderRef.current = entry ? entry.hasMoreOlder : false;
     let es: EventSource | null = null;
     let retry: ReturnType<typeof setTimeout> | undefined;
     let closed = false;
@@ -1022,21 +1226,28 @@ export function AgentView({ runner }: { runner: Runner }) {
     // stream can be re-opened in place when the session resumes (see resumeStreamRef).
     let paused = false;
     let fails = 0;
-    // Resume just past what's cached so only the gap is fetched, not the whole history.
+    // Resume just past what's loaded so only the gap is streamed, not the whole history.
     let lastSeq = cached.reduce((m, e) => (isSeq(e.seq) ? Math.max(m, e.seq) : m), 0);
+    const writeCache = (): void => {
+      cache.set(selectedId, {
+        events: accRef.current,
+        oldestSeq: oldestSeqRef.current,
+        hasMoreOlder: hasMoreOlderRef.current,
+      });
+      if (cache.size > TRANSCRIPT_CACHE_MAX) {
+        const oldest = cache.keys().next().value;
+        if (oldest !== undefined && oldest !== selectedId) cache.delete(oldest);
+      }
+    };
     const stop = (): void => {
       closed = true;
       if (retry) clearTimeout(retry);
       es?.close();
     };
     const push = (ev: RunEvent): void => {
-      acc = [...acc, ev];
-      cache.set(selectedId, acc);
-      if (cache.size > TRANSCRIPT_CACHE_MAX) {
-        const oldest = cache.keys().next().value;
-        if (oldest !== undefined && oldest !== selectedId) cache.delete(oldest);
-      }
-      setEvents(acc);
+      accRef.current = [...accRef.current, ev];
+      writeCache();
+      setEvents(accRef.current);
     };
     const connect = (): void => {
       es = new EventSource(sessionEventsUrl(selectedId, lastSeq));
@@ -1160,7 +1371,30 @@ export function AgentView({ runner }: { runner: Runner }) {
       listQueuedTurns(selectedId)
         .then(setQueued)
         .catch(() => undefined);
-      connect();
+      // Tail-first: on a cache miss, fetch just the newest page so the transcript opens
+      // straight at the latest message, then open the SSE from that page's max seq so it
+      // streams only new events (no full-history replay). With a cached transcript already on
+      // screen, skip straight to the SSE, which replays only the gap after the cached seq.
+      const boot = async (): Promise<void> => {
+        if (cached.length === 0) {
+          try {
+            const page = await getSessionEventPage(selectedId, { tail: TAIL_PAGE });
+            if (closed) return;
+            accRef.current = page.events;
+            for (const e of page.events) if (isSeq(e.seq)) seen.current.add(e.seq);
+            oldestSeqRef.current = page.events.length ? page.events[0].seq : null;
+            hasMoreOlderRef.current = page.hasMore;
+            lastSeq = page.events.reduce((m, e) => (isSeq(e.seq) ? Math.max(m, e.seq) : m), lastSeq);
+            setEvents(accRef.current);
+            writeCache();
+          } catch {
+            // Fall through to the SSE, which will replay from seq 0 as before.
+          }
+          if (closed) return;
+        }
+        connect();
+      };
+      void boot();
     }, SWITCH_DEBOUNCE_MS);
     return () => {
       resumeStreamRef.current = null;
@@ -1190,6 +1424,18 @@ export function AgentView({ runner }: { runner: Runner }) {
     if (live) resumeStreamRef.current?.();
   }, [live]);
 
+  // Tail-first prepend: after loadOlder grows older content above the viewport, restore the
+  // scroll position so what the user was reading stays put instead of jumping down. Runs before
+  // paint (layout effect), and before the at-bottom follow below (a passive effect) — which
+  // no-ops here anyway since prepending only happens while scrolled up (atBottomRef false).
+  useLayoutEffect(() => {
+    const anchor = prependAnchorRef.current;
+    if (!anchor) return;
+    prependAnchorRef.current = null;
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight - anchor.prevHeight + anchor.prevTop;
+  }, [events]);
+
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
@@ -1203,7 +1449,29 @@ export function AgentView({ runner }: { runner: Runner }) {
     if (!el) return;
     const onScroll = (): void => measure();
     el.addEventListener('scroll', onScroll, { passive: true });
-    return () => el.removeEventListener('scroll', onScroll);
+    // The events-driven pin above only re-scrolls when the transcript's *content* changes, so
+    // it misses growth the container itself causes. On mobile the conversation pane is
+    // display:none until a session is opened, so the open-time scroll runs against a
+    // zero-height box and never lands at the tail; and the composer's worktree status bar
+    // loads in async, shrinking the scroll area after the fact. Re-pin to the tail on any such
+    // resize while the user is still at the bottom.
+    const ro = new ResizeObserver(() => {
+      if (atBottomRef.current) el.scrollTo({ top: el.scrollHeight });
+    });
+    ro.observe(el);
+    // Screenshots load after their <img> lays out at zero height, so the content grows *below*
+    // the tail without an events change. `load` doesn't bubble but fires in the capture phase,
+    // so one listener on the scroller catches every image and re-pins.
+    const onLoad = (e: Event): void => {
+      if (atBottomRef.current && e.target instanceof HTMLImageElement)
+        el.scrollTo({ top: el.scrollHeight });
+    };
+    el.addEventListener('load', onLoad, { capture: true });
+    return () => {
+      el.removeEventListener('scroll', onScroll);
+      el.removeEventListener('load', onLoad, { capture: true });
+      ro.disconnect();
+    };
   }, [selectedId, measure]);
 
   // Allow/deny a pending tool-permission request; optimistically drop it (the
@@ -1281,7 +1549,11 @@ export function AgentView({ runner }: { runner: Runner }) {
         agentId,
         model,
         permissionMode: MODE_TO_PERMISSION[mode],
-        effort: wireEffort || undefined,
+        // Send even '' (Default) explicitly: the composer already seeds the pill from the agent's
+        // default, so the pill is authoritative — an explicit Default must stick, not fall back to
+        // the agent's effort server-side (session.effort ?? agent.effort). Task runs omit it, so
+        // those still inherit the agent default.
+        effort: wireEffort,
         attachmentIds,
         // A `!cmd` draft seeds the session's first turn as a shell command, not a message.
         shell,
@@ -1517,10 +1789,8 @@ export function AgentView({ runner }: { runner: Runner }) {
   // (the status bar polls while pending). Invalidate detail so 'pending' shows immediately.
   const mergeMut = useMutation({
     mutationFn: (vars: { id: string; target?: string }) => mergeSessionToMain(vars.id, vars.target),
-    onSuccess: (_data, vars) => {
-      message.success(
-        `Merging to ${vars.target ?? 'main'} — the result will appear on the status bar shortly.`,
-      );
+    onSuccess: () => {
+      // No success toast: the status bar reflects the pending merge and its outcome.
       if (selectedId) qc.invalidateQueries({ queryKey: ['session', selectedId] });
     },
     onError: (e: Error) => message.error(e.message),
@@ -1559,7 +1829,7 @@ export function AgentView({ runner }: { runner: Runner }) {
   const commitMut = useMutation({
     mutationFn: (id: string) => commitSession(id),
     onSuccess: () => {
-      message.success('Committing worktree changes — the result will appear on the status bar shortly.');
+      // No success toast: the status bar reflects the pending commit and its outcome.
       if (selectedId) qc.invalidateQueries({ queryKey: ['session', selectedId] });
     },
     onError: (e: Error) => message.error(e.message),
@@ -1708,6 +1978,10 @@ export function AgentView({ runner }: { runner: Runner }) {
     navigate(a ? `/agents/${encodeId(a)}/new` : `/runners/${encodeId(runner.id)}`);
     // No setText here: the per-target switch effect restores the saved 'new' draft, and
     // blanking would instead clobber the *outgoing* session's draft (text hasn't moved yet).
+    // Drop the caret into the composer so the task can be typed straight away — both the
+    // "New session" click and the ⌘N shortcut funnel through here. Deferred a tick so the
+    // switch effect has swapped in the 'new' draft before focus lands.
+    setTimeout(() => taRef.current?.focus(), 0);
   };
   // ⌘/Ctrl+N opens the new-session draft — the keyboard twin of the "New session" button,
   // and the web mirror of the macOS client's ⌘N. Like ⌘D it fires even while the composer
@@ -1776,6 +2050,57 @@ export function AgentView({ runner }: { runner: Runner }) {
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
   }, [composerHeight]);
+  // The resize handle only earns its keep once auto-grow has hit its maxRows cap (the box is
+  // scrolling) or the user already dragged an explicit height — a short/empty box has nothing
+  // worth resizing, so we hide the handle until then. Re-measure whenever the text or the
+  // manual height changes (a double-click reset drops us back to auto-grow).
+  const [composerCapped, setComposerCapped] = useState(false);
+  useEffect(() => {
+    const ta: HTMLTextAreaElement | undefined = taRef.current?.resizableTextArea?.textArea;
+    if (!ta) return;
+    // Measure on the next frame, after rc-textarea's autoSize pass settles this value's height.
+    const id = requestAnimationFrame(() => {
+      setComposerCapped(ta.scrollHeight > ta.clientHeight + 1);
+    });
+    return () => cancelAnimationFrame(id);
+  }, [text, composerHeight]);
+  // Drag-and-drop files anywhere onto the session pane (transcript + composer) — a far bigger
+  // target than the composer box, matching Slack/ChatGPT. Same upload path as the picker/paste,
+  // gated on canAttach. dragDepth counts enter/leave across child elements (each fires its own
+  // events) so the drop hint doesn't flicker as the pointer crosses messages, the textarea, etc.
+  const dragDepth = useRef(0);
+  const [dragging, setDragging] = useState(false);
+  const dragHasFiles = (e: ReactDragEvent): boolean =>
+    Array.from(e.dataTransfer?.types ?? []).includes('Files');
+  const onSessionDragEnter = (e: ReactDragEvent): void => {
+    if (!canAttach || !dragHasFiles(e)) return;
+    e.preventDefault();
+    dragDepth.current += 1;
+    setDragging(true);
+  };
+  const onSessionDragOver = (e: ReactDragEvent): void => {
+    if (!canAttach || !dragHasFiles(e)) return;
+    // preventDefault marks the pane a valid drop target; without it the browser opens the file.
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  };
+  const onSessionDragLeave = (): void => {
+    if (!dragging) return;
+    dragDepth.current -= 1;
+    if (dragDepth.current <= 0) {
+      dragDepth.current = 0;
+      setDragging(false);
+    }
+  };
+  const onSessionDrop = (e: ReactDragEvent): void => {
+    dragDepth.current = 0;
+    setDragging(false);
+    if (!canAttach) return;
+    const files = Array.from(e.dataTransfer?.files ?? []);
+    if (!files.length) return;
+    e.preventDefault();
+    files.forEach((f) => void addImage(f));
+  };
   const [slashIndex, setSlashIndex] = useState(0);
   const [slashDismissed, setSlashDismissed] = useState<string | null>(null);
   // The `+` menu opens the picker scoped to one asset kind; null (manual `/` typing) shows both.
@@ -2036,57 +2361,84 @@ export function AgentView({ runner }: { runner: Runner }) {
             // Trash (deleted) rows stay closed.
             const openable = view !== 'deleted';
             const line = sessionLine(s, openable);
+            const swiped = swipeOpenId === s.id;
+            const dragging = swipeDragId === s.id;
+            const swipeTx = dragging ? swipeDx : swiped ? -swipeReveal : 0;
             return (
               <div
-                className={`session-row${openable ? '' : ' no-open'}${s.id === selectedId ? ' active' : ''}${menuOpenId === s.id ? ' menu-open' : ''}${view === 'active' && s.pinnedAt ? ' pinned' : ''}`}
+                className={`session-row${openable ? '' : ' no-open'}${s.id === selectedId ? ' active' : ''}${menuOpenId === s.id ? ' menu-open' : ''}${view === 'active' && s.pinnedAt ? ' pinned' : ''}${swiped ? ' swipe-open' : ''}`}
                 key={s.id}
-                onClick={openable ? () => navigate(`/sessions/${encodeId(s.id)}`) : undefined}
+                onClick={() => {
+                  if (swipeClickGuard.current) {
+                    swipeClickGuard.current = false;
+                    return; // this click merely ends a swipe
+                  }
+                  if (swipeOpenId) {
+                    setSwipeOpenId(null); // a tap anywhere on an open row just closes it
+                    return;
+                  }
+                  if (openable) navigate(`/sessions/${encodeId(s.id)}`);
+                }}
+                onTouchStart={(e) => onRowTouchStart(e, s.id)}
+                onTouchMove={onRowTouchMove}
+                onTouchEnd={onRowTouchEnd}
+                onTouchCancel={onRowTouchCancel}
               >
-                <span className="session-icon">
-                  <StatusIcon session={s} completed={view === 'archived'} />
-                </span>
-                <div className="session-main">
-                  <div className="session-title-row">
-                    <div className="session-title">{s.title}</div>
-                    {(s.mergeStatus === 'error' || s.mergeStatus === 'conflict') && (
-                      <Tooltip
-                        title={s.mergeStatus === 'conflict' ? 'Merge conflict — needs resolving' : 'Merge failed'}
-                        placement="top"
-                      >
-                        <span className="session-merge-badge">⚠</span>
-                      </Tooltip>
-                    )}
-                    <span className="session-time">{fmtTime(s.lastTurnAt ?? s.createdAt)}</span>
-                  </div>
-                  {line ? (
-                    <div
-                      className={`session-preview${line.tone === 'preview' ? '' : ` tone-${line.tone}`}`}
-                    >
-                      {line.text}
+                <div
+                  className={`session-swipe${dragging ? ' dragging' : ''}`}
+                  style={swipeTx ? { transform: `translateX(${swipeTx}px)` } : undefined}
+                >
+                  <span className="session-icon">
+                    <StatusIcon session={s} completed={view === 'archived'} />
+                  </span>
+                  <div className="session-main">
+                    <div className="session-title-row">
+                      <div className="session-title">{s.title}</div>
+                      {(s.mergeStatus === 'error' || s.mergeStatus === 'conflict') && (
+                        <Tooltip
+                          title={
+                            s.mergeStatus === 'conflict' ? 'Merge conflict — needs resolving' : 'Merge failed'
+                          }
+                          placement="top"
+                          open={hoverTipOpen}
+                        >
+                          <span className="session-merge-badge">⚠</span>
+                        </Tooltip>
+                      )}
+                      <span className="session-time">{fmtTime(s.lastTurnAt ?? s.createdAt)}</span>
                     </div>
-                  ) : null}
+                    {line ? (
+                      <div
+                        className={`session-preview${line.tone === 'preview' ? '' : ` tone-${line.tone}`}`}
+                      >
+                        {line.text}
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
                 <div className="session-right">
                   <div className="session-actions" onClick={(e) => e.stopPropagation()}>
                     {view === 'active' ? (
                       <>
-                        <Tooltip title={s.pinnedAt ? 'Unpin' : 'Pin to top'} placement="top">
+                        <Tooltip title={s.pinnedAt ? 'Unpin' : 'Pin to top'} placement="top" open={hoverTipOpen}>
                           <span
                             className="session-kebab session-pin-toggle"
                             onClick={(e) => {
                               e.stopPropagation();
                               pinMut.mutate({ id: s.id, pin: !s.pinnedAt });
+                              setSwipeOpenId(null);
                             }}
                           >
                             {s.pinnedAt ? <PushpinFilled /> : <PushpinOutlined />}
                           </span>
                         </Tooltip>
-                        <Tooltip title={ended ? 'Complete' : 'Complete & end session'} placement="top">
+                        <Tooltip title={ended ? 'Complete' : 'Complete & end session'} placement="top" open={hoverTipOpen}>
                           <span
                             className="session-kebab session-complete"
                             onClick={(e) => {
                               e.stopPropagation();
                               archiveMut.mutate(s.id);
+                              setSwipeOpenId(null);
                             }}
                           >
                             <CheckOutlined />
@@ -2125,7 +2477,19 @@ export function AgentView({ runner }: { runner: Runner }) {
         aria-orientation="vertical"
       />
 
-      <div className="agent-view">
+      <div
+        className="agent-view"
+        onDragEnter={onSessionDragEnter}
+        onDragOver={onSessionDragOver}
+        onDragLeave={onSessionDragLeave}
+        onDrop={onSessionDrop}
+      >
+        {/* Drop-to-upload hint covering the whole session pane while files are dragged over it. */}
+        {dragging && (
+          <div className="agent-dropzone">
+            <PaperClipOutlined /> Drop files to upload
+          </div>
+        )}
         <div className="agent-header">
           {isMobile && (
             <button
@@ -2269,7 +2633,7 @@ export function AgentView({ runner }: { runner: Runner }) {
 
         {stuck && (
           <button
-            className="chat-sticky-question"
+            className={stuck.loading ? 'chat-sticky-question chat-sticky-loading' : 'chat-sticky-question'}
             title={stuck.text}
             onClick={() => {
               const seq = stuck?.seq;
@@ -2280,7 +2644,9 @@ export function AgentView({ runner }: { runner: Runner }) {
             }}
           >
             <span className="chat-sticky-label">↑ Your question</span>
-            <span className="chat-sticky-text">{stuck.text}</span>
+            <span className="chat-sticky-text">
+              {stuck.loading ? 'Loading earlier messages…' : stuck.text}
+            </span>
           </button>
         )}
 
@@ -2291,6 +2657,7 @@ export function AgentView({ runner }: { runner: Runner }) {
             </div>
           ) : selectedId ? (
             <div className="agent-sessions" ref={scrollRef}>
+              {loadingOlder && <div className="chat-note chat-loading-older">Loading earlier messages…</div>}
               {selected && !selectedDeleted && selected.status === 'PENDING' && events.length === 0 && (
                 <div className="chat-queued-state">
                   <div className="chat-queued-dots" aria-hidden="true">
@@ -2308,7 +2675,7 @@ export function AgentView({ runner }: { runner: Runner }) {
                   </div>
                 </div>
               )}
-              <Transcript events={events} live={live} turnImages={turnImages} artifactSessionId={selected.id} />
+              <Transcript events={events} live={live} turnImages={turnImages} artifactSessionId={selectedId} />
               {streamingThink && <div className="chat-think-stream chat-streaming">💭 {streamingThink}</div>}
               {streamingText && <StreamingMessage text={streamingText} />}
               {!selectedDeleted && approvals.map((a, i) => (
@@ -2510,13 +2877,17 @@ export function AgentView({ runner }: { runner: Runner }) {
           </div>
         )}
         <div className="composer-box">
-          {/* Drag to set an explicit height (overrides auto-grow); double-click to reset. */}
-          <div
-            className="composer-resize-handle"
-            onMouseDown={startComposerResize}
-            onDoubleClick={() => setComposerHeight(null)}
-            title="Drag to resize · double-click to reset"
-          />
+          {/* Drag to set an explicit height (overrides auto-grow); double-click to reset.
+              Only shown once the box has hit its auto-grow cap or the user set a manual
+              height — an empty/short composer has nothing worth resizing. */}
+          {(composerHeight != null || composerCapped) && (
+            <div
+              className="composer-resize-handle"
+              onMouseDown={startComposerResize}
+              onDoubleClick={() => setComposerHeight(null)}
+              title="Drag to resize · double-click to reset"
+            />
+          )}
           {showSlash && (
             <div className="composer-slash-menu" role="listbox">
               {slashMatches.map((it, i) => (
@@ -2641,17 +3012,18 @@ export function AgentView({ runner }: { runner: Runner }) {
               setText(e.target.value);
               if (histIdx !== -1) setHistIdx(-1);
             }}
-            // Paste an image straight from the clipboard (e.g. a screenshot). Only swallow
-            // the paste when it actually carries image files, so pasting text is untouched.
+            // Paste a file straight from the clipboard — a screenshot, or a file copied in the
+            // OS file manager (best-effort: only where the browser exposes it as a clipboard
+            // file). Only swallow the paste when it carries files, so pasting text is untouched.
             onPaste={(e) => {
               if (!canAttach) return;
               const files = Array.from(e.clipboardData?.items ?? [])
-                .filter((it) => it.kind === 'file' && it.type.startsWith('image/'))
+                .filter((it) => it.kind === 'file')
                 .map((it) => it.getAsFile())
                 .filter((f): f is File => !!f);
               if (files.length) {
                 e.preventDefault();
-                files.forEach(addImage);
+                files.forEach((f) => void addImage(f));
               }
             }}
             // One keydown handler: drive the menu while open, else Up/Down recall
@@ -2759,8 +3131,8 @@ export function AgentView({ runner }: { runner: Runner }) {
           {/* The agent is only a Select when it can actually be picked (new, unlocked
               session); once read-only it shows as a static pill left of Model below. */}
           {!agentReadOnly && (
-            <Tooltip title="Agent">
-              <span className="composer-pill">
+            <Tooltip title="Agent" open={hoverTipOpen}>
+              <span className="composer-pill composer-pill-agent">
                 <Select
                   size="small"
                   variant="borderless"
@@ -2778,7 +3150,7 @@ export function AgentView({ runner }: { runner: Runner }) {
           {/* Tooltip wraps the span (not the Select): a disabled Select has no pointer
               events, so the parent span is what surfaces the reason on hover. With the
               icons gone, the tooltip also names what each pill controls. */}
-          <Tooltip title={configHint || 'Permission mode'}>
+          <Tooltip title={configHint || 'Permission mode'} open={hoverTipOpen}>
             <span className="composer-pill">
               <Select
                 size="small"
@@ -2802,13 +3174,13 @@ export function AgentView({ runner }: { runner: Runner }) {
           </Tooltip>
           <span className="composer-pill-spacer" />
           {agentReadOnly && shownAgentName && (
-            <Tooltip title="Agent">
-              <span className="composer-pill composer-pill-static">
+            <Tooltip title="Agent" open={hoverTipOpen}>
+              <span className="composer-pill composer-pill-static composer-pill-agent">
                 <span className="composer-pill-static-label">{shownAgentName}</span>
               </span>
             </Tooltip>
           )}
-          <Tooltip title={configHint || 'Model'}>
+          <Tooltip title={configHint || 'Model'} open={hoverTipOpen}>
             <span className="composer-pill">
               <Select
                 size="small"
@@ -2832,7 +3204,7 @@ export function AgentView({ runner }: { runner: Runner }) {
               />
             </span>
           </Tooltip>
-          <Tooltip title={configHint || 'Reasoning effort'}>
+          <Tooltip title={configHint || 'Reasoning effort'} open={hoverTipOpen}>
             <span className="composer-pill">
               <Select
                 size="small"
@@ -2841,7 +3213,16 @@ export function AgentView({ runner }: { runner: Runner }) {
                 value={shownEffort}
                 onChange={(v) => {
                   const normalized = normalizeEffortForProvider(shownProvider, v);
-                  localStorage.setItem(EFFORT_KEY, normalized);
+                  // Remember as the account default (replaces localStorage) so the next new
+                  // session — here or on iOS/macOS — starts at this effort. Optimistically patch
+                  // the cached `me` so the seed effect sees it, then persist best-effort.
+                  qc.setQueryData<Me>(meQuery().queryKey, (prev) =>
+                    prev ? { ...prev, preferences: { ...prev.preferences, defaultEffort: normalized } } : prev,
+                  );
+                  void api('/users/me/preferences', {
+                    method: 'PATCH',
+                    body: { defaultEffort: normalized },
+                  }).catch(() => {});
                   if (live) configMut.mutate({ effort: normalized });
                   else setEffort(normalized);
                 }}

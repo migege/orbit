@@ -5,10 +5,38 @@ public struct TranscriptState: Equatable, Sendable, Codable {
     public var items: [TranscriptItem] = []
     public var pendingApprovals: [PendingApproval] = []
     public var background: [BackgroundProc] = []
+    /// Messages sent while a turn was already in flight. Held OUT of `items` — which is still
+    /// growing with the running turn's output — and rendered after the transcript, so a mid-turn
+    /// send isn't sandwiched into the middle of the streaming reply. Moved into `items` (as a real
+    /// row, in order) when the durable `user` event for the turn lands. Mirrors web's separate
+    /// `queued` state (see `addOptimisticUser`).
+    public var queued: [UserBubble] = []
     public var status: RunStatus = .pending
     /// Durable high-water seq — the `?sinceSeq=` value to reconnect with.
     public var maxSeq: Int = 0
+    /// Oldest durable seq folded into this window — the `before=` cursor for pulling the previous
+    /// history page when the user scrolls up (web parity: AgentView's `oldestSeqRef`).
+    public var oldestSeq: Int?
+    /// Whether the server holds events older than `oldestSeq` (the last fetched page's `hasMore`).
+    /// Gates the transcript's load-earlier row.
+    public var hasMoreOlder: Bool = false
     public init() {}
+
+    // Tolerant decode so snapshots written before `queued` (or the history-window cursor) existed
+    // still rehydrate (the keys just default) instead of discarding the whole cached session; the
+    // other fields keep their prior strictness. `encode(to:)` stays synthesized from these keys.
+    enum CodingKeys: String, CodingKey { case items, pendingApprovals, background, queued, status, maxSeq, oldestSeq, hasMoreOlder }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        items = try c.decode([TranscriptItem].self, forKey: .items)
+        pendingApprovals = try c.decode([PendingApproval].self, forKey: .pendingApprovals)
+        background = try c.decode([BackgroundProc].self, forKey: .background)
+        queued = (try? c.decodeIfPresent([UserBubble].self, forKey: .queued)) ?? []
+        status = try c.decode(RunStatus.self, forKey: .status)
+        maxSeq = try c.decode(Int.self, forKey: .maxSeq)
+        oldestSeq = (try? c.decodeIfPresent(Int.self, forKey: .oldestSeq)) ?? nil
+        hasMoreOlder = (try? c.decodeIfPresent(Bool.self, forKey: .hasMoreOlder)) ?? false
+    }
 }
 
 /// Pure, UI-free state machine that folds the `RunEvent` stream into a `TranscriptState`.
@@ -33,6 +61,19 @@ public struct TranscriptReducer: Sendable, Codable {
     private var openAssistant: Int?     // index of the in-progress assistant bubble, if any
     private var openThinking: Int?
     private var idSeq = 0
+    /// Namespace for synthetic ids ("i1", "i2", …). A sub-reducer folding an older history page
+    /// (see `prependOlder`) gets a per-page prefix so its ids can never collide with this
+    /// reducer's — now or after either mints more. Transient like `bgLaunch`: the parent's is
+    /// always "i", so it's excluded from the persisted keys and old snapshots still decode.
+    private var idPrefix = "i"
+    /// Command text of each `Bash(run_in_background)` launch, keyed by its tool_use id. The
+    /// `background_*` events never carry the command, so the tray title is correlated from the
+    /// launch captured here — matching web's `deriveBackgroundShells`, which titles the row
+    /// `description ?? command`. Transient: rebuilt from replayed tool_use events and excluded
+    /// from the persisted keys below, so snapshots written before it existed still decode.
+    private var bgLaunch: [String: String] = [:]
+
+    private enum CodingKeys: String, CodingKey { case state, seen, openAssistant, openThinking, idSeq }
 
     public init() {}
 
@@ -41,6 +82,8 @@ public struct TranscriptReducer: Sendable, Codable {
             if seen.contains(ev.seq) { return }       // dedup replayed/duplicate durable events
             seen.insert(ev.seq)
             if ev.seq > state.maxSeq { state.maxSeq = ev.seq }
+            // Low-water mark: the `before=` cursor for scroll-up history paging.
+            if state.oldestSeq.map({ ev.seq < $0 }) ?? true { state.oldestSeq = ev.seq }
         }
 
         switch ev.type {
@@ -57,20 +100,77 @@ public struct TranscriptReducer: Sendable, Codable {
         case .approvalRequest:  upsertApproval(ev)
         case .approvalResolved: resolveApproval(ev)
         case .backgroundTask:   upsertBackground(ev)
-        case .backgroundOutput: appendBackgroundOutput(ev)
+        case .backgroundOutput: applyBackgroundOutput(ev)
         case .status, .result:  applyStatus(ev)
         case .system, .unknown: break          // lifecycle noise — no transcript item
         }
     }
 
+    /// Fold the tail-first initial page (the newest N persisted events) and record whether older
+    /// history remains on the server before it — the cold-open half of tail-first pagination.
+    public mutating func applyTailPage(_ page: EventPage) {
+        for ev in page.events { apply(ev) }
+        state.hasMoreOlder = page.hasMore && !page.events.isEmpty
+    }
+
+    /// Fold a `before=oldestSeq` history page — chronological and strictly older than everything
+    /// loaded — in FRONT of the current window: the scroll-up half of tail-first pagination (web
+    /// AgentView's `loadOlder`). The page is folded standalone by a sub-reducer, then grafted: its
+    /// items are prepended, the dedup set merged, and `oldestSeq` moved back. Only transcript
+    /// items graft — the page's status/approval/background side effects are discarded, because the
+    /// live window owns that truth (a historical `turn_end` must not clobber a running status, nor
+    /// an old background task resurrect the tray). One seam wart is accepted (web heals it by
+    /// re-reducing its full event array, which an incremental reducer can't): a card whose
+    /// `tool_result` was folded — unmatched, and dropped — before its `tool_use` was loaded stays
+    /// "running"; a result arriving after the graft closes it normally (closeTool scans all items).
+    public mutating func prependOlder(_ page: EventPage) {
+        // An empty page means the cursor can't advance: stop the affordance regardless of
+        // `hasMore`, or the load-earlier row would spin forever re-fetching nothing.
+        state.hasMoreOlder = page.hasMore && !page.events.isEmpty
+        // Move the low-water cursor to the page's first durable event — even when every event
+        // turns out to be already folded (a misbehaving overlap), so a retry pages onward instead
+        // of refetching the same window forever (web parity: `oldestSeqRef` moves unconditionally).
+        if let first = page.events.first(where: { $0.type.isDurable && $0.seq > 0 }),
+           state.oldestSeq.map({ first.seq < $0 }) ?? true {
+            state.oldestSeq = first.seq
+        }
+        // Only durable events build history (the live-only types fold to side effects discarded
+        // below anyway), and pages are disjoint by construction (`before` is exclusive) — but
+        // never re-fold a seq this reducer already applied.
+        let fresh = page.events.filter { $0.type.isDurable && $0.seq > 0 && !seen.contains($0.seq) }
+        guard !fresh.isEmpty else { return }
+        var sub = TranscriptReducer()
+        sub.idPrefix = "o\(fresh[0].seq)-"   // per-page id namespace: see `idPrefix`
+        for ev in fresh { sub.apply(ev) }
+        sub.flushStreaming()   // close anything left open at the page's end (defensive; pages hold no deltas)
+        state.items = sub.state.items + state.items
+        seen.formUnion(sub.seen)
+        // The open-bubble cursors are item INDICES — shift them past the prepended rows, or the
+        // next live delta would stream into an old bubble. (`maxSeq` keeps the parent's — the
+        // page is older by construction; the low-water cursor already moved above.)
+        if let i = openAssistant { openAssistant = i + sub.state.items.count }
+        if let i = openThinking { openThinking = i + sub.state.items.count }
+    }
+
     /// Show a user bubble immediately on send, before the server's `user` event echoes back.
     /// Reconciled by the server `turnId` (tagged via `setOptimisticTurnId` once POST /turns
     /// returns) — or by `clientTurnId` if the server ever echoes it — when that durable event arrives.
+    ///
+    /// A `queued` send (a turn is already in flight) is held in `state.queued`, NOT appended to
+    /// `items`: the running turn is still streaming into `items`, so an inline bubble would be
+    /// sandwiched mid-reply — its continued `text_delta`/tool output would land after it. Rendered
+    /// after the transcript and reconciled out of the queue by `appendUser` once the runner leases
+    /// it. An idle send has no in-flight output to split, so it goes straight into `items`.
     public mutating func addOptimisticUser(clientTurnId: String, text: String,
                                            attachments: [TurnAttachment] = [], queued: Bool = false) {
-        flushStreaming()
-        state.items.append(.user(UserBubble(id: nextID(), text: text, attachments: attachments,
-                                            clientTurnId: clientTurnId, turnId: nil, pending: true, queued: queued)))
+        let bubble = UserBubble(id: nextID(), text: text, attachments: attachments,
+                                clientTurnId: clientTurnId, turnId: nil, pending: true, queued: queued)
+        if queued {
+            state.queued.append(bubble)
+        } else {
+            flushStreaming()
+            state.items.append(.user(bubble))
+        }
     }
 
     /// Tag the optimistic bubble (found by its `clientTurnId`) with the server-assigned `turnId`
@@ -78,6 +178,11 @@ public struct TranscriptReducer: Sendable, Codable {
     /// `clientTurnId`, so without this tag it wouldn't reconcile and the bubble would duplicate.
     /// No-op if the bubble was already reconciled (no longer pending) or never added.
     public mutating func setOptimisticTurnId(clientTurnId: String, turnId: String) {
+        // A queued send lives in `state.queued`, an idle one in `state.items` — tag whichever holds it.
+        if let i = state.queued.firstIndex(where: { $0.clientTurnId == clientTurnId && $0.pending }) {
+            state.queued[i].turnId = turnId
+            return
+        }
         guard let i = state.items.firstIndex(where: {
             if case .user(let b) = $0 { return b.clientTurnId == clientTurnId && b.pending }
             return false
@@ -158,6 +263,14 @@ public struct TranscriptReducer: Sendable, Codable {
         let id = str(ev, "toolUseId") ?? str(ev, "tool_use_id") ?? str(ev, "id") ?? nextID()
         let name = str(ev, "name") ?? str(ev, "toolName") ?? "tool"
         let input = ev.payload["input"] ?? .null
+        // A background shell launch: remember its command so the (command-less) background_* events
+        // can title the tray row. Prefer the human `description`, like web does.
+        if name == "Bash", input["run_in_background"]?.boolValue == true {
+            let desc = input["description"]?.stringValue
+            if let label = (desc?.isEmpty == false ? desc : nil) ?? input["command"]?.stringValue {
+                bgLaunch[id] = label
+            }
+        }
         state.items.append(.toolCall(ToolCard(id: id, name: name, input: input, result: nil, status: .running)))
     }
 
@@ -165,6 +278,16 @@ public struct TranscriptReducer: Sendable, Codable {
         let id = str(ev, "toolUseId") ?? str(ev, "tool_use_id") ?? str(ev, "id")
         let isError = ev.payload["isError"]?.boolValue ?? ev.payload["is_error"]?.boolValue ?? false
         let result = str(ev, "content") ?? str(ev, "result") ?? ev.payload["content"]?.asString
+        // A confirmed background-shell launch ("…running in background with ID…") must surface in the
+        // tray NOW, keyed by its tool_use id — not wait for a background_task that may never arrive
+        // (the shell is still running, or its completion notification was never recorded as an event).
+        // Mirrors web's deriveBackgroundShells, which builds the shell list from the launch, not the
+        // completion. background_task/output then update this same row (correlated by toolUseId).
+        if let id, !isError, let cmd = bgLaunch[id], let result,
+           result.contains("running in background with ID"),
+           !state.background.contains(where: { $0.id == id }) {
+            state.background.append(BackgroundProc(id: id, command: cmd, status: "running", outputTail: "", startedAt: ev.ts))
+        }
         for idx in stride(from: state.items.count - 1, through: 0, by: -1) {
             if case .toolCall(var card) = state.items[idx], card.result == nil, id == nil || card.id == id {
                 card.result = result
@@ -194,6 +317,12 @@ public struct TranscriptReducer: Sendable, Codable {
         // event, NOT `attachmentIds` — parse those so the bubble can render images / file chips
         // after a reload (web reads the same field).
         let atts = attachments(ev.payload["attachments"])
+        // The runner just leased a queued send: drop its placeholder from `state.queued` — this
+        // durable event becomes its real transcript row below, in order (web parity). Matched by the
+        // server `turnId` we tagged onto it, or an echoed `clientTurnId`.
+        state.queued.removeAll { q in
+            (cid != nil && q.clientTurnId == cid) || (ev.turnId != nil && q.turnId == ev.turnId)
+        }
         // Reconcile a pending optimistic bubble: prefer the server's `clientTurnId` echo (if it
         // ever sends one), else the server-assigned `turnId` we tagged onto the bubble from the
         // POST response — the runner echoes `turnId`, not `clientTurnId` (web parity).
@@ -220,6 +349,9 @@ public struct TranscriptReducer: Sendable, Codable {
         flushStreaming()
         state.items.append(.interrupt(id: nextID(), seq: seq))
         state.status = .interrupted
+        // An interrupt drops still-queued follow-ups server-side — they never get a durable `user`
+        // event to reconcile them — so clear the local queue to match (web parity).
+        state.queued.removeAll()
     }
 
     private mutating func appendError(_ ev: RunEvent) {
@@ -245,10 +377,19 @@ public struct TranscriptReducer: Sendable, Codable {
         if let id = str(ev, "id") ?? str(ev, "approvalId") { removeApproval(id: id) }
     }
 
-    /// Merge durable pending approvals fetched via REST — the source of truth on (re)connect,
-    /// since `approval_request` nudges ride seq 0 and are never replayed. Add-only (by id) so a
-    /// live nudge already folded in is neither duplicated nor clobbered.
-    public mutating func seedApprovals(_ approvals: [PendingApproval]) {
+    /// Reconcile pending approvals against the REST source of truth (GET /approvals?status=PENDING),
+    /// the authoritative list on (re)connect since the seq-0 `approval_request`/`approval_resolved`
+    /// nudges are live-only and never replayed. Any approval we *already knew about before the fetch*
+    /// (`knownBefore`) that the server no longer lists was resolved elsewhere — e.g. answered on the
+    /// web client while this socket was suspended/dropped, so its `approval_resolved` never reached
+    /// us — so drop it. Approvals absent from `knownBefore` are live nudges that arrived via SSE
+    /// *during* the fetch: keep them even when the (older) REST snapshot predates them, so a
+    /// concurrent request isn't clobbered. Then add any listed approval we don't already hold.
+    /// Mirrors the web, which refetches `listApprovals` on session open and replaces its approvals
+    /// state wholesale.
+    public mutating func reconcileApprovals(_ approvals: [PendingApproval], knownBefore: Set<String>) {
+        let listed = Set(approvals.map(\.id))
+        state.pendingApprovals.removeAll { knownBefore.contains($0.id) && !listed.contains($0.id) }
         for appr in approvals where !state.pendingApprovals.contains(where: { $0.id == appr.id }) {
             state.pendingApprovals.append(appr)
         }
@@ -266,26 +407,36 @@ public struct TranscriptReducer: Sendable, Codable {
 
     // MARK: - background processes
 
+    // Correlate every background event to one process by `toolUseId` (the launching Bash call) — the
+    // one id present on the launch tool_use/result AND on every background_* event, so a shell
+    // surfaced from its launch (see closeTool) and its later completion are the SAME row. `shellId`
+    // and the older `id`/`taskId` are fallbacks. (Runner sends `shellId`/`toolUseId`, never `id`.)
     private mutating func upsertBackground(_ ev: RunEvent) {
-        let id = str(ev, "id") ?? str(ev, "taskId") ?? nextID()
+        let toolUseID = str(ev, "toolUseId")
+        let id = toolUseID ?? str(ev, "shellId") ?? str(ev, "id") ?? str(ev, "taskId") ?? nextID()
         let status = str(ev, "status") ?? "running"
-        let command = str(ev, "command")
+        // The command isn't on this event; correlate it from the launching Bash tool_use (bgLaunch).
+        let command = str(ev, "command") ?? toolUseID.flatMap { bgLaunch[$0] }
         if let i = state.background.firstIndex(where: { $0.id == id }) {
             state.background[i].status = status
             if let command { state.background[i].command = command }
         } else {
-            state.background.append(BackgroundProc(id: id, command: command, status: status, outputTail: ""))
+            state.background.append(BackgroundProc(id: id, command: command, status: status, outputTail: "", startedAt: ev.ts))
         }
     }
 
-    private mutating func appendBackgroundOutput(_ ev: RunEvent) {
-        guard let id = str(ev, "id") ?? str(ev, "taskId") else { return }
-        let chunk = str(ev, "output") ?? str(ev, "chunk") ?? str(ev, "text") ?? ""
-        guard !chunk.isEmpty else { return }
+    // `background_output` carries the WHOLE current output tail (a capped file snapshot re-sent on
+    // each change under the `content` key), not an incremental delta — so replace, don't append.
+    private mutating func applyBackgroundOutput(_ ev: RunEvent) {
+        let toolUseID = str(ev, "toolUseId")
+        guard let id = toolUseID ?? str(ev, "shellId") ?? str(ev, "id") ?? str(ev, "taskId") else { return }
+        let snapshot = str(ev, "content") ?? str(ev, "output") ?? str(ev, "chunk") ?? str(ev, "text") ?? ""
+        guard !snapshot.isEmpty else { return }
         if let i = state.background.firstIndex(where: { $0.id == id }) {
-            state.background[i].outputTail += chunk
+            state.background[i].outputTail = snapshot
         } else {
-            state.background.append(BackgroundProc(id: id, command: nil, status: "running", outputTail: chunk))
+            state.background.append(BackgroundProc(id: id, command: toolUseID.flatMap { bgLaunch[$0] },
+                                                   status: "running", outputTail: snapshot, startedAt: ev.ts))
         }
     }
 
@@ -295,7 +446,7 @@ public struct TranscriptReducer: Sendable, Codable {
 
     // MARK: - helpers
 
-    private mutating func nextID() -> String { idSeq += 1; return "i\(idSeq)" }
+    private mutating func nextID() -> String { idSeq += 1; return "\(idPrefix)\(idSeq)" }
     private func str(_ ev: RunEvent, _ key: String) -> String? { ev.payload[key]?.stringValue }
     /// Parse the `user` event's `attachments` array (`[{id, mime, name}]`) into refs, dropping any
     /// element without an `id`. Older runners may send `images` (id-only) instead — not handled

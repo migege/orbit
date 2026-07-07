@@ -147,6 +147,23 @@ final class Phase2LogicTests: XCTestCase {
         }
     }
 
+    func testShowsInterrupt() {
+        // The authoritative session status wins: a running session shows the stop button even when
+        // the stream status is stale — the exact cold-open case (opening an already-running session
+        // never replays a `.running` event into the reducer, so the old `state.status`-only gate
+        // hid the button and interrupting was impossible).
+        XCTAssertTrue(ComposerLogic.showsInterrupt(session: .running, stream: .awaitingInput))
+        XCTAssertTrue(ComposerLogic.showsInterrupt(session: .running, stream: .pending))
+        XCTAssertTrue(ComposerLogic.showsInterrupt(session: .running, stream: .running))
+        // A non-running authoritative status hides it, even if the stream is a stale `.running`
+        // (e.g. the turn just ended but the reducer missed the un-replayed terminal transition).
+        XCTAssertFalse(ComposerLogic.showsInterrupt(session: .awaitingInput, stream: .running))
+        XCTAssertFalse(ComposerLogic.showsInterrupt(session: .parked, stream: .running))
+        // No session record yet (a fresh deep link before the list loads): fall back to the stream.
+        XCTAssertTrue(ComposerLogic.showsInterrupt(session: nil, stream: .running))
+        XCTAssertFalse(ComposerLogic.showsInterrupt(session: nil, stream: .awaitingInput))
+    }
+
     func testEffortLabelsAndWire() {
         XCTAssertEqual(Effort.allCases, [.default, .low, .medium, .high, .xhigh, .max])
         XCTAssertEqual(Effort.allCases.map(\.label),
@@ -294,5 +311,17 @@ final class Phase2LogicTests: XCTestCase {
         let data = try JSONEncoder().encode(
             ResumeRequest(clientTurnId: "c1", content: "go", model: "m", permissionMode: "auto", effort: "max"))
         XCTAssertTrue(String(decoding: data, as: UTF8.self).contains("\"effort\":\"max\""))
+    }
+
+    /// Reviving a dormant session must carry staged image ids so the server links them to the
+    /// reviving turn (else the image is dropped and only the text survives). A text-only resume
+    /// omits the key via synthesized `encodeIfPresent`.
+    func testResumeEncodesAttachmentIds() throws {
+        let withImages = try jsonObject(
+            ResumeRequest(clientTurnId: "c1", content: "look", attachmentIds: ["att-1", "att-2"]))
+        XCTAssertEqual(withImages["attachmentIds"] as? [String], ["att-1", "att-2"])
+
+        let textOnly = try jsonObject(ResumeRequest(clientTurnId: "c1", content: "hi"))
+        XCTAssertFalse(textOnly.keys.contains("attachmentIds"), "text-only resume must omit attachmentIds")
     }
 }
