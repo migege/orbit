@@ -240,10 +240,6 @@ struct ComposerView: View {
                     ContextWindowIndicator(tokens: ctx, model: console.modelID)
                 }
 
-                if let ctx = console.state.contextTokens, ctx > 0 {
-                    ContextWindowIndicator(tokens: ctx, model: console.modelID)
-                }
-
                 if let usage = console.planUsage {
                     PlanUsageIndicator(usage: usage)
                 }
