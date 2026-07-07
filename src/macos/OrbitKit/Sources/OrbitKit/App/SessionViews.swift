@@ -21,6 +21,11 @@ public enum SessionView: String, CaseIterable, Sendable, Identifiable {
         case .system:    return "system"
         }
     }
+
+    /// The cases offered in the console's switcher. `system` is intentionally excluded — auto-created
+    /// (task-execution) sessions are internal bookkeeping, not something to browse — but it stays a
+    /// valid case for the `?view=system` query and deep-link resolution.
+    public static let pickerCases: [SessionView] = [.active, .completed]
 }
 
 public enum SessionFilter {

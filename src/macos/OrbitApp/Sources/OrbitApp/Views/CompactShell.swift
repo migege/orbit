@@ -210,10 +210,14 @@ private enum DrawerMetrics {
 private struct NavigationDrawer: View {
     @Environment(AppModel.self) private var model
     let close: () -> Void
-    /// Which runner groups are expanded to reveal their agents. Default collapsed; the group holding
-    /// the current agent (and a lone group) always shows — see `isExpanded`. Persists across
-    /// open/close because this view stays mounted (offset off-screen) in the shell's ZStack.
+    /// Which runner groups are expanded to reveal their agents. A lone group always shows; the group
+    /// holding the current agent is seeded open once (see the `.onChange` below) so the drawer lands
+    /// showing your context, but a tap can still collapse it. Persists across open/close because this
+    /// view stays mounted (offset off-screen) in the shell's ZStack.
     @State private var expandedRunners: Set<String> = []
+    /// Guards the one-time seed of the selected agent's machine, so a later agent list reload doesn't
+    /// re-open a group the user has since collapsed.
+    @State private var didSeedExpansion = false
 
     var body: some View {
         let isAdmin = model.user?.role == "ADMIN"
@@ -226,9 +230,10 @@ private struct NavigationDrawer: View {
                 .padding(.bottom, 8)
 
             List {
-                // Runners is dropped from the drawer rail on iOS — it now lives under Settings (see
-                // SettingsView). The runner-grouped agents below still surface each machine by name.
-                ForEach(AppSection.visible(isAdmin: isAdmin).filter { $0 != .runners }) { section in
+                // Runners is dropped from the drawer rail on iOS (it lives under Settings); Settings and
+                // Admin fold into the account footer menu below. The runner-grouped agents still surface
+                // each machine by name — so the rail is just Agents (as machines) + Tasks.
+                ForEach(AppSection.visible(isAdmin: isAdmin).filter { ![.runners, .settings, .admin].contains($0) }) { section in
                     // The Agents nav row is replaced in place by its runner-grouped agents. Each runner
                     // is a collapsible row (icon · online dot · agent count) that expands to its agents,
                     // so the machine list stays collapsible instead of always-expanded.
@@ -251,9 +256,19 @@ private struct NavigationDrawer: View {
             // Agents are always shown now, so load the list when the drawer mounts (mirrors the macOS
             // sidebar), then land on the first agent. It's light; the heavy session list loads separately.
             .task { await model.loadAgentsThenLand() }
+            // Seed the machine you're currently in open on first load (so the drawer lands showing your
+            // context), then let taps win — the selected machine stays collapsible. See `isExpanded`.
+            .onChange(of: selectedGroupKey, initial: true) { _, key in
+                guard !didSeedExpansion, let key else { return }
+                expandedRunners.insert(key)
+                didSeedExpansion = true
+            }
 
             Divider()
-            AccountFooter()
+            AccountFooter(onSelectSection: { section in
+                model.selectedSection = section
+                close()
+            })
                 .background(.bar)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -397,12 +412,17 @@ private struct NavigationDrawer: View {
 
     private func groupKey(_ g: AgentGroup) -> String { g.runnerId ?? "host" }
 
-    /// A group is shown expanded when it's the only group, when it holds the currently-selected agent
-    /// (you can't fold away the machine you're working in), or when the user expanded it. Otherwise
-    /// collapsed — Recents is the primary way in, so the machine list stays tidy by default.
+    /// The group key of the machine holding the currently-selected agent, if any — the seed target.
+    private var selectedGroupKey: String? {
+        guard let sel = model.selectedAgentID, let groups = model.agents?.groups else { return nil }
+        return groups.first(where: { $0.agents.contains(where: { $0.id == sel }) }).map(groupKey)
+    }
+
+    /// A group is shown expanded when it's the only group or when it's in `expandedRunners` (seeded from
+    /// the selected agent on first load, then driven by taps). Otherwise collapsed — Recents is the
+    /// primary way in, so the machine list stays tidy by default.
     private func isExpanded(_ g: AgentGroup, totalGroups: Int) -> Bool {
         if totalGroups <= 1 { return true }
-        if let sel = model.selectedAgentID, g.agents.contains(where: { $0.id == sel }) { return true }
         return expandedRunners.contains(groupKey(g))
     }
 

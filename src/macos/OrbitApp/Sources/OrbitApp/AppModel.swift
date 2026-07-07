@@ -69,10 +69,12 @@ final class AppModel {
         sessions.first { $0.id == id } ?? agents?.agentSessions.first { $0.id == id }
     }
 
-    /// The drawer's **Recents** feed: the most-recently-active sessions across every agent, derived
-    /// from the already-fresh cross-agent Active list (`sessions`). Empty until the first
-    /// `loadSessions` lands; kept live by the same control-plane stream that drives the list.
-    var recentSessions: [Session] { RecentsLogic.recent(sessions) }
+    /// The drawer's **Recents** feed: every jump-back session across all agents, newest first, derived
+    /// from the already-fresh cross-agent Active list (`sessions`) — which the server returns in full,
+    /// unpaginated. Uncapped on purpose: the drawer's Recents List is lazy, so it renders rows as you
+    /// scroll rather than stopping at a fixed count. Empty until the first `loadSessions` lands; kept
+    /// live by the same control-plane stream that drives the list.
+    var recentSessions: [Session] { RecentsLogic.recent(sessions, limit: sessions.count) }
 
     let tokenStore: TokenStore
     let notifications = NotificationManager()

@@ -10,6 +10,14 @@ final class SessionViewsTests: XCTestCase {
         XCTAssertEqual(SessionView.allCases.map(\.title), ["Active", "Completed", "System"])
     }
 
+    /// The console switcher offers only Active/Completed — `system` stays a valid case (query value,
+    /// deep-link resolution) but auto-created sessions aren't a browse destination, so the picker
+    /// leaves them out.
+    func testPickerCasesExcludeSystem() {
+        XCTAssertEqual(SessionView.pickerCases, [.active, .completed])
+        XCTAssertFalse(SessionView.pickerCases.contains(.system))
+    }
+
     /// The list nests the agent — filtering must read `agent.id`, not the (absent) flat `agentId`.
     func testForAgentFiltersByNestedAgent() throws {
         let json = """

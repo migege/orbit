@@ -125,7 +125,7 @@ struct AgentPanes: View {
             // items out in declaration order, leading→trailing; verify the order on device).
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
-                    ForEach(SessionView.allCases) { v in
+                    ForEach(SessionView.pickerCases) { v in
                         Button { view = v } label: {
                             if v == view { Label(v.title, systemImage: "checkmark") }
                             else { Text(v.title) }
@@ -161,7 +161,7 @@ struct AgentPanes: View {
             }
             ToolbarItem(placement: .principal) {
                 Picker("View", selection: $view) {
-                    ForEach(SessionView.allCases) { Text($0.title).tag($0) }
+                    ForEach(SessionView.pickerCases) { Text($0.title).tag($0) }
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
