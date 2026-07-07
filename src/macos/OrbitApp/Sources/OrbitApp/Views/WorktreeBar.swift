@@ -453,7 +453,7 @@ private struct DiffFileView: View {
 /// Background shells the agent launched, shown as a collapsible tray between the transcript and
 /// approvals — a port of web's `BackgroundShellsTray`. Collapsed it's a one-line header
 /// ("Background processes · N running · N total"); tapping it reveals the list, where each row
-/// (status · command · id · age) opens as an accordion to show that shell's captured output tail.
+/// (status · command · age) opens as an accordion to show that shell's captured output tail.
 struct BackgroundTrayView: View {
     let procs: [BackgroundProc]
     @State private var open = false
@@ -502,7 +502,7 @@ struct BackgroundTrayView: View {
     }
 }
 
-/// One background-shell row: a folded head (status · command · id · age) that expands to the
+/// One background-shell row: a folded head (status · command · age) that expands to the
 /// captured output tail (or an empty-state note). Mirrors web's `BgShellRow`.
 private struct BackgroundRow: View {
     let proc: BackgroundProc
@@ -513,10 +513,9 @@ private struct BackgroundRow: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 statusIcon.frame(width: 18)
-                Text(proc.command ?? proc.id)
+                Text(proc.command ?? "Background process")
                     .font(.orbitMono).lineLimit(1).truncationMode(.tail)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                Text(proc.id).font(.orbitMonoFine).foregroundStyle(.secondary).lineLimit(1)
                 if let ts = proc.startedAt, let rel = RelativeTime.format(ts) {
                     Text(rel).font(.orbitMeta).foregroundStyle(.secondary)
                 }
