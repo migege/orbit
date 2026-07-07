@@ -194,6 +194,17 @@ private struct CompactSections: View {
     }
 }
 
+/// One place for the drawer's spacing rhythm so every row lines up on the same grid. Tuned for a
+/// calm, ChatGPT-style rail: roomy ~44pt rows, a hair of space between them, and a rounded selection
+/// pill that's inset from both edges rather than an edge-to-edge tint.
+private enum DrawerMetrics {
+    static let hInset: CGFloat = 10                // outer inset → the selection pill floats off both edges
+    static let padH: CGFloat = 12                  // inner horizontal padding (edge of pill → icon)
+    static let padV: CGFloat = 11                  // inner vertical padding → ~44pt primary rows
+    static let corner: CGFloat = 10                // selection-pill corner radius
+    static let textLeading = hInset + padH         // 22 — aligns the title/section headers to row content
+}
+
 /// The left navigation drawer: the section rail (mirroring the web sidebar) over the account footer.
 /// The current section is highlighted.
 private struct NavigationDrawer: View {
@@ -209,8 +220,9 @@ private struct NavigationDrawer: View {
         return VStack(alignment: .leading, spacing: 0) {
             Text("Orbit")
                 .font(.title2.weight(.bold))
-                .padding(.horizontal, 20)
-                .padding(.top, 16)
+                .padding(.leading, DrawerMetrics.textLeading)
+                .padding(.trailing, DrawerMetrics.hInset)
+                .padding(.top, 14)
                 .padding(.bottom, 8)
 
             List {
@@ -231,6 +243,11 @@ private struct NavigationDrawer: View {
                 recentsRows
             }
             .listStyle(.plain)
+            // Let each row's own padding set its height and let the drawer background show through, so
+            // the rail reads as calm whitespace (ChatGPT-style) rather than a boxed, hairline-separated
+            // table. Separators + the selection pill are drawn per row — see `drawerRow` / `pill`.
+            .scrollContentBackground(.hidden)
+            .environment(\.defaultMinListRowHeight, 0)
             // Agents are always shown now, so load the list when the drawer mounts (mirrors the macOS
             // sidebar), then land on the first agent. It's light; the heavy session list loads separately.
             .task { await model.loadAgentsThenLand() }
@@ -243,6 +260,23 @@ private struct NavigationDrawer: View {
         .background(Color(uiColor: .systemBackground))
     }
 
+    /// Shared chrome for a tappable drawer row: a consistent height and an inset, rounded selection
+    /// "pill" (rather than an edge-to-edge tint) so the active row reads as a floating highlight — the
+    /// modern sidebar look the web nav and ChatGPT share. `indent` nudges nested content (an agent
+    /// under its machine) rightward without moving the pill; `padV` tightens the sub-rows.
+    @ViewBuilder
+    private func pill(selected: Bool, indent: CGFloat = 0, padV: CGFloat = DrawerMetrics.padV,
+                      @ViewBuilder _ content: () -> some View) -> some View {
+        content()
+            .padding(.leading, DrawerMetrics.padH + indent)
+            .padding(.trailing, DrawerMetrics.padH)
+            .padding(.vertical, padV)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(selected ? Color.accentColor.opacity(0.14) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: DrawerMetrics.corner, style: .continuous))
+            .contentShape(Rectangle())
+    }
+
     /// A plain destination row: tapping switches section and closes the drawer.
     private func sectionRow(_ section: AppSection) -> some View {
         let selected = section == model.selectedSection
@@ -250,18 +284,20 @@ private struct NavigationDrawer: View {
             model.selectedSection = section
             close()
         } label: {
-            HStack(spacing: 12) {
-                Image(systemName: section.systemImage)
-                    .frame(width: 24)
-                    .foregroundStyle(selected ? Color.accentColor : Color.secondary)
-                Text(section.title)
-                    .fontWeight(selected ? .semibold : .regular)
-                    .foregroundStyle(.primary)
-                Spacer(minLength: 0)
+            pill(selected: selected) {
+                HStack(spacing: 12) {
+                    Image(systemName: section.systemImage)
+                        .frame(width: 24)
+                        .foregroundStyle(selected ? Color.accentColor : .primary)
+                    Text(section.title)
+                        .fontWeight(selected ? .semibold : .regular)
+                        .foregroundStyle(.primary)
+                    Spacer(minLength: 0)
+                }
             }
-            .contentShape(Rectangle())
         }
-        .listRowBackground(selected ? Color.accentColor.opacity(0.12) : Color.clear)
+        .buttonStyle(.plain)
+        .drawerRow()
     }
 
     // MARK: Recents
@@ -273,12 +309,14 @@ private struct NavigationDrawer: View {
         let recents = model.recentSessions
         if !recents.isEmpty {
             Text("Recents")
-                .font(.orbitLabel)
+                .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.secondary)
-                .padding(.leading, 20)
-                .padding(.top, 6)
-                .padding(.bottom, 2)
+                .padding(.leading, DrawerMetrics.textLeading)
+                .padding(.top, 18)
+                .padding(.bottom, 4)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .listRowInsets(EdgeInsets())
+                .listRowSeparator(.hidden)
                 .listRowBackground(Color.clear)
             ForEach(recents) { session in
                 recentRow(session)
@@ -295,16 +333,14 @@ private struct NavigationDrawer: View {
             model.openRecentSession(s)
             close()
         } label: {
-            Text(s.title ?? "Untitled session")
-                .lineLimit(1)
-                .foregroundStyle(.primary)
-                .padding(.leading, 20)
-                .padding(.vertical, 6)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
+            pill(selected: selected) {
+                Text(s.title ?? "Untitled session")
+                    .lineLimit(1)
+                    .foregroundStyle(.primary)
+            }
         }
         .buttonStyle(.plain)
-        .listRowBackground(selected ? Color.accentColor.opacity(0.12) : Color.clear)
+        .drawerRow()
     }
 
     // MARK: Agents grouped by runner (collapsible)
@@ -332,30 +368,31 @@ private struct NavigationDrawer: View {
         return Button {
             toggle(group)
         } label: {
-            HStack(spacing: 12) {
-                Image(systemName: group.runnerId == nil ? "shippingbox" : "desktopcomputer")
-                    .frame(width: 24)
-                    .foregroundStyle(.secondary)
-                Text(agents.runnerLabel(group.runnerId))
-                    .lineLimit(1)
-                    .foregroundStyle(.primary)
-                Spacer(minLength: 6)
-                if group.runnerId != nil {
-                    Circle()
-                        .fill(agents.runnerIsOnline(group.runnerId) ? Color.green : Color.secondary.opacity(0.4))
-                        .frame(width: 7, height: 7)
+            pill(selected: false) {
+                HStack(spacing: 12) {
+                    Image(systemName: group.runnerId == nil ? "shippingbox" : "desktopcomputer")
+                        .frame(width: 24)
+                        .foregroundStyle(.primary)
+                    Text(agents.runnerLabel(group.runnerId))
+                        .lineLimit(1)
+                        .foregroundStyle(.primary)
+                    Spacer(minLength: 6)
+                    if group.runnerId != nil {
+                        Circle()
+                            .fill(agents.runnerIsOnline(group.runnerId) ? Color.green : Color.secondary.opacity(0.4))
+                            .frame(width: 7, height: 7)
+                    }
+                    Text("\(group.agents.count)")
+                        .font(.orbitMeta)
+                        .foregroundStyle(.secondary)
+                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                        .font(.orbitMeta)
+                        .foregroundStyle(.tertiary)
                 }
-                Text("\(group.agents.count)")
-                    .font(.orbitMeta)
-                    .foregroundStyle(.secondary)
-                Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                    .font(.orbitMeta)
-                    .foregroundStyle(.tertiary)
             }
-            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .listRowBackground(Color.clear)
+        .drawerRow()
     }
 
     private func groupKey(_ g: AgentGroup) -> String { g.runnerId ?? "host" }
@@ -381,25 +418,26 @@ private struct NavigationDrawer: View {
         return Button {
             openAgent(agent.id)
         } label: {
-            HStack(spacing: 6) {
-                Text(agent.name)
-                    .lineLimit(1)
-                    .foregroundStyle(.primary)
-                if agent.enabled == false {
-                    Text("disabled")
-                        .font(.orbitMeta)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 1)
-                        .background(.quaternary, in: Capsule())
+            // Indent the content to sit under the machine's *label* (icon width + its spacing) while
+            // the selection pill still lines up with every other row.
+            pill(selected: selected, indent: 24 + 12, padV: 7) {
+                HStack(spacing: 6) {
+                    Text(agent.name)
+                        .lineLimit(1)
+                        .foregroundStyle(.primary)
+                    if agent.enabled == false {
+                        Text("disabled")
+                            .font(.orbitMeta)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(.quaternary, in: Capsule())
+                    }
+                    Spacer(minLength: 0)
                 }
-                Spacer(minLength: 0)
             }
-            .padding(.leading, 32)
-            .padding(.vertical, 3)
-            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .listRowBackground(selected ? Color.accentColor.opacity(0.12) : Color.clear)
+        .drawerRow()
     }
 
     /// Jump straight to an agent from the drawer: mirror the Agents-list selection (clear stale
@@ -412,6 +450,18 @@ private struct NavigationDrawer: View {
 }
 
 private extension View {
+    /// The shared list-row chrome for every drawer row: kill the plain-list hairline separators, clear
+    /// the default row background (selection is drawn as the row's own inset pill), and inset the row a
+    /// hair top/bottom so consecutive pills don't touch. Rows read as clean text-on-whitespace until
+    /// one is selected — the ChatGPT look, minus the boxed table.
+    func drawerRow() -> some View {
+        self
+            .listRowInsets(EdgeInsets(top: 1, leading: DrawerMetrics.hInset,
+                                      bottom: 1, trailing: DrawerMetrics.hInset))
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
+    }
+
     /// Adds the leading hamburger that opens the nav drawer. Applied to a section's *root* view so it
     /// shows only in the root nav bar (pushed pages keep the system back button).
     func drawerToggle(open: @escaping () -> Void) -> some View {
