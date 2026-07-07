@@ -52,6 +52,18 @@ public final class APIClient: @unchecked Sendable {
         _ = try await postRaw("auth/change-password", body: req)
     }
 
+    // MARK: push notifications (iOS)
+
+    /// Register this device's APNs token so the server can push "needs your reply" alerts.
+    public func registerDeviceToken(_ req: DeviceTokenRequest) async throws {
+        _ = try await postRaw("push/register", body: req)
+    }
+
+    /// Drop this device's token (e.g. on sign-out) so it stops receiving pushes.
+    public func unregisterDeviceToken(token: String) async throws {
+        _ = try await postRaw("push/unregister", body: ["token": token])
+    }
+
     // MARK: admin (role-gated; non-admins get 403)
     public func adminUsers() async throws -> [User] { try await get("admin/users") }
     public func createUser(_ req: CreateUserRequest) async throws -> CreateUserResult { try await post("admin/users", body: req) }

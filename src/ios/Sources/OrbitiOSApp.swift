@@ -14,6 +14,8 @@ import OrbitKit
 struct OrbitiOSApp: App {
     @State private var model = AppModel()
     @Environment(\.scenePhase) private var scenePhase
+    // The only reliable way to receive the APNs device token in a SwiftUI app (see Push.swift).
+    @UIApplicationDelegateAdaptor(PushDelegate.self) private var pushDelegate
 
     var body: some Scene {
         WindowGroup {
@@ -58,7 +60,11 @@ private struct RootView: View {
     @Environment(\.horizontalSizeClass) private var hSize
     var body: some View {
         if model.signedIn {
-            if hSize == .compact { CompactShell() } else { MainView() }
+            Group {
+                if hSize == .compact { CompactShell() } else { MainView() }
+            }
+            // Register for "needs your reply" pushes once signed in (idempotent).
+            .task { model.enablePush() }
         } else {
             LoginView()
         }

@@ -54,6 +54,7 @@ import { assertValidUpload, MAX_UPLOAD_BYTES, UploadedFile } from '../attachment
 import { PrismaService } from '../prisma/prisma.service';
 import { QueueService } from '../queue/queue.service';
 import { RealtimeService } from '../realtime/realtime.service';
+import { PushService } from '../push/push.service';
 import { normalizeStoredRememberRules } from '../sessions/remember-rules';
 import { postRunFailureComment, reclaimStalledTask } from '../tasks/reclaim-stalled-task';
 import { CurrentRunner } from './current-runner.decorator';
@@ -95,6 +96,7 @@ export class RunnerApiController {
     private readonly prisma: PrismaService,
     private readonly queue: QueueService,
     private readonly realtime: RealtimeService,
+    private readonly push: PushService,
   ) {}
 
   /** `orbit register` — exchange a one-time enrollment token for a runner credential. */
@@ -616,6 +618,9 @@ export class RunnerApiController {
         },
         ts: new Date().toISOString(),
       });
+      // Fire-and-forget: nudge the owner's iOS devices that a reply is needed. Not awaited so a
+      // slow APNs round-trip can't delay the runner's approval-create response.
+      void this.push.notifyApprovalRequest(sessionId, approval.toolName);
     }
     return { id: approval.id, status: approval.status as ApprovalStatus };
   }

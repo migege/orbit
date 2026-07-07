@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
 	<!--
-	  Phase B: no entitlements needed yet — a single app reads/writes its own Keychain items
-	  (the JWT via KeychainTokenStore) without a keychain-access-group.
-
-	  Phase E (APNs) will add:
-	    <key>aps-environment</key><string>development</string>   (release build flips to production)
-	  and Info.plist will gain UIBackgroundModes → remote-notification. Kept as an empty dict so the
-	  CODE_SIGN_ENTITLEMENTS wiring is already in place.
+	  APNs: `production` is what App Store / TestFlight distribution builds use (they receive on the
+	  production APNs host). Local Xcode debug builds would need `development` + the sandbox host; that
+	  variant is deferred (add an Orbit.Debug.entitlements + a per-config CODE_SIGN_ENTITLEMENTS when
+	  we want on-device debug pushes). The client reports its environment to the server on register,
+	  so the server picks the matching APNs host per token.
 	-->
+	<key>aps-environment</key>
+	<string>production</string>
 </dict>
 </plist>
