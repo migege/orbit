@@ -12,6 +12,10 @@ struct ConsoleView: View {
     let sessionID: String
     var agentID: String? = nil
     let registry: ConsoleRegistry
+    // Console height, measured below, so the approvals panel can cap itself at a fraction of it: it
+    // sits in a fixed slot above the composer and would otherwise starve the transcript and truncate
+    // a long question to a single line.
+    @State private var consoleHeight: CGFloat = 0
     #if os(iOS)
     // Looked up to build the nav-bar title (session name + "state · when"), mirroring how web's
     // console header reads `selected` off the cached session list. iOS-only: macOS shows status in
@@ -36,13 +40,22 @@ struct ConsoleView: View {
                         .background(.bar)
                     }
                     BackgroundTrayView(procs: console.state.background)
-                    ApprovalsView(console: console)
+                    ApprovalsView(console: console,
+                                  maxHeight: consoleHeight > 0 ? consoleHeight * 0.55 : 380)
                     // Worktree status bar sits directly above the composer, matching web's layout.
                     WorktreeBar(console: console)
                     ComposerView(console: console)
                 }
                 // Image cache for user-turn attachments, read by `UserBubbleView` down the tree.
                 .environment(registry.attachments)
+                // Feeds `consoleHeight` for the approvals cap above. A background reader measures the
+                // VStack's final frame (the full console height — the List absorbs the slack) without
+                // affecting its layout.
+                .background {
+                    GeometryReader { g in
+                        Color.clear.onChange(of: g.size.height, initial: true) { _, h in consoleHeight = h }
+                    }
+                }
             } else {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             }

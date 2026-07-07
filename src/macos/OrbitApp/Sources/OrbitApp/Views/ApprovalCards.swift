@@ -5,18 +5,40 @@ import OrbitKit
 /// by kind (tool permission / AskUserQuestion form / ExitPlanMode).
 struct ApprovalsView: View {
     let console: ConsoleModel
+    // Height ceiling for the stacked cards, passed from ConsoleView (≈half the console). The panel
+    // lives in a fixed, non-scrolling slot above the composer — unlike web, where the cards render
+    // inside the transcript's own scroll — so it has to bound and scroll itself. The default covers
+    // previews / any call site that doesn't measure.
+    var maxHeight: CGFloat = 380
+    // Natural height of the cards, measured so the panel hugs a short form yet caps a tall one.
+    @State private var contentHeight: CGFloat = 0
 
     var body: some View {
         if !console.state.pendingApprovals.isEmpty {
-            VStack(spacing: 8) {
-                ForEach(console.state.pendingApprovals) { approval in
-                    switch approval.kind {
-                    case .question: QuestionCard(console: console, approval: approval)
-                    case .plan:     PlanCard(console: console, approval: approval)
-                    case .tool:     ToolApprovalCard(console: console, approval: approval)
+            // Give the cards their own scroll: in the surrounding VStack a tall AskUserQuestion form
+            // (several questions, long option text) is vertically starved and collapses every line to
+            // a single ellipsized row — the reported "can't see the content". Inside a ScrollView the
+            // content gets unbounded height, so each line wraps in full; the frame caps the panel at
+            // `maxHeight` (it scrolls past that) and hugs the content below it, so a small card leaves
+            // no empty box and the transcript/composer keep their room.
+            ScrollView {
+                VStack(spacing: 8) {
+                    ForEach(console.state.pendingApprovals) { approval in
+                        switch approval.kind {
+                        case .question: QuestionCard(console: console, approval: approval)
+                        case .plan:     PlanCard(console: console, approval: approval)
+                        case .tool:     ToolApprovalCard(console: console, approval: approval)
+                        }
                     }
                 }
+                .background(
+                    GeometryReader { g in
+                        Color.clear.onChange(of: g.size.height, initial: true) { _, h in contentHeight = h }
+                    }
+                )
             }
+            .frame(height: min(contentHeight > 0 ? contentHeight : maxHeight, maxHeight))
+            .scrollBounceBehavior(.basedOnSize)   // solid when it fits; bounces (signals scroll) when capped
             .padding(.horizontal, 10)
             .padding(.top, 8)
         }
