@@ -36,10 +36,18 @@ struct CompactShell: View {
             let corner = 14 * progress
 
             ZStack(alignment: .leading) {
-                // Drawer, revealed at the leading edge as the content slides right.
+                // The base both the fixed sidebar and the floating card sit on. As the card recedes
+                // (scales down, below) its trimmed edges reveal this instead of the raw window, so the
+                // "white base" reads consistently in light and dark. A no-op when closed (card covers it).
+                Color(uiColor: .systemBackground)
+                    .ignoresSafeArea()
+
+                // Fixed sidebar pinned to the leading edge. It stays put while the content card slides
+                // right to *reveal* it (ChatGPT-style), rather than sliding in alongside the content — so
+                // no `.offset` here. The leading-aligned ZStack seats it at [0, dw]; the content on top
+                // covers it when closed and uncovers it left-to-right as `x` grows.
                 NavigationDrawer(close: closeDrawer)
                     .frame(width: dw)
-                    .offset(x: x - dw)
 
                 // The soft shadow the sliding content casts onto the drawer along its leading edge — the
                 // ChatGPT sense of the content floating *above* the drawer, which is what reads as depth.
@@ -82,6 +90,11 @@ struct CompactShell: View {
                         RoundedRectangle(cornerRadius: corner, style: .continuous)
                             .ignoresSafeArea()
                     }
+                    // Recede as it opens: the card shrinks toward its center (down to 0.95 fully open),
+                    // so it reads as pushed back behind the sidebar rather than merely shoved aside — the
+                    // ChatGPT depth cue. Applied after the mask so the rounded card scales as one unit,
+                    // and before the offset so it scales in place then translates right.
+                    .scaleEffect(1 - 0.05 * progress)
                     .offset(x: x)
 
                 // Left-edge open strip — present only at a section's root so it yields the edge to
