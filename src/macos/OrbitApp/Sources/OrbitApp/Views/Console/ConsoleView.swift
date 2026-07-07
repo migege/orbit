@@ -35,12 +35,12 @@ struct ConsoleView: View {
                         .padding(.horizontal, 12).padding(.vertical, 4)
                         .background(.bar)
                     }
-                    BackgroundTrayView(procs: console.state.background)
                     // Pending approvals (incl. the AskUserQuestion form) render inline at the tail of
                     // the transcript now — as the agent's latest turn, web-style — not in a fixed panel
                     // here. See TranscriptView.
-                    // Worktree status bar sits directly above the composer, matching web's layout.
                     WorktreeBar(console: console)
+                    // Background tray sits directly above the composer, matching web's layout.
+                    BackgroundTrayView(procs: console.state.background)
                     ComposerView(console: console)
                 }
                 // Image cache for user-turn attachments, read by `UserBubbleView` down the tree.

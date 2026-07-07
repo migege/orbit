@@ -2826,9 +2826,6 @@ export function AgentView({ runner }: { runner: Runner }) {
             )}
           </div>
         )}
-        {/* Background processes the agent launched (Bash run_in_background) — invisible
-            otherwise. Derived from this session's events; hidden when there are none. */}
-        {selectedId && !selectedDeleted && <BackgroundShellsTray events={events} live={live} />}
         <SessionOutputs
           // Only the open session has a worktree to show. With nothing selected (new-session
           // draft, empty list) `keepPreviousData` still holds the previously-open session's
@@ -2864,6 +2861,9 @@ export function AgentView({ runner }: { runner: Runner }) {
               : undefined
           }
         />
+        {/* Background processes the agent launched (Bash run_in_background) — invisible
+            otherwise. Derived from this session's events; hidden when there are none. */}
+        {selectedId && !selectedDeleted && <BackgroundShellsTray events={events} live={live} />}
         {replyTo && (
           <div className="composer-replyto">
             <span className="composer-replyto-icon">↩</span>
