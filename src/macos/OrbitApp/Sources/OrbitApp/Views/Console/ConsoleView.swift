@@ -360,7 +360,10 @@ struct TranscriptView: View {
     }
 
     // Circular "scroll to latest" control (web parity). One user-initiated scroll — not the per-frame
-    // animated scroll that previously froze the transcript — so animating this one is safe.
+    // animated scroll that previously froze the transcript — so animating this one is safe. The disc
+    // rests at 32pt; `ScrollToLatestButtonStyle` gives it a fixed ~44pt hit target and ChatGPT's
+    // press feel (the frosted disc springs larger while held). The bottom padding is 6 rather than 12
+    // because the style already reserves ~6pt of hit area below the disc, keeping its resting spot.
     private func scrollToBottomButton(proxy: ScrollViewProxy) -> some View {
         Button {
             withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(bottomID, anchor: .bottom) }
@@ -370,12 +373,9 @@ struct TranscriptView: View {
                 .font(.orbitLabel.weight(.semibold))
                 .foregroundStyle(.primary)
                 .frame(width: 32, height: 32)
-                .background(.regularMaterial, in: Circle())
-                .overlay { Circle().strokeBorder(.primary.opacity(0.12)) }
-                .shadow(color: .black.opacity(0.18), radius: 4, y: 1)
         }
-        .buttonStyle(.plain)
-        .padding(.bottom, 12)
+        .buttonStyle(ScrollToLatestButtonStyle())
+        .padding(.bottom, 6)
         .help("Scroll to latest")
     }
 
@@ -399,6 +399,27 @@ struct TranscriptView: View {
         .background(.bar)
     }
     #endif
+}
+
+/// ChatGPT-style press feedback for the round jump-to-latest disc. Two things the plain style couldn't
+/// do: (1) a fixed, comfortable ~44pt circular hit target even though the disc only *looks* 32pt, so
+/// near-misses still register and it feels more sensitive; (2) a press-and-hold "magnify": because the
+/// frost is a real material, springing the whole disc ~1.3× larger reads as the bigger frosted-glass
+/// bubble ChatGPT shows while held, helped by a brief brighter fill and a deeper shadow. The hit target
+/// is set *after* the scale so growing on press never nudges layout or the tap region.
+private struct ScrollToLatestButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        let pressed = configuration.isPressed
+        return configuration.label
+            .background(.regularMaterial, in: Circle())
+            .overlay { Circle().fill(.primary.opacity(pressed ? 0.07 : 0)) }
+            .overlay { Circle().strokeBorder(.primary.opacity(0.12)) }
+            .shadow(color: .black.opacity(pressed ? 0.26 : 0.18), radius: pressed ? 7 : 4, y: pressed ? 2 : 1)
+            .scaleEffect(pressed ? 1.32 : 1)
+            .frame(width: 44, height: 44)
+            .contentShape(Circle())
+            .animation(.spring(response: 0.28, dampingFraction: 0.6), value: pressed)
+    }
 }
 
 /// The single scroll observer: drives the jump-to-latest button's `atBottom`, AND feeds the sticky
