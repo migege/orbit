@@ -462,7 +462,6 @@ struct BackgroundTrayView: View {
     var body: some View {
         if !procs.isEmpty {
             VStack(spacing: 0) {
-                Divider()
                 header
                 if open {
                     Divider().opacity(0.5)
@@ -475,7 +474,14 @@ struct BackgroundTrayView: View {
                     }
                 }
             }
-            .background(.bar)
+            // Match the worktree pill's floating-card language (rounded + hairline border + inset) so
+            // the stack above the composer reads as one system, not a full-bleed grey strip. The
+            // surface is a light translucent tint rather than the `.bar` material, which rendered muddy
+            // and border-less — web uses a near-white subtle fill (`--bg-subtle`) here for the crisper look.
+            .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.primary.opacity(0.1)))
+            .padding(.horizontal, 12).padding(.bottom, 8)
         }
     }
 
@@ -487,14 +493,14 @@ struct BackgroundTrayView: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            Image(systemName: "gearshape.2.fill").font(.orbitMeta).foregroundStyle(.secondary)
+            Image(systemName: "terminal").font(.orbitMeta).foregroundStyle(.secondary)
             Text("Background processes").font(.orbitLabel.weight(.semibold))
             Text(countText).font(.orbitMeta).foregroundStyle(.secondary)
             Spacer(minLength: 4)
             Image(systemName: open ? "chevron.down" : "chevron.right")
                 .font(.orbitMeta.weight(.semibold)).foregroundStyle(.secondary)
         }
-        .padding(.horizontal, 12).padding(.vertical, 7)
+        .padding(.horizontal, 10).padding(.vertical, 7)
         .contentShape(Rectangle())
         .onTapGesture { withAnimation(.easeOut(duration: 0.12)) { open.toggle() } }
         .accessibilityAddTraits(.isButton)
