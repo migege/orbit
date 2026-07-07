@@ -677,11 +677,13 @@ private let sendGlyphFont: Font = .title
 private let sendGlyphFont: Font = .title2
 #endif
 
-// The `+` add-menu glyph. On iOS it's bumped up from the 15pt row-scale `.orbitGlyph` so it reads as a
-// clearly tappable control rather than a faint hairline — but kept a clear step below the 28pt send CTA
-// so the primary-action hierarchy holds. macOS keeps the tight `.orbitGlyph` for its pointer-precise bar.
+// The `+` add-menu glyph. On iOS it's bumped up from the 15pt row-scale `.orbitGlyph` to `.title3`
+// (20pt) so it reads as a clearly tappable control rather than a faint hairline — but kept a clear step
+// below the 28pt send CTA so the primary-action hierarchy holds, and stays a semantic style so it tracks
+// Dynamic Type (a bare fixed-size font would also fail the font-tokens CI audit). macOS keeps the tight
+// `.orbitGlyph` for its pointer-precise bar.
 #if os(iOS)
-private let addGlyphFont: Font = .system(size: 20)
+private let addGlyphFont: Font = .title3
 #else
 private let addGlyphFont: Font = .orbitGlyph
 #endif
