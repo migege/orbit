@@ -16,6 +16,9 @@ struct OrbitApp: App {
             RootView()
                 .environment(model)
                 .environmentObject(updater)
+                // Honor the saved Theme preference (System/Light/Dark) app-wide. Without this the
+                // dynamic color tokens follow the system appearance only, so the picker did nothing.
+                .preferredColorScheme(model.preferredColorScheme)
                 .frame(minWidth: 820, minHeight: 520)
                 .hidesTitlebarSeparator()   // seamless, ChatGPT-style floating top (no hard rule)
                 .onOpenURL { url in
@@ -79,6 +82,7 @@ struct OrbitApp: App {
             SettingsView()
                 .environment(model)
                 .environmentObject(updater)
+                .preferredColorScheme(model.preferredColorScheme)
                 .frame(width: 480, height: 560)
         }
 

@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import OrbitKit
+import SwiftUI
 import UserNotifications
 #if os(macOS)
 import AppKit
@@ -138,6 +139,19 @@ final class AppModel {
     }
 
     // MARK: settings (preferences + password live on the user; no separate store needed)
+
+    /// The saved `theme` preference as a SwiftUI color scheme, or nil to follow the system
+    /// appearance ("system" or an unknown future value). Applied via `.preferredColorScheme` at
+    /// each shell's root — without it the dynamic `Color(light:dark:)` tokens (and the system
+    /// colors) resolve against the device appearance only, so picking Light/Dark in Settings was
+    /// stored and synced but never changed anything on screen.
+    var preferredColorScheme: ColorScheme? {
+        switch user?.preferences?.theme {
+        case "light": return .light
+        case "dark": return .dark
+        default: return nil
+        }
+    }
 
     func savePreferences(_ req: UpdatePreferencesRequest) async {
         guard let api else { return }

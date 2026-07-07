@@ -21,6 +21,9 @@ struct OrbitiOSApp: App {
         WindowGroup {
             RootView()
                 .environment(model)
+                // Honor the saved Theme preference (System/Light/Dark) app-wide. Without this the
+                // dynamic color tokens follow the device appearance only, so the picker did nothing.
+                .preferredColorScheme(model.preferredColorScheme)
                 // The type ramp (Views/Typography.swift) tracks Dynamic Type; cap it at the first
                 // accessibility sizes so a dense console layout (tool cards, diffs, the composer
                 // footer) degrades gracefully instead of exploding at AX5. Larger needs are better
