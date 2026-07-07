@@ -36,9 +36,8 @@ struct CompactShell: View {
             let corner = 14 * progress
 
             ZStack(alignment: .leading) {
-                // The base both the fixed sidebar and the floating card sit on. As the card recedes
-                // (scales down, below) its trimmed edges reveal this instead of the raw window, so the
-                // "white base" reads consistently in light and dark. A no-op when closed (card covers it).
+                // A consistent app-background base under the fixed sidebar and the sliding card, so the
+                // reveal reads in light and dark rather than exposing the raw window behind the shell.
                 Color(uiColor: .systemBackground)
                     .ignoresSafeArea()
 
@@ -90,11 +89,6 @@ struct CompactShell: View {
                         RoundedRectangle(cornerRadius: corner, style: .continuous)
                             .ignoresSafeArea()
                     }
-                    // Recede as it opens: the card shrinks toward its center (down to 0.95 fully open),
-                    // so it reads as pushed back behind the sidebar rather than merely shoved aside — the
-                    // ChatGPT depth cue. Applied after the mask so the rounded card scales as one unit,
-                    // and before the offset so it scales in place then translates right.
-                    .scaleEffect(1 - 0.05 * progress)
                     .offset(x: x)
 
                 // Left-edge open strip — present only at a section's root so it yields the edge to
@@ -117,8 +111,8 @@ struct CompactShell: View {
 
     // MARK: Drawer geometry & gestures
 
-    /// ChatGPT-style peek: the drawer takes most of the width, leaving a sliver of content visible.
-    private func drawerWidth(_ w: CGFloat) -> CGFloat { min(330, w * 0.86) }
+    /// ChatGPT-style peek: the drawer takes ~3/4 of the width, leaving a generous content peek.
+    private func drawerWidth(_ w: CGFloat) -> CGFloat { min(324, w * 0.76) }
 
     /// How far the content is pushed right, clamped to `[0, drawerWidth]` and blending the resting
     /// state with any live drag.
