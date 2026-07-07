@@ -60,6 +60,11 @@ final class AppModel {
         sessions.first { $0.id == id } ?? agents?.agentSessions.first { $0.id == id }
     }
 
+    /// The drawer's **Recents** feed: the most-recently-active sessions across every agent, derived
+    /// from the already-fresh cross-agent Active list (`sessions`). Empty until the first
+    /// `loadSessions` lands; kept live by the same control-plane stream that drives the list.
+    var recentSessions: [Session] { RecentsLogic.recent(sessions) }
+
     let tokenStore: TokenStore
     let notifications = NotificationManager()
     private(set) var baseURL: URL?
@@ -439,6 +444,19 @@ final class AppModel {
             selectedAgentSessionID = nil
             composingAgentSession = false
         }
+    }
+
+    /// Open a **Recents** row from the drawer: jump into the session's owning agent and select it so
+    /// the Agents pane pushes its console. The Active list nests the agent, so there's no fetch (unlike
+    /// a cold deep link — see `openSession`). A no-op agent switch keeps an already-pushed console; a
+    /// real switch clears the prior agent's session/compose state before selecting this session.
+    func openRecentSession(_ s: Session) {
+        selectedSection = .agents
+        if let agentID = s.agent?.id ?? s.agentId, selectedAgentID != agentID {
+            selectedAgentID = agentID
+        }
+        composingAgentSession = false
+        selectedAgentSessionID = s.id
     }
 
     /// ⌘1…⌘9: select the agent at `index` (0-based) in sidebar order, navigating into the Agents

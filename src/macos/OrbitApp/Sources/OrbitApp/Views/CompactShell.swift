@@ -199,6 +199,10 @@ private struct CompactSections: View {
 private struct NavigationDrawer: View {
     @Environment(AppModel.self) private var model
     let close: () -> Void
+    /// Which runner groups are expanded to reveal their agents. Default collapsed; the group holding
+    /// the current agent (and a lone group) always shows — see `isExpanded`. Persists across
+    /// open/close because this view stays mounted (offset off-screen) in the shell's ZStack.
+    @State private var expandedRunners: Set<String> = []
 
     var body: some View {
         let isAdmin = model.user?.role == "ADMIN"
@@ -210,10 +214,13 @@ private struct NavigationDrawer: View {
                 .padding(.bottom, 8)
 
             List {
+                // Recents leads the drawer (web/ChatGPT-style): the sessions you'd jump back into,
+                // across every agent — a semantic entry point that doesn't make you think in machines.
+                recentsRows
                 ForEach(AppSection.visible(isAdmin: isAdmin)) { section in
-                    // The Agents nav row is replaced in place by its runner-grouped agents, listed
-                    // directly (no wrapper, no collapse) so the drawer carries one less level. Every
-                    // other section stays a plain destination row.
+                    // The Agents nav row is replaced in place by its runner-grouped agents. Each runner
+                    // is a collapsible row (icon · online dot · agent count) that expands to its agents,
+                    // so the machine list is demoted below Recents instead of always-expanded.
                     if section == .agents {
                         agentsRows
                     } else {
@@ -255,26 +262,145 @@ private struct NavigationDrawer: View {
         .listRowBackground(selected ? Color.accentColor.opacity(0.12) : Color.clear)
     }
 
-    /// The runner-grouped agents, listed directly where the Agents nav row used to be — each runner
-    /// label leads its agents, with no "Agents" wrapper and no collapse. Emitted as sibling list
-    /// rows. Renders nothing until the list loads (or when there are no agents).
+    // MARK: Recents
+
+    /// The "Recents" header + rows: the most-recently-active sessions across every agent, tapping
+    /// straight into that session's console. Hidden until the cross-agent Active list has loaded.
+    @ViewBuilder
+    private var recentsRows: some View {
+        let recents = model.recentSessions
+        if !recents.isEmpty {
+            Text("Recents")
+                .font(.orbitLabel)
+                .foregroundStyle(.secondary)
+                .padding(.leading, 20)
+                .padding(.top, 6)
+                .padding(.bottom, 2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .listRowBackground(Color.clear)
+            ForEach(recents) { session in
+                recentRow(session)
+            }
+        }
+    }
+
+    /// One Recents row: a prominent session title over a muted "agent · status/time" line, led by a
+    /// status dot (working / needs-you / done colour). Tapping opens the session in its agent.
+    private func recentRow(_ s: Session) -> some View {
+        let selected = model.selectedSection == .agents && model.selectedAgentSessionID == s.id
+        return Button {
+            model.openRecentSession(s)
+            close()
+        } label: {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(s.title ?? "Untitled session")
+                    .lineLimit(1)
+                    .foregroundStyle(.primary)
+                HStack(spacing: 6) {
+                    Circle().fill(recentDotColor(s)).frame(width: 7, height: 7)
+                    Text(recentSubtitle(s))
+                        .font(.orbitListSubtitle)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            .padding(.leading, 20)
+            .padding(.vertical, 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowBackground(selected ? Color.accentColor.opacity(0.12) : Color.clear)
+    }
+
+    /// "<agent> · <status-or-time>": a needs-you / running / queued state wins over the timestamp
+    /// (so an attention row reads as such); otherwise the relative time of last activity.
+    private func recentSubtitle(_ s: Session) -> String {
+        let agent = s.agent?.name ?? model.agents?.agent(s.agentId ?? "")?.name ?? "—"
+        let tail: String
+        if (s.pendingApprovals ?? 0) > 0 { tail = "Needs reply" }
+        else if s.status == .running { tail = "Running…" }
+        else if s.status == .pending { tail = "Queued" }
+        else { tail = RelativeTime.format(s.lastTurnAt ?? s.updatedAt ?? s.createdAt ?? "") ?? "" }
+        return tail.isEmpty ? agent : "\(agent) · \(tail)"
+    }
+
+    /// The leading dot colour, reusing the shared session status glyph's semantic tone.
+    private func recentDotColor(_ s: Session) -> Color {
+        switch SessionStatusGlyph.make(for: s).tone {
+        case .brand:   return .blue
+        case .success: return .green
+        case .warning: return .orange
+        case .error:   return .red
+        case .neutral: return .secondary
+        }
+    }
+
+    // MARK: Agents grouped by runner (collapsible)
+
+    /// The runner-grouped agents, where the Agents nav row used to be: each runner is a collapsible
+    /// row that expands to its agents. Renders nothing until the list loads (or with no agents).
     @ViewBuilder
     private var agentsRows: some View {
         if let agents = model.agents, !agents.items.isEmpty {
             ForEach(agents.groups) { group in
-                Text(agents.runnerLabel(group.runnerId))
-                    .font(.orbitLabel)
-                    .foregroundStyle(.secondary)
-                    .padding(.leading, 20)
-                    .padding(.top, 8)
-                    .padding(.bottom, 2)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .listRowBackground(Color.clear)
-                ForEach(group.agents) { agent in
-                    agentRow(agent)
+                runnerRow(group, agents: agents)
+                if isExpanded(group, totalGroups: agents.groups.count) {
+                    ForEach(group.agents) { agent in
+                        agentRow(agent)
+                    }
                 }
             }
         }
+    }
+
+    /// A collapsible runner header row (sibling of the section rows): machine icon · name · online
+    /// dot · agent count · disclosure chevron. Tapping expands/collapses its agents.
+    private func runnerRow(_ group: AgentGroup, agents: AgentsModel) -> some View {
+        let expanded = isExpanded(group, totalGroups: agents.groups.count)
+        return Button {
+            toggle(group)
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: group.runnerId == nil ? "shippingbox" : "desktopcomputer")
+                    .frame(width: 24)
+                    .foregroundStyle(.secondary)
+                Text(agents.runnerLabel(group.runnerId))
+                    .lineLimit(1)
+                    .foregroundStyle(.primary)
+                Spacer(minLength: 6)
+                if group.runnerId != nil {
+                    Circle()
+                        .fill(agents.runnerIsOnline(group.runnerId) ? Color.green : Color.secondary.opacity(0.4))
+                        .frame(width: 7, height: 7)
+                }
+                Text("\(group.agents.count)")
+                    .font(.orbitMeta)
+                    .foregroundStyle(.secondary)
+                Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                    .font(.orbitMeta)
+                    .foregroundStyle(.tertiary)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowBackground(Color.clear)
+    }
+
+    private func groupKey(_ g: AgentGroup) -> String { g.runnerId ?? "host" }
+
+    /// A group is shown expanded when it's the only group, when it holds the currently-selected agent
+    /// (you can't fold away the machine you're working in), or when the user expanded it. Otherwise
+    /// collapsed — Recents is the primary way in, so the machine list stays tidy by default.
+    private func isExpanded(_ g: AgentGroup, totalGroups: Int) -> Bool {
+        if totalGroups <= 1 { return true }
+        if let sel = model.selectedAgentID, g.agents.contains(where: { $0.id == sel }) { return true }
+        return expandedRunners.contains(groupKey(g))
+    }
+
+    private func toggle(_ g: AgentGroup) {
+        let k = groupKey(g)
+        if expandedRunners.contains(k) { expandedRunners.remove(k) } else { expandedRunners.insert(k) }
     }
 
     /// A compact agent row: just the name (which already carries the "@ provider" suffix, so it

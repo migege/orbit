@@ -10,6 +10,9 @@ import OrbitKit
 final class AgentsModel {
     private(set) var items: [Agent] = []
     private(set) var runnerNames: [String: String] = [:]
+    /// runnerId → is-online, for the drawer's collapsible runner rows (a leading connection dot).
+    /// Populated from the same best-effort `runners()` fetch that feeds `runnerNames`.
+    private(set) var runnerOnline: [String: Bool] = [:]
     private(set) var loading = false
     var errorText: String?
 
@@ -34,6 +37,13 @@ final class AgentsModel {
         return runnerNames[id] ?? id
     }
 
+    /// Whether a runner is currently reachable — drives the drawer runner row's connection dot.
+    /// Host-level agents (nil runner) and not-yet-loaded runners read as offline (no green dot).
+    func runnerIsOnline(_ runnerId: String?) -> Bool {
+        guard let id = runnerId else { return false }
+        return runnerOnline[id] ?? false
+    }
+
     func agent(_ id: String) -> Agent? { items.first { $0.id == id } }
 
     func load() async {
@@ -41,10 +51,12 @@ final class AgentsModel {
         defer { loading = false }
         do {
             items = try await api.agents()
-            // Best-effort: map runner ids → names for the group headers.
+            // Best-effort: map runner ids → names (group headers) and → online (connection dots).
             if let runners = try? await api.runners() {
                 runnerNames = Dictionary(runners.map { ($0.id, $0.displayName ?? $0.name) },
                                          uniquingKeysWith: { a, _ in a })
+                runnerOnline = Dictionary(runners.map { ($0.id, $0.online ?? ($0.status == .online)) },
+                                          uniquingKeysWith: { a, _ in a })
             }
         } catch { errorText = friendly(error) }
     }
