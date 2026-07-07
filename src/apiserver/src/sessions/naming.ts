@@ -47,9 +47,9 @@ export interface NamingResult {
 
 /**
  * Produce a session's title + worktree branch. When DEEPSEEK_API_KEY is set, ask DeepSeek
- * (an OpenAI-compatible chat endpoint) for a concise English title and branch slug — so a
- * Chinese task title still yields a readable `orbit/fix-login-500` branch instead of the
- * `orbit/session-<hash>` slug fallback. With no key configured — or on any error/timeout/
+ * (an OpenAI-compatible chat endpoint) for a concise title in the user's own language plus an
+ * always-English branch slug — so a Chinese request yields a Chinese title yet still a readable
+ * `orbit/fix-login-500` branch instead of the `orbit/session-<hash>` slug fallback. With no key configured — or on any error/timeout/
  * bad response — it falls back to a deterministic slug of the caller's title/prompt and
  * returns no title (the caller keeps its own). NEVER throws: session creation must not
  * depend on the LLM being reachable.
@@ -75,9 +75,12 @@ export async function generateNaming(input: { prompt: string; title?: string }):
             role: 'system',
             content:
               'You name a software-engineering session. Reply with ONLY a JSON object ' +
-              '{"title": string, "slug": string}. "title": a concise English summary, at most ' +
-              '6 words, no trailing punctuation. "slug": a git-branch-safe kebab-case form — ' +
-              'lowercase ASCII letters, digits and hyphens only, at most 5 words. No other text.',
+              '{"title": string, "slug": string}. "title": a concise summary, at most 6 words ' +
+              '(or ~16 characters for languages without spaces), no trailing punctuation, written ' +
+              "in the SAME language as the user's request — a Chinese request gets a Chinese title, " +
+              'an English request an English one. "slug": a git-branch-safe kebab-case form — ' +
+              'lowercase ASCII letters, digits and hyphens only, at most 5 words, ALWAYS in English ' +
+              'regardless of the title language. No other text.',
           },
           { role: 'user', content: task },
         ],

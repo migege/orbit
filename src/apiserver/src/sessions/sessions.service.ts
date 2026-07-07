@@ -168,7 +168,8 @@ export class SessionsService {
     // PENDING so the assigned runner claims it and spawns the long-lived claude
     // process; it then awaits turns via the inbox.
     // Title + per-session worktree branch. DeepSeek (when DEEPSEEK_API_KEY is set) returns a
-    // clean English title and branch slug; otherwise a deterministic slug fallback. Keep an
+    // title in the user's own language plus an always-English branch slug; otherwise a
+    // deterministic slug fallback. Keep an
     // explicit dto.title (task templates, user-typed) and only adopt DeepSeek's title for an
     // otherwise-unnamed session; the branch always uses the best available slug. The runner
     // runs claude in its own `git worktree` on this branch when the workDir is a git repo,
