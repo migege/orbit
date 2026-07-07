@@ -29,6 +29,7 @@ import {
   DevicePollResponse,
   DeviceStartRequest,
   DeviceStartResponse,
+  isAsyncAgentLaunchAck,
   PermissionMode,
   QuestionAnswers,
   ReclaimResponse,
@@ -925,6 +926,22 @@ export class RunnerApiController {
       )
       .map((e) => String((e.payload as { toolUseId?: unknown }).toolUseId ?? ''))
       .filter(Boolean);
+    // A *synchronous* sub-agent (Task/Agent run inline) reports completion as its own top-level
+    // tool_result, never a <task-notification> — so without this it stays in runningSubagents
+    // forever and the list is stuck on "Running Agent…". A sub-agent's own nested tool_results
+    // carry parentToolUseId (skip those), and an async agent's immediate "Async agent launched"
+    // ack is also a top-level tool_result for its id — but that one runs on and is cleared later
+    // by its terminal background_task (bgEnded), so exclude it. Any non-sub-agent tool_result id
+    // here is harmless: it's simply absent from runningSubagents, so array_remove is a no-op.
+    const subEnded = events
+      .filter(
+        (e) =>
+          e.type === RunEventType.TOOL_RESULT &&
+          !(e.payload as { parentToolUseId?: string }).parentToolUseId &&
+          !isAsyncAgentLaunchAck((e.payload as { content?: unknown }).content),
+      )
+      .map((e) => String((e.payload as { toolUseId?: unknown }).toolUseId ?? ''))
+      .filter(Boolean);
     const bgReset = events.some(
       (e) =>
         e.type === RunEventType.SYSTEM &&
@@ -949,6 +966,17 @@ export class RunnerApiController {
     for (const id of bgEnded) {
       await this.prisma
         .$executeRaw`UPDATE "session" SET "running_bg_shells" = array_remove("running_bg_shells", ${id}), "running_subagents" = array_remove("running_subagents", ${id}) WHERE "id" = ${sessionId}::uuid`;
+    }
+    // Clear synchronously-completed sub-agents in one guarded write. The `&&` overlap check means
+    // ordinary (non-sub-agent) tool_results — the vast majority — match no rows and never rewrite
+    // the hot session row.
+    if (subEnded.length > 0) {
+      await this.prisma.$executeRaw`
+        UPDATE "session"
+        SET "running_subagents" = ARRAY(
+          SELECT unnest("running_subagents") EXCEPT SELECT unnest(${subEnded}::text[])
+        )
+        WHERE "id" = ${sessionId}::uuid AND "running_subagents" && ${subEnded}::text[]`;
     }
 
     // Broadcast to live subscribers while the session is active (any LIVE status);
@@ -1022,9 +1050,13 @@ export class RunnerApiController {
           // finalizeWorktree committed everything onto the branch before /complete, so the
           // checkout is clean — the bar shows Merge (not Commit) for the ended session.
           worktreeDirty: false,
-          // The session is ending — Claude (and its background children) are gone, so the
-          // running-background set can't still be live.
+          // The session is ending — Claude (and its background children) are gone, so neither
+          // the background-shell set nor any in-flight sub-agent (Task/Agent) can still be live.
+          // Clearing runningSubagents here is the teardown backstop for a sub-agent that never got
+          // its own terminal signal (e.g. an async agent killed with the session), so the list
+          // can't stay stuck on "Running Agent…".
           runningBgShells: [],
+          runningSubagents: [],
         },
       });
       if (res.count === 0) return false;

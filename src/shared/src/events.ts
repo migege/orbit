@@ -51,3 +51,28 @@ export const emptyUsage = (): TokenUsage => ({
 export function isApiErrorText(text: string | null | undefined): boolean {
   return !!text && text.trimStart().startsWith('API Error');
 }
+
+/**
+ * A tool_result payload's text, flattened. Claude Code delivers `content` as either a plain
+ * string or an array of `{ type, text }` blocks; both collapse to one string here.
+ */
+export function toolResultText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content))
+    return content
+      .map((b) => (b && typeof b === 'object' ? String((b as { text?: unknown }).text ?? '') : ''))
+      .join('');
+  return '';
+}
+
+/**
+ * Does a top-level tool_result mark the *launch* of an async sub-agent (a Task/Agent run in the
+ * background) rather than a real completion? Claude Code returns "Async agent launched
+ * successfully. …" as internal metadata the instant a background agent starts; that agent runs on
+ * and reports completion later via a <task-notification> (a background_task event). A synchronous
+ * sub-agent has no such ack — its only top-level tool_result IS the completion. This tells the two
+ * apart when deciding whether a tracked sub-agent is still in flight.
+ */
+export function isAsyncAgentLaunchAck(content: unknown): boolean {
+  return toolResultText(content).includes('Async agent launched');
+}
