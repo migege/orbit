@@ -197,7 +197,7 @@ struct ComposerView: View {
                 } label: {
                     menuLabel(AgentDefaults.label(console.permissionMode))
                 }
-                .borderlessMenuStyle().menuIndicator(.hidden).fixedSize().neutralMenuTint()
+                .footerMenuChrome()
 
                 Spacer()
 
@@ -217,7 +217,7 @@ struct ComposerView: View {
                 } label: {
                     menuLabel(AgentDefaults.models.first { $0.id == console.modelID }?.name ?? console.modelID)
                 }
-                .borderlessMenuStyle().menuIndicator(.hidden).fixedSize().neutralMenuTint()
+                .footerMenuChrome()
 
                 Menu {
                     ForEach(Effort.allCases) { e in
@@ -234,7 +234,7 @@ struct ComposerView: View {
                 } label: {
                     menuLabel(console.effort.label)
                 }
-                .borderlessMenuStyle().menuIndicator(.hidden).fixedSize().neutralMenuTint()
+                .footerMenuChrome()
 
                 if let ctx = console.state.contextTokens, ctx > 0 {
                     ContextWindowIndicator(tokens: ctx, model: console.modelID)
@@ -363,25 +363,21 @@ struct ComposerView: View {
 
     // MARK: borderless footer menus (mirror the web composer's plain dropdowns)
 
-    /// The "text · chevron" trigger for a footer menu, styled like the reference composer's "Auto"
-    /// instead of macOS's default bordered popup button.
+    /// The text trigger for a footer menu, styled like the reference composer's "Auto" instead of
+    /// macOS's default bordered popup button. No dropdown chevron — the footer is tight on iPhone, so
+    /// the labels stand alone (on iOS a medium weight marks them as the set, tappable values).
     private func menuLabel(_ text: String) -> some View {
-        HStack(spacing: 3) {
-            Text(text)
-                #if os(iOS)
-                // The current value now carries the emphasis on its own — the trigger is neutral (no
-                // accent color), so a medium weight reads as "this is the set value" against the
-                // regular-weight agent name without reintroducing a second color. macOS keeps the
-                // lighter secondary label its `.borderlessButton` chrome already draws.
-                .fontWeight(.medium)
-                #endif
-                .lineLimit(1)
-            Image(systemName: "chevron.up.chevron.down")
-                .font(.orbitMeta)
-                .foregroundStyle(.tertiary)
-        }
-        .foregroundStyle(.secondary)
-        .contentShape(Rectangle())
+        Text(text)
+            #if os(iOS)
+            // The current value now carries the emphasis on its own — the trigger is neutral (no
+            // accent color), so a medium weight reads as "this is the set value" against the
+            // regular-weight agent name without reintroducing a second color. macOS keeps the
+            // lighter secondary label its `.borderlessButton` chrome already draws.
+            .fontWeight(.medium)
+            #endif
+            .lineLimit(1)
+            .foregroundStyle(.secondary)
+            .contentShape(Rectangle())
     }
 
     /// A menu row with a leading checkmark on the current selection — a Picker draws this for free,

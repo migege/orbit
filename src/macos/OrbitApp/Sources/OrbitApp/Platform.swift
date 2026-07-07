@@ -117,6 +117,25 @@ extension View {
         #endif
     }
 
+    /// Shared chrome for the three composer-footer pickers (permission / model / effort). Factored
+    /// out so the iOS-only rendering fix lives in one place: on iOS the `Menu` deliberately OMITS
+    /// `.fixedSize()`. `.fixedSize()` on a `Menu` whose label is content-sized triggers a SwiftUI bug
+    /// — after the menu is opened and dismissed the control collapses to zero width (its label stops
+    /// repainting), leaving a blank gap where the picker was until some unrelated later re-render
+    /// repaints it (the reported "the picker vanishes for a few seconds after I open it"). The `+`
+    /// menu is immune because its label carries an explicit 34×34 frame, so it never measures zero;
+    /// these labels are content-sized, so `.fixedSize()` pins them to a momentarily-zero measurement.
+    /// Without it the `Menu` is content-sized normally; a high layout priority keeps the short labels
+    /// from truncating under pressure (the flexible agent name beside them yields first). macOS keeps
+    /// `.fixedSize()` — its `.borderlessButton` style relies on it and the bug doesn't occur there.
+    @ViewBuilder func footerMenuChrome() -> some View {
+        #if os(iOS)
+        self.borderlessMenuStyle().menuIndicator(.hidden).neutralMenuTint().layoutPriority(1)
+        #else
+        self.borderlessMenuStyle().menuIndicator(.hidden).fixedSize()
+        #endif
+    }
+
     /// iOS: install the "tap outside a text field lowers the keyboard" convention the transcript was
     /// missing. A SwiftUI `simultaneousGesture` on the `List` is unreliable — the collection view's
     /// own recognizers swallow taps that land on a row, so tapping a message never fired one. A
