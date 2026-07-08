@@ -336,47 +336,51 @@ struct TranscriptView: View {
     // (muted "↑ Your question" label + a single ellipsized line of the text). `anchor: .top` lands the
     // bubble just under this header (it's a safe-area inset, so the scroll region starts below it).
     private func stickyQuestion(_ bubble: UserBubble, proxy: ScrollViewProxy) -> some View {
-        Button {
-            withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(bubble.id, anchor: .top) }
-        } label: {
-            HStack(spacing: 8) {
-                Text("↑ Your question")
-                    .font(.orbitLabel).foregroundStyle(.secondary).fixedSize()
-                Text(bubble.text)
-                    .font(.orbitSubtext).foregroundStyle(.primary)
-                    .lineLimit(1).truncationMode(.tail)
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 12).padding(.vertical, 7)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.bar)
-            // Wrap the rule in a stack so it draws as a horizontal bottom hairline: a bare `Divider()`
-            // in an overlay has no stack axis and instead renders as a vertical line down the row's center.
-            .overlay(alignment: .bottom) { VStack(spacing: 0) { Divider() } }
-            .contentShape(Rectangle())
+        let jump = { withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(bubble.id, anchor: .top) } }
+        return HStack(spacing: 8) {
+            Text("↑ Your question")
+                .font(.orbitLabel).foregroundStyle(.secondary).fixedSize()
+            Text(bubble.text)
+                .font(.orbitSubtext).foregroundStyle(.primary)
+                .lineLimit(1).truncationMode(.tail)
+            Spacer(minLength: 0)
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 12).padding(.vertical, 7)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.bar)
+        // Wrap the rule in a stack so it draws as a horizontal bottom hairline: a bare `Divider()`
+        // in an overlay has no stack axis and instead renders as a vertical line down the row's center.
+        .overlay(alignment: .bottom) { VStack(spacing: 0) { Divider() } }
+        .contentShape(Rectangle())
+        // Same coasting fix as the jump-to-latest disc: a `Button` here loses the first tap to the
+        // List's deceleration-stop, so tapping mid-scroll did nothing until it settled. A
+        // `DragGesture(minimumDistance: 0)` recognizes on touch-down (fires on that first tap), run as a
+        // `simultaneousGesture` so a swipe starting on the bar still scrolls — only a near-stationary
+        // release counts as the tap.
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0).onEnded { value in
+                if abs(value.translation.width) < 12, abs(value.translation.height) < 12 { jump() }
+            }
+        )
+        .accessibilityElement()
+        .accessibilityLabel("Jump to your last question")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { jump() }
         .help("Jump to your last question")
     }
 
     // Circular "scroll to latest" control (web parity). One user-initiated scroll — not the per-frame
     // animated scroll that previously froze the transcript — so animating this one is safe. The disc
-    // rests at 32pt; `ScrollToLatestButtonStyle` gives it a fixed ~44pt hit target and ChatGPT's
-    // press feel (the frosted disc springs larger while held). The bottom padding is 6 rather than 12
-    // because the style already reserves ~6pt of hit area below the disc, keeping its resting spot.
+    // rests at 32pt; `ScrollToLatestButton` gives it a fixed ~44pt hit target, ChatGPT's press feel,
+    // and — crucially — a tap that lands even while the List is still coasting (see its doc). The bottom
+    // padding is 6, not 12, because the control reserves ~6pt of hit area below the disc, so it rests
+    // in the same spot.
     private func scrollToBottomButton(proxy: ScrollViewProxy) -> some View {
-        Button {
+        ScrollToLatestButton {
             withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(bottomID, anchor: .bottom) }
             atBottom = true
-        } label: {
-            Image(systemName: "arrow.down")
-                .font(.orbitLabel.weight(.semibold))
-                .foregroundStyle(.primary)
-                .frame(width: 32, height: 32)
         }
-        .buttonStyle(ScrollToLatestButtonStyle())
         .padding(.bottom, 6)
-        .help("Scroll to latest")
     }
 
     #if os(macOS)
@@ -401,16 +405,27 @@ struct TranscriptView: View {
     #endif
 }
 
-/// ChatGPT-style press feedback for the round jump-to-latest disc. Two things the plain style couldn't
-/// do: (1) a fixed, comfortable ~44pt circular hit target even though the disc only *looks* 32pt, so
-/// near-misses still register and it feels more sensitive; (2) a press-and-hold "magnify": because the
-/// frost is a real material, springing the whole disc ~1.3× larger reads as the bigger frosted-glass
-/// bubble ChatGPT shows while held, helped by a brief brighter fill and a deeper shadow. The hit target
-/// is set *after* the scale so growing on press never nudges layout or the tap region.
-private struct ScrollToLatestButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        let pressed = configuration.isPressed
-        return configuration.label
+/// The round jump-to-latest disc. It's a gesture-driven view, not a `Button`, for one specific reason:
+/// while the `List` is still coasting (momentum scroll), a SwiftUI `Button`/`TapGesture` loses the
+/// gesture arbitration to the scroll view — that first tap is spent halting the deceleration and never
+/// reaches the control, so you had to wait for the list to settle and tap again. A `DragGesture` with
+/// `minimumDistance: 0` recognizes on touch-*down*, so it fires on that same first tap mid-scroll; it
+/// runs as a `simultaneousGesture` so a swipe that happens to start on the disc still scrolls the list
+/// (we treat only a near-stationary press as the tap and ignore real drags).
+///
+/// `@GestureState` also drives the ChatGPT-style press feel: the frosted disc springs ~1.3× larger
+/// while held (the material magnifies with it), plus a brief brighter fill and deeper shadow. The disc
+/// looks 32pt but the hit target is a fixed ~44pt circle — set *after* the scale, so pressing never
+/// nudges layout or the tap region.
+private struct ScrollToLatestButton: View {
+    let action: () -> Void
+    @GestureState private var pressed = false
+
+    var body: some View {
+        Image(systemName: "arrow.down")
+            .font(.orbitLabel.weight(.semibold))
+            .foregroundStyle(.primary)
+            .frame(width: 32, height: 32)
             .background(.regularMaterial, in: Circle())
             .overlay { Circle().fill(.primary.opacity(pressed ? 0.07 : 0)) }
             .overlay { Circle().strokeBorder(.primary.opacity(0.12)) }
@@ -419,6 +434,22 @@ private struct ScrollToLatestButtonStyle: ButtonStyle {
             .frame(width: 44, height: 44)
             .contentShape(Circle())
             .animation(.spring(response: 0.28, dampingFraction: 0.6), value: pressed)
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 0)
+                    .updating($pressed) { _, state, _ in state = true }
+                    .onEnded { value in
+                        // Fire only when the finger barely moved — a real drag that began on the disc is
+                        // a scroll, which the simultaneous List pan handles, so ignore it here.
+                        if abs(value.translation.width) < 12, abs(value.translation.height) < 12 {
+                            action()
+                        }
+                    }
+            )
+            .accessibilityElement()
+            .accessibilityLabel("Scroll to latest")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { action() }
+            .help("Scroll to latest")
     }
 }
 
