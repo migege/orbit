@@ -719,12 +719,19 @@ Either PATCH an existing agent to Codex through the app's own form (which also e
 
 Create a new session from that agent in the macOS app and send one message. Confirm the request body carries `"model":"gpt-5.5"`.
 
-The most direct evidence is the apiserver log or the runner log — the runner logs its argv, so look for `codex -m gpt-5.5` and confirm it is not `codex -m claude-opus-4-8`. Reading the composer's pill is *not* sufficient: the pill rendered the right thing before this fix too, while the wire carried the wrong model.
+Two observation points, both direct:
+
+1. `SELECT provider, model FROM session ORDER BY created_at DESC LIMIT 1;` on the control plane's postgres. The apiserver stores `dto.model` verbatim (`sessions.service.ts:191`), so this row **is** the wire value.
+2. Codex's own rollout log on the runner host: `~/.codex/sessions/<yyyy>/<mm>/<dd>/rollout-*.jsonl` contains `"model":"gpt-5.5"`.
+
+Do **not** look for `codex -m gpt-5.5` in the runner log. The runner drives Codex over `codex app-server --stdio` and passes the model as a JSON param (`codex_appserver.go:597`) — it never reaches argv, and the runner logs no argv anyway. (`codex.go:248`'s `-m` flag belongs to the `codex exec` path, which this transport does not use.)
+
+Reading the composer's pill is also *not* sufficient: the pill rendered the right thing before this fix too, while the wire carried the wrong model.
 
 - [ ] **Step 4: Check each success criterion from the spec**
 
 1. `cd src/macos/OrbitKit && swift test` → `Executed 271 tests, with 0 failures`.
-2. The session above ran `codex -m gpt-5.5`.
+2. The session above stored `model = gpt-5.5`, and Codex's rollout log confirms it ran with that model.
 3. On that Codex session, the composer's model menu lists only the four GPT models; the effort menu offers `Minimal` and does not offer `Max`.
 4. Switching Runtime to Codex in the agent form resets the model picker to `GPT-5.5` and PATCHes `provider: "codex"`.
 5. Regression check: a **Claude** agent still seeds `Opus 4.8`, its model menu lists only Claude models, and its effort menu offers `Max` but not `Minimal`.

@@ -226,7 +226,15 @@ before the work is called done; a green `swift test` is not sufficient evidence.
 
 1. `swift test` passes in `src/macos/OrbitKit` (baseline before this work: 263 tests, 0 failures).
 2. Creating a session from a Codex agent in the macOS app sends `model: "gpt-5.5"`, not
-   `claude-opus-4-8`. Observed on the wire or in the runner log, not inferred.
+   `claude-opus-4-8`. Observed, not inferred.
+
+   The observation points are the `session.model` column (the apiserver stores `dto.model` verbatim,
+   `sessions.service.ts:191`, so the row *is* the wire value) and Codex's own rollout log at
+   `~/.codex/sessions/<date>/rollout-*.jsonl`, which records `"model":"gpt-5.5"`. **Not** the runner
+   log: the runner drives Codex over `codex app-server --stdio` and passes the model as a JSON
+   param (`codex_appserver.go:597`), so the model never appears in argv and `codex -m …` is never
+   logged. Reading the composer's model pill is also insufficient — it rendered correctly even
+   while the wire carried the wrong model.
 3. The composer's model menu on a Codex session lists only Codex models; its effort menu offers
    `Minimal` and does not offer `Max`.
 4. Switching an agent's Runtime to Codex in `AgentFormContent` PATCHes `provider: "codex"` and resets
