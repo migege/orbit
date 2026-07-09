@@ -427,10 +427,10 @@ struct AgentFormContent: View {
                 Picker("Model", selection: $model) {
                     // Surface a non-standard saved model (e.g. an env-overridden endpoint) so the
                     // picker still shows the current value rather than going blank.
-                    if !AgentDefaults.models.contains(where: { $0.id == model }) {
+                    if !AgentDefaults.claudeModels.contains(where: { $0.id == model }) {
                         Text(model.isEmpty ? "—" : model).tag(model)
                     }
-                    ForEach(AgentDefaults.models) { Text($0.name).tag($0.id) }
+                    ForEach(AgentDefaults.claudeModels) { Text($0.name).tag($0.id) }
                 }
 
                 Picker("Permission mode", selection: $mode) {

@@ -149,7 +149,7 @@ final class ConsoleModel {
         self.agentName = agent.name
         self.provider = agent.provider ?? "claude"
         let m = agent.model ?? AgentDefaults.defaultModelID
-        self.modelID = AgentDefaults.models.contains { $0.id == m } ? m : AgentDefaults.defaultModelID
+        self.modelID = AgentDefaults.claudeModels.contains { $0.id == m } ? m : AgentDefaults.defaultModelID
         self.permissionMode = PermissionMode(rawValue: agent.permissionMode ?? "dontAsk") ?? .dontAsk
         // Seed the effort pill from the agent's default too (web parity), so a new session shows —
         // and starts at — the agent's configured effort unless the user overrides it.

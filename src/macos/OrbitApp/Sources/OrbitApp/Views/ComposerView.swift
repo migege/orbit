@@ -47,9 +47,9 @@ struct ComposerView: View {
     // exactly like the web composer. macOS drops the menu down, so keep the source order there.
     private var modelMenuItems: [ModelOption] {
         #if os(iOS)
-        Array(AgentDefaults.models.reversed())
+        Array(AgentDefaults.claudeModels.reversed())
         #else
-        AgentDefaults.models
+        AgentDefaults.claudeModels
         #endif
     }
 
@@ -214,7 +214,7 @@ struct ComposerView: View {
                         }
                     }
                 } label: {
-                    menuLabel(AgentDefaults.models.first { $0.id == console.modelID }?.name ?? console.modelID)
+                    menuLabel(AgentDefaults.friendlyName(console.modelID))
                 }
                 .footerMenuChrome()
 
