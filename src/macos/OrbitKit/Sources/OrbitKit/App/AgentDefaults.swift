@@ -17,13 +17,13 @@ public struct ProviderOption: Equatable, Sendable, Identifiable {
 /// `.default` ("") omits `--effort` so the model picks its own.
 public enum Effort: String, CaseIterable, Sendable, Identifiable {
     case `default` = ""
-    case low, medium, high, xhigh, max
+    case minimal, low, medium, high, xhigh, max
     public var id: String { rawValue }
     public var label: String {
         switch self {
         case .default: return "Default"
         case .xhigh:   return "xHigh"
-        default:       return rawValue.capitalized   // Low / Medium / High / Max
+        default:       return rawValue.capitalized   // Minimal / Low / Medium / High / Max
         }
     }
     /// Wire value for a turn/resume request: nil = omit the field (same as Default).
@@ -68,6 +68,15 @@ public enum AgentDefaults {
     /// override pointing at a custom endpoint) render as the raw id.
     public static func friendlyName(_ id: String) -> String {
         (claudeModels + codexModels).first { $0.id == id }?.name ?? id
+    }
+
+    /// Reasoning-effort levels a provider accepts. Claude tops out at `max`; Codex's Responses API
+    /// tops out at `xhigh` and adds `minimal`. Mirrors web's CLAUDE_/CODEX_EFFORT_OPTIONS. The
+    /// server and runner both coerce an illegal value, but a picker should never offer one.
+    public static func efforts(for provider: String) -> [Effort] {
+        provider == "codex"
+            ? [.default, .minimal, .low, .medium, .high, .xhigh]
+            : [.default, .low, .medium, .high, .xhigh, .max]
     }
 
     /// Per-model context-window size (max input tokens), for the composer's context-usage

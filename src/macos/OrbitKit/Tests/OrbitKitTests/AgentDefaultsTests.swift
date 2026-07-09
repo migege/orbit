@@ -37,4 +37,23 @@ final class AgentDefaultsTests: XCTestCase {
         XCTAssertEqual(AgentDefaults.providers.map(\.id), ["claude", "codex"])
         XCTAssertEqual(AgentDefaults.providers.map(\.name), ["Claude", "Codex"])
     }
+
+    func testEffortsForProvider() {
+        XCTAssertEqual(AgentDefaults.efforts(for: "claude"),
+                       [.default, .low, .medium, .high, .xhigh, .max])
+        XCTAssertEqual(AgentDefaults.efforts(for: "codex"),
+                       [.default, .minimal, .low, .medium, .high, .xhigh])
+
+        // The whole point: neither provider is offered a value it rejects.
+        XCTAssertFalse(AgentDefaults.efforts(for: "claude").contains(.minimal))
+        XCTAssertFalse(AgentDefaults.efforts(for: "codex").contains(.max))
+
+        XCTAssertEqual(AgentDefaults.efforts(for: "gemini"), AgentDefaults.efforts(for: "claude"))
+    }
+
+    func testMinimalEffortLabelAndWire() {
+        XCTAssertEqual(Effort.minimal.rawValue, "minimal")
+        XCTAssertEqual(Effort.minimal.label, "Minimal")
+        XCTAssertEqual(Effort.minimal.wire, "minimal")
+    }
 }
