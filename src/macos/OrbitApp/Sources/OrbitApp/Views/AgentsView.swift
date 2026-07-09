@@ -425,14 +425,21 @@ struct AgentFormContent: View {
             Section {
                 TextField("Name", text: $name, prompt: Text("e.g. tea-cli builder"))
 
-                Picker("Runtime", selection: $provider) {
+                // The reset lives in the Binding's setter, not `.onChange`: `.onChange` also fires
+                // when `prefill()` seeds `provider` programmatically, which would clobber the
+                // agent's saved model on open (web's onProviderChange is user-interaction only).
+                Picker("Runtime", selection: Binding(
+                    get: { provider },
+                    set: { new in
+                        // A model or effort from the old runtime is meaningless (and rejected)
+                        // under the new one — reset to that provider's default rather than PATCH
+                        // a bad value.
+                        provider = new
+                        model = AgentDefaults.defaultModel(for: new)
+                        if !AgentDefaults.efforts(for: new).contains(effort) { effort = .default }
+                    }
+                )) {
                     ForEach(AgentDefaults.providers) { Text($0.name).tag($0.id) }
-                }
-                .onChange(of: provider) { _, new in
-                    // A model or effort from the old runtime is meaningless (and rejected) under
-                    // the new one — reset to that provider's default rather than PATCH a bad value.
-                    model = AgentDefaults.defaultModel(for: new)
-                    if !AgentDefaults.efforts(for: new).contains(effort) { effort = .default }
                 }
 
                 Picker("Model", selection: $model) {
